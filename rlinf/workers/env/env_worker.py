@@ -40,6 +40,7 @@ from rlinf.utils.nested_dict_process import (
     split_dict,
     update_nested_cfg,
 )
+from rlinf.utils.nsight_profiler import NsightProfiler
 from rlinf.utils.placement import HybridComponentPlacement
 from rlinf.workers.env.history_manager import HistoryManager
 
@@ -390,6 +391,7 @@ class EnvWorker(Worker):
             if self.enable_offload and hasattr(self.env_list[i], "offload"):
                 self.env_list[i].offload()
 
+    @NsightProfiler.annotate("env/step")
     @Worker.timer("env_interact_step")
     def env_interact_step(
         self, chunk_actions: torch.Tensor, stage_id: int
@@ -586,6 +588,7 @@ class EnvWorker(Worker):
 
         return merged_final_obs
 
+    @NsightProfiler.annotate("env/recv_actions")
     def recv_chunk_actions(self, input_channel: Channel, mode="train") -> np.ndarray:
         """Receive and merge chunked actions for the current env worker.
 
@@ -727,6 +730,7 @@ class EnvWorker(Worker):
                 if not self.cfg.env.eval.auto_reset:
                     self.eval_env_list[i].update_reset_state_ids()
 
+    @NsightProfiler.annotate("env/send_obs")
     def send_env_batch(
         self,
         rollout_channel: Channel,
@@ -898,6 +902,7 @@ class EnvWorker(Worker):
             for reward_assign_step in range(2, reward_assign_length + 1):
                 rollout_rewards[-reward_assign_step][env_id] += reward[env_id]
 
+    @NsightProfiler.annotate("env/bootstrap_step")
     def bootstrap_step(self) -> list[EnvOutput]:
         def get_zero_dones() -> torch.Tensor:
             return (
@@ -1000,6 +1005,7 @@ class EnvWorker(Worker):
             for env_output in env_output_list
         ]
 
+    @NsightProfiler.annotate("env/send_rollout_trajectories")
     async def send_rollout_trajectories(
         self, rollout_result: EmbodiedRolloutResult, channel: Channel
     ):
@@ -1012,6 +1018,7 @@ class EnvWorker(Worker):
         del trajectories
         gc.collect()
 
+    @NsightProfiler.annotate("env/interact_once")
     @Worker.timer("run_interact_once")
     async def _run_interact_once(
         self,
@@ -1184,6 +1191,7 @@ class EnvWorker(Worker):
 
         return env_metrics
 
+    @NsightProfiler.annotate("env/interact")
     @Worker.timer("interact")
     async def interact(
         self,
