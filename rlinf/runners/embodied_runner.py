@@ -74,6 +74,7 @@ class EmbodiedRunner:
         self.overlap_env_bootstrap = bool(
             self.cfg.runner.get("overlap_env_bootstrap", False)
         )
+        distributed_channel = self.cfg.cluster.get("distributed_channel", False)
 
         # Step-gated nsys profiling. ``cluster.nsight.steps`` lists the global
         # step indices whose execution should be wrapped with
@@ -103,9 +104,11 @@ class EmbodiedRunner:
         )
 
         # Data channels
-        self.env_channel = Channel.create("Env")
-        self.rollout_channel = Channel.create("Rollout")
-        self.actor_channel = Channel.create("Actor")
+        self.env_channel = Channel.create("Env", distributed=distributed_channel)
+        self.rollout_channel = Channel.create(
+            "Rollout", distributed=distributed_channel
+        )
+        self.actor_channel = Channel.create("Actor", distributed=distributed_channel)
         if self.reward is not None:
             self.reward_channel = Channel.create("Reward")
         else:
