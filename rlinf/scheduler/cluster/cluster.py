@@ -582,8 +582,9 @@ class Cluster:
 
         from ..manager import WorkerAddress
 
-        worker_group_name = WorkerAddress.from_name(worker_name).root_group_name
-        if not nsight_cfg.profiles_worker_group(worker_group_name):
+        worker_address = WorkerAddress.from_name(worker_name)
+        worker_group_name = worker_address.root_group_name
+        if not nsight_cfg.profiles_worker(worker_group_name, worker_address.rank):
             return python_interpreter_path
 
         if nsight_output_dir is None:

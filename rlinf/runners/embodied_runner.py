@@ -90,6 +90,17 @@ class EmbodiedRunner:
             if profile_steps_raw is not None
             else None
         )
+        self._profile_continuous = bool(
+            nsight_enabled
+            and self._profile_steps is not None
+            and nsight_raw.get("continuous", False)
+        )
+        self._profile_start_step = (
+            min(self._profile_steps) if self._profile_continuous else None
+        )
+        self._profile_end_step = (
+            max(self._profile_steps) if self._profile_continuous else None
+        )
 
         # Data channels
         self.env_channel = Channel.create("Env")
@@ -288,6 +299,16 @@ class EmbodiedRunner:
     def _should_profile_step(self, step_idx: int) -> bool:
         return self._profile_steps is not None and step_idx in self._profile_steps
 
+    def _should_open_nsight_window(self, step_idx: int) -> bool:
+        if self._profile_continuous:
+            return step_idx == self._profile_start_step
+        return self._should_profile_step(step_idx)
+
+    def _should_close_nsight_window(self, step_idx: int) -> bool:
+        if self._profile_continuous:
+            return step_idx == self._profile_end_step
+        return self._should_profile_step(step_idx)
+
     def _open_nsight_window(self, step_idx: int) -> None:
         """Dispatch ``start_profile`` to compute worker groups for this step."""
         self.logger.info(f"Opening Nsight profiling window at step {step_idx}")
@@ -310,13 +331,11 @@ class EmbodiedRunner:
             self.actor.set_global_step(self.global_step)
             self.rollout.set_global_step(self.global_step)
 
-            profiled_step = (
-                self.global_step
-                if self._should_profile_step(self.global_step)
-                else None
-            )
-            if profiled_step is not None:
-                self._open_nsight_window(profiled_step)
+            profile_open_step = self.global_step
+            should_open_profile = self._should_open_nsight_window(profile_open_step)
+            should_close_profile = self._should_close_nsight_window(profile_open_step)
+            if should_open_profile:
+                self._open_nsight_window(profile_open_step)
 
             with self.timer("step"):
                 with self.timer("sync_weights"):
@@ -386,8 +405,8 @@ class EmbodiedRunner:
                 if save_model:
                     self._save_checkpoint()
 
-            if profiled_step is not None:
-                self._close_nsight_window(profiled_step)
+            if should_close_profile:
+                self._close_nsight_window(profile_open_step)
 
             time_metrics = self.timer.consume_durations()
             time_metrics = {f"time/{k}": v for k, v in time_metrics.items()}

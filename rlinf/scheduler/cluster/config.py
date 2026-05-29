@@ -168,6 +168,9 @@ class NsightConfig:
     worker_groups: Optional[list[str] | str] = None
     """Worker group names to profile. If omitted, all worker groups are profiled."""
 
+    ranks: Optional[list[int] | int] = None
+    """Worker ranks to profile inside matching worker groups. If omitted, all ranks are profiled."""
+
     options: Optional[dict[str, str]] = None
     """Additional ``nsys profile`` options keyed by flag name."""
 
@@ -185,6 +188,9 @@ class NsightConfig:
     ``capture-range=cudaProfilerApi`` and ``capture-range-end=stop`` to
     ``options`` (unless the user has already set them explicitly). Steps
     are 0-indexed and match the runner's global step counter."""
+
+    continuous: bool = False
+    """If true, open profiling at the first configured step and close it after the last configured step."""
 
     @staticmethod
     def _stringify_option_value(option_value: object) -> str:
@@ -217,6 +223,21 @@ class NsightConfig:
                     f"But got {type(worker_groups)}: {worker_groups}"
                 )
                 self.worker_groups = [str(group_name) for group_name in worker_groups]
+
+        if self.ranks is not None:
+            ranks = self.ranks
+            if isinstance(ranks, int):
+                self.ranks = [int(ranks)]
+            else:
+                assert isinstance(ranks, (list, ListConfig)), (
+                    "ranks must be a list of ints or a single int "
+                    "in cluster nsight config. "
+                    f"But got {type(ranks)}: {ranks}"
+                )
+                self.ranks = [int(rank) for rank in ranks]
+            assert all(rank >= 0 for rank in self.ranks), (
+                f"Nsight ranks must be non-negative ints. But got: {self.ranks}"
+            )
 
         if self.flags is not None:
             flags = self.flags
@@ -292,6 +313,14 @@ class NsightConfig:
             "all" in normalized_group_names
             or worker_group_name.lower() in normalized_group_names
         )
+
+    def profiles_worker(self, worker_group_name: str, worker_rank: int) -> bool:
+        """Return whether this config should profile the specific worker rank."""
+        if not self.profiles_worker_group(worker_group_name):
+            return False
+        if self.ranks is None:
+            return True
+        return int(worker_rank) in self.ranks
 
     def should_profile_step(self, step_idx: int) -> bool:
         """Return whether the given training step should be gated for profiling.
