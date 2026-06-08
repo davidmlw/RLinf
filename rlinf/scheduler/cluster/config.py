@@ -171,6 +171,9 @@ class NsightConfig:
     ranks: Optional[list[int] | int] = None
     """Worker ranks to profile inside matching worker groups. If omitted, all ranks are profiled."""
 
+    rank_map: Optional[dict[str, list[int] | int]] = None
+    """Optional per-worker-group rank selection. Takes precedence over ``ranks`` for matching groups."""
+
     options: Optional[dict[str, str]] = None
     """Additional ``nsys profile`` options keyed by flag name."""
 
@@ -238,6 +241,29 @@ class NsightConfig:
             assert all(rank >= 0 for rank in self.ranks), (
                 f"Nsight ranks must be non-negative ints. But got: {self.ranks}"
             )
+
+        if self.rank_map is not None:
+            assert hasattr(self.rank_map, "keys"), (
+                "rank_map must be a dictionary from worker group name to int/list[int] "
+                "in cluster nsight config. "
+                f"But got {type(self.rank_map)}: {self.rank_map}"
+            )
+            normalized_rank_map: dict[str, list[int]] = {}
+            for group_name, ranks in self.rank_map.items():
+                if isinstance(ranks, int):
+                    group_ranks = [int(ranks)]
+                else:
+                    assert isinstance(ranks, (list, ListConfig)), (
+                        "rank_map values must be lists of ints or single ints "
+                        f"for worker group {group_name}. But got {type(ranks)}: {ranks}"
+                    )
+                    group_ranks = [int(rank) for rank in ranks]
+                assert all(rank >= 0 for rank in group_ranks), (
+                    "Nsight rank_map ranks must be non-negative ints. "
+                    f"But got {group_name}: {group_ranks}"
+                )
+                normalized_rank_map[str(group_name).lower()] = group_ranks
+            self.rank_map = normalized_rank_map
 
         if self.flags is not None:
             flags = self.flags
@@ -318,6 +344,10 @@ class NsightConfig:
         """Return whether this config should profile the specific worker rank."""
         if not self.profiles_worker_group(worker_group_name):
             return False
+        if self.rank_map is not None:
+            group_ranks = self.rank_map.get(worker_group_name.lower())
+            if group_ranks is not None:
+                return int(worker_rank) in group_ranks
         if self.ranks is None:
             return True
         return int(worker_rank) in self.ranks
