@@ -414,6 +414,7 @@ class EmbodiedRunner:
                 if save_model:
                     self._save_checkpoint()
 
+            env_results = env_handle.wait()
             if should_close_profile:
                 self._close_nsight_window(profile_open_step)
 
@@ -445,7 +446,6 @@ class EmbodiedRunner:
                     {f"time/reward/{k}": v for k, v in reward_time_metrics.items()}
                 )
 
-            env_results = env_handle.wait()
             env_results_list = [
                 results for results in env_results if results is not None
             ]
