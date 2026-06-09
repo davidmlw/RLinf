@@ -82,7 +82,7 @@ class TestAnnotateSync:
         with pytest.raises(RuntimeError, match="nope"):
             boom()
 
-    def test_emits_range_when_active(self):
+    def test_emits_torch_range_when_active(self):
         @NsightProfiler.annotate("test/op", color="green")
         def doubled(x):
             return x * 2
@@ -91,17 +91,37 @@ class TestAnnotateSync:
             nsight_profiler.start_profile()
 
         with (
+            patch.object(nsight_profiler, "_TORCH_NVTX_AVAILABLE", True),
+            patch("torch.cuda.nvtx.range_push") as mock_push,
+            patch("torch.cuda.nvtx.range_pop") as mock_pop,
+        ):
+            result = doubled(7)
+
+        assert result == 14
+        mock_push.assert_called_once_with("test/op")
+        mock_pop.assert_called_once_with()
+
+    def test_falls_back_to_python_nvtx_when_torch_nvtx_unavailable(self):
+        @NsightProfiler.annotate("test/op", color="green")
+        def doubled(x):
+            return x * 2
+
+        with patch("torch.cuda.profiler.start"):
+            nsight_profiler.start_profile()
+
+        with (
+            patch.object(nsight_profiler, "_TORCH_NVTX_AVAILABLE", False),
             patch.object(nsight_profiler, "_nvtx") as mock_nvtx,
             patch.object(nsight_profiler, "_NVTX_AVAILABLE", True),
         ):
-            mock_nvtx.start_range.return_value = 1
+            mock_nvtx.start_range.return_value = (1, 2)
             result = doubled(7)
 
         assert result == 14
         mock_nvtx.start_range.assert_called_once_with(
             message="test/op", color="green", domain=None
         )
-        mock_nvtx.end_range.assert_called_once_with(1)
+        mock_nvtx.end_range.assert_called_once_with((1, 2))
 
     def test_ends_range_on_exception(self):
         @NsightProfiler.annotate("test/op")
@@ -112,15 +132,15 @@ class TestAnnotateSync:
             nsight_profiler.start_profile()
 
         with (
-            patch.object(nsight_profiler, "_nvtx") as mock_nvtx,
-            patch.object(nsight_profiler, "_NVTX_AVAILABLE", True),
+            patch.object(nsight_profiler, "_TORCH_NVTX_AVAILABLE", True),
+            patch("torch.cuda.nvtx.range_push") as mock_push,
+            patch("torch.cuda.nvtx.range_pop") as mock_pop,
         ):
-            mock_nvtx.start_range.return_value = 42
             with pytest.raises(ValueError, match="oops"):
                 boom()
 
-        # end_range must run even if the wrapped function raised.
-        mock_nvtx.end_range.assert_called_once_with(42)
+        mock_push.assert_called_once_with("test/op")
+        mock_pop.assert_called_once_with()
 
     def test_uses_function_name_when_message_is_none(self):
         @NsightProfiler.annotate()
@@ -131,14 +151,13 @@ class TestAnnotateSync:
             nsight_profiler.start_profile()
 
         with (
-            patch.object(nsight_profiler, "_nvtx") as mock_nvtx,
-            patch.object(nsight_profiler, "_NVTX_AVAILABLE", True),
+            patch.object(nsight_profiler, "_TORCH_NVTX_AVAILABLE", True),
+            patch("torch.cuda.nvtx.range_push") as mock_push,
+            patch("torch.cuda.nvtx.range_pop"),
         ):
             my_specific_function(0)
 
-        mock_nvtx.start_range.assert_called_once()
-        kwargs = mock_nvtx.start_range.call_args.kwargs
-        assert kwargs["message"] == "my_specific_function"
+        mock_push.assert_called_once_with("my_specific_function")
 
 
 class TestAnnotateAsync:
@@ -151,7 +170,7 @@ class TestAnnotateAsync:
 
         assert asyncio.get_event_loop().run_until_complete(add(2, 3)) == 5
 
-    def test_emits_range_when_active(self):
+    def test_emits_torch_range_when_active(self):
         @NsightProfiler.annotate("test/async_op")
         async def add(a, b):
             return a + b
@@ -160,17 +179,15 @@ class TestAnnotateAsync:
             nsight_profiler.start_profile()
 
         with (
-            patch.object(nsight_profiler, "_nvtx") as mock_nvtx,
-            patch.object(nsight_profiler, "_NVTX_AVAILABLE", True),
+            patch.object(nsight_profiler, "_TORCH_NVTX_AVAILABLE", True),
+            patch("torch.cuda.nvtx.range_push") as mock_push,
+            patch("torch.cuda.nvtx.range_pop") as mock_pop,
         ):
-            mock_nvtx.start_range.return_value = 99
             result = asyncio.get_event_loop().run_until_complete(add(2, 3))
 
         assert result == 5
-        mock_nvtx.start_range.assert_called_once_with(
-            message="test/async_op", color=None, domain=None
-        )
-        mock_nvtx.end_range.assert_called_once_with(99)
+        mock_push.assert_called_once_with("test/async_op")
+        mock_pop.assert_called_once_with()
 
 
 class TestAnnotateNoNvtxPackage:
@@ -183,5 +200,8 @@ class TestAnnotateNoNvtxPackage:
 
         with patch("torch.cuda.profiler.start"):
             nsight_profiler.start_profile()
-        with patch.object(nsight_profiler, "_NVTX_AVAILABLE", False):
+        with (
+            patch.object(nsight_profiler, "_TORCH_NVTX_AVAILABLE", False),
+            patch.object(nsight_profiler, "_NVTX_AVAILABLE", False),
+        ):
             assert doubled(4) == 8

@@ -43,6 +43,12 @@ import torch
 
 logger = logging.getLogger(__name__)
 
+_TORCH_NVTX_AVAILABLE = (
+    hasattr(torch.cuda, "nvtx")
+    and hasattr(torch.cuda.nvtx, "range_push")
+    and hasattr(torch.cuda.nvtx, "range_pop")
+)
+
 
 # Module-level flag toggled by the runner around gated steps. Worker
 # decorators read this directly (no per-worker profiler instance needed).
@@ -112,35 +118,59 @@ class NsightProfiler:
                 def predict(self, obs): ...
         """
 
+        def _push_range(label: str) -> Optional[tuple[str, Any]]:
+            # Nsight Systems reliably exports torch NVTX messages in our
+            # training environment; Python nvtx is kept as a fallback.
+            if _TORCH_NVTX_AVAILABLE:
+                torch.cuda.nvtx.range_push(label)
+                return ("torch", None)
+            if _NVTX_AVAILABLE:
+                return (
+                    "python",
+                    _nvtx.start_range(message=label, color=color, domain=domain),
+                )
+            return None
+
+        def _pop_range(handle: Optional[tuple[str, Any]]) -> None:
+            if handle is None:
+                return
+            backend, range_id = handle
+            if backend == "torch":
+                torch.cuda.nvtx.range_pop()
+            else:
+                _nvtx.end_range(range_id)
+
         def decorator(func: Callable) -> Callable:
             label_default = message
             if inspect.iscoroutinefunction(func):
 
                 @functools.wraps(func)
                 async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                    if not _profiling_active or not _NVTX_AVAILABLE:
+                    if not _profiling_active:
                         return await func(*args, **kwargs)
                     label = label_default or func.__name__
-                    range_id = _nvtx.start_range(
-                        message=label, color=color, domain=domain
-                    )
+                    range_handle = _push_range(label)
+                    if range_handle is None:
+                        return await func(*args, **kwargs)
                     try:
                         return await func(*args, **kwargs)
                     finally:
-                        _nvtx.end_range(range_id)
+                        _pop_range(range_handle)
 
                 return async_wrapper
 
             @functools.wraps(func)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-                if not _profiling_active or not _NVTX_AVAILABLE:
+                if not _profiling_active:
                     return func(*args, **kwargs)
                 label = label_default or func.__name__
-                range_id = _nvtx.start_range(message=label, color=color, domain=domain)
+                range_handle = _push_range(label)
+                if range_handle is None:
+                    return func(*args, **kwargs)
                 try:
                     return func(*args, **kwargs)
                 finally:
-                    _nvtx.end_range(range_id)
+                    _pop_range(range_handle)
 
             return sync_wrapper
 
