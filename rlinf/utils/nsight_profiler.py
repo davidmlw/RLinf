@@ -29,6 +29,7 @@ from __future__ import annotations
 import functools
 import inspect
 import logging
+import os
 from typing import Any, Callable, Optional
 
 try:
@@ -58,6 +59,16 @@ _profiling_active: bool = False
 def is_profiling_active() -> bool:
     """Return whether step-gated profiling is currently in a capture window."""
     return _profiling_active
+
+
+def _always_annotate() -> bool:
+    """Return whether annotations should be emitted outside step windows."""
+    value = os.environ.get("RLINF_NVTX_ALWAYS", "")
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _annotation_active() -> bool:
+    return _profiling_active or _always_annotate()
 
 
 def start_profile(step_idx: Optional[int] = None) -> None:
@@ -146,7 +157,7 @@ class NsightProfiler:
 
                 @functools.wraps(func)
                 async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                    if not _profiling_active:
+                    if not _annotation_active():
                         return await func(*args, **kwargs)
                     label = label_default or func.__name__
                     range_handle = _push_range(label)
@@ -161,7 +172,7 @@ class NsightProfiler:
 
             @functools.wraps(func)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-                if not _profiling_active:
+                if not _annotation_active():
                     return func(*args, **kwargs)
                 label = label_default or func.__name__
                 range_handle = _push_range(label)

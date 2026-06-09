@@ -82,6 +82,23 @@ class TestAnnotateSync:
         with pytest.raises(RuntimeError, match="nope"):
             boom()
 
+    def test_emits_torch_range_when_always_enabled(self):
+        @NsightProfiler.annotate("test/op")
+        def doubled(x):
+            return x * 2
+
+        with (
+            patch.dict("os.environ", {"RLINF_NVTX_ALWAYS": "1"}),
+            patch.object(nsight_profiler, "_TORCH_NVTX_AVAILABLE", True),
+            patch("torch.cuda.nvtx.range_push") as mock_push,
+            patch("torch.cuda.nvtx.range_pop") as mock_pop,
+        ):
+            result = doubled(7)
+
+        assert result == 14
+        mock_push.assert_called_once_with("test/op")
+        mock_pop.assert_called_once_with()
+
     def test_emits_torch_range_when_active(self):
         @NsightProfiler.annotate("test/op", color="green")
         def doubled(x):
