@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import time
 
 from omegaconf.omegaconf import DictConfig
 
@@ -43,6 +44,8 @@ class AsyncMultiStepRolloutWorker(MultiStepRolloutWorker):
         self._weight_sync_apply_total = 0
         self._weight_sync_coalesced_total = 0
         self._weight_sync_request_total = 0
+        self._last_weight_sync_done_ts: float | None = None
+        self._last_weight_sync_version: int | None = None
 
     @NsightProfiler.annotate("rollout/generate")
     async def generate(
@@ -74,6 +77,7 @@ class AsyncMultiStepRolloutWorker(MultiStepRolloutWorker):
             await self.wait_if_stale()
             for _ in range(self.rollout_epoch):
                 await self.generate_one_epoch(input_channel, output_channel)
+            self._record_sync_to_traj_sent_if_ready()
             if self.finished_episodes is not None:
                 self.finished_episodes += self.total_num_train_envs * self.rollout_epoch
             rollout_metrics = self.pop_execution_times()
@@ -108,9 +112,23 @@ class AsyncMultiStepRolloutWorker(MultiStepRolloutWorker):
         if self._generate_task is not None and not self._generate_task.done():
             self._generate_task.cancel()
 
+    async def sync_model_from_actor(self):
+        with self.worker_timer("weight_sync_apply"):
+            await super().sync_model_from_actor()
+        self._last_weight_sync_done_ts = time.perf_counter()
+        self._last_weight_sync_version = self.version
+
     async def _recv_and_apply_actor_sync(self) -> int:
-        await super().sync_model_from_actor()
+        await self.sync_model_from_actor()
         return self.version
+
+    def _record_sync_to_traj_sent_if_ready(self) -> None:
+        if self._last_weight_sync_done_ts is None:
+            return
+        self.record_execution_time(
+            "sync_to_traj_sent", time.perf_counter() - self._last_weight_sync_done_ts
+        )
+        self._last_weight_sync_done_ts = None
 
     def _start_background_weight_sync_if_needed(self):
         if (

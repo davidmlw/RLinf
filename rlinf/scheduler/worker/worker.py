@@ -910,6 +910,10 @@ class Worker(metaclass=WorkerMeta):
         self._timer_metrics.clear()
         return metrics
 
+    def record_execution_time(self, tag: str, duration: float) -> None:
+        """Record an externally measured execution time."""
+        self._timer_metrics[tag] = self._timer_metrics.get(tag, 0.0) + duration
+
     @contextmanager
     def worker_timer(self, tag: Optional[str] = None):
         """Context manager to time the execution of a worker function.
