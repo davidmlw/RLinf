@@ -24,7 +24,7 @@ from omegaconf import DictConfig
 from rlinf.scheduler import Channel, CommMapper, Worker
 from rlinf.utils.distributed import all_reduce_dict
 from rlinf.utils.metric_utils import compute_rollout_metrics
-from rlinf.utils.utils import unpack_batch
+from rlinf.utils.utils import clear_memory, unpack_batch
 from rlinf.workers.actor.fsdp_actor_worker import EmbodiedFSDPActor
 
 
@@ -168,6 +168,9 @@ class PipelineEmbodiedFSDPActor(EmbodiedFSDPActor):
             received_rollout_micro_batches,
             rollout_metric_batch,
         )
+        # Match the non-pipeline path: retain allocator blocks between optimizer
+        # steps and release them once the complete PPO update is finished.
+        clear_memory()
         mean_metric_dict = {key: np.mean(value) for key, value in metrics.items()}
         mean_metric_dict = all_reduce_dict(
             mean_metric_dict, op=torch.distributed.ReduceOp.AVG

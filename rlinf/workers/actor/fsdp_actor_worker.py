@@ -1409,8 +1409,6 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                     train_micro_batch[idx] = None
                     del batch
 
-                self.torch_platform.empty_cache()
-
                 grad_norm, lr_list = self.optimizer_step()
                 data = {
                     "actor/grad_norm": grad_norm,
@@ -1422,6 +1420,8 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         # put LR scheduler step here
         self.lr_scheduler.step()
         self.optimizer.zero_grad()
+        # Keep allocator blocks reusable across optimizer steps, then release them
+        # once the complete PPO update no longer needs its batches.
         clear_memory()
         mean_metric_dict = {key: np.mean(value) for key, value in metrics.items()}
         mean_metric_dict = all_reduce_dict(
@@ -1550,7 +1550,6 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             self.model.set_global_step(global_step)
 
     def finish_global_batch(self, metrics: dict[str, list[float]]) -> None:
-        self.torch_platform.empty_cache()
         grad_norm, lr_list = self.optimizer_step()
         self.optimizer.zero_grad()
         metric_data = {
