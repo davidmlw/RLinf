@@ -63,6 +63,7 @@ from rlinf.utils.metric_utils import (
     compute_loss_mask,
     compute_rollout_metrics,
     compute_split_num,
+    materialize_mean_metrics,
 )
 from rlinf.utils.nested_dict_process import (
     put_tensor_device,
@@ -79,6 +80,7 @@ from rlinf.utils.utils import (
     cpu_weight_swap,
     get_loss_agg_func,
     masked_mean,
+    nvtx_range,
     reshape_entropy,
     retrieve_model_state_dict_in_cpu,
 )
@@ -1424,7 +1426,8 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         self.lr_scheduler.step()
         self.optimizer.zero_grad()
         clear_memory()
-        mean_metric_dict = {key: np.mean(value) for key, value in metrics.items()}
+        with nvtx_range("actor.metrics_finalize"):
+            mean_metric_dict = materialize_mean_metrics(metrics)
         mean_metric_dict = all_reduce_dict(
             mean_metric_dict, op=torch.distributed.ReduceOp.AVG
         )
@@ -1434,7 +1437,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
     def train_micro_batch(
         self,
         micro_batch: dict[str, torch.Tensor],
-        metrics: dict[str, list[float]],
+        metrics: dict[str, list[float | torch.Tensor]],
         *,
         is_last: bool,
     ) -> None:
@@ -1518,6 +1521,8 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                     self.cfg.algorithm.clip_log_ratio_max
                 )
 
+        defer_metric_sync = not self.enable_sft_co_train
+        loss_kwargs["materialize_metrics"] = not defer_metric_sync
         loss, metrics_data = policy_loss(**loss_kwargs)
         entropy_loss = torch.tensor(0.0, device=Worker.torch_platform.current_device())
         if self.cfg.algorithm.entropy_bonus > 0 and not loss_kwargs["critic_warmup"]:
@@ -1530,7 +1535,9 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             )
             entropy_loss = masked_mean(entropy, mask=loss_mask)
             loss -= self.cfg.algorithm.entropy_bonus * entropy_loss
-        metrics_data["actor/entropy_loss"] = entropy_loss.detach().item()
+        metrics_data["actor/entropy_loss"] = (
+            entropy_loss.detach() if defer_metric_sync else entropy_loss.detach().item()
+        )
 
         if self.enable_sft_co_train:
             loss = self._train_sft_epoch(metrics_data, loss)
@@ -1539,7 +1546,9 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         with backward_ctx:
             self.grad_scaler.scale(loss).backward()
 
-        metrics_data["actor/total_loss"] = loss.detach().item()
+        metrics_data["actor/total_loss"] = (
+            loss.detach() if defer_metric_sync else loss.detach().item()
+        )
         append_to_dict(metrics, metrics_data)
 
     def set_global_step(self, global_step: int) -> None:
@@ -1550,7 +1559,9 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         if hasattr(self.model, "set_global_step"):
             self.model.set_global_step(global_step)
 
-    def finish_global_batch(self, metrics: dict[str, list[float]]) -> None:
+    def finish_global_batch(
+        self, metrics: dict[str, list[float | torch.Tensor]]
+    ) -> None:
         self.torch_platform.empty_cache()
         grad_norm, lr_list = self.optimizer_step()
         self.optimizer.zero_grad()

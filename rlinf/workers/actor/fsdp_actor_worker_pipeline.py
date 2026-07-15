@@ -17,14 +17,13 @@ import asyncio
 from collections import defaultdict, deque
 from dataclasses import dataclass
 
-import numpy as np
 import torch
 from omegaconf import DictConfig
 
 from rlinf.scheduler import Channel, CommMapper, Worker
 from rlinf.utils.distributed import all_reduce_dict
-from rlinf.utils.metric_utils import compute_rollout_metrics
-from rlinf.utils.utils import unpack_batch
+from rlinf.utils.metric_utils import compute_rollout_metrics, materialize_mean_metrics
+from rlinf.utils.utils import nvtx_range, unpack_batch
 from rlinf.workers.actor.fsdp_actor_worker import EmbodiedFSDPActor
 
 
@@ -92,7 +91,7 @@ class PipelineEmbodiedFSDPActor(EmbodiedFSDPActor):
 
         self.model.train()
 
-        metrics: dict[str, list[float]] = {}
+        metrics: dict[str, list[float | torch.Tensor]] = {}
         global_batches: dict[int, deque[GlobalBatchState]] = defaultdict(deque)
         current_global_batch: list[dict[str, torch.Tensor]] = []
         pending_global_batch: deque[dict[str, torch.Tensor]] = deque()
@@ -168,7 +167,8 @@ class PipelineEmbodiedFSDPActor(EmbodiedFSDPActor):
             received_rollout_micro_batches,
             rollout_metric_batch,
         )
-        mean_metric_dict = {key: np.mean(value) for key, value in metrics.items()}
+        with nvtx_range("actor.metrics_finalize"):
+            mean_metric_dict = materialize_mean_metrics(metrics)
         mean_metric_dict = all_reduce_dict(
             mean_metric_dict, op=torch.distributed.ReduceOp.AVG
         )

@@ -322,6 +322,44 @@ def append_to_dict(data, new_data):
         data[key].append(val)
 
 
+def materialize_mean_metrics(
+    metrics: dict[str, list[float | torch.Tensor]],
+) -> dict[str, float]:
+    """Average deferred scalar metrics with one device-to-host boundary."""
+    means: dict[str, float] = {}
+    tensor_keys: list[str] = []
+    tensor_means: list[torch.Tensor] = []
+
+    for key, values in metrics.items():
+        if not values:
+            raise ValueError(f"Metric {key!r} has no values")
+        tensor_values = [value for value in values if isinstance(value, torch.Tensor)]
+        if not tensor_values:
+            means[key] = float(np.mean(values))
+            continue
+
+        device = tensor_values[0].device
+        scalar_values = []
+        for value in values:
+            if isinstance(value, torch.Tensor):
+                if value.numel() != 1:
+                    raise ValueError(
+                        f"Metric {key!r} must contain scalars, got {tuple(value.shape)}"
+                    )
+                scalar_values.append(value.detach().reshape(()).to(device))
+            else:
+                scalar_values.append(
+                    torch.as_tensor(value, dtype=tensor_values[0].dtype, device=device)
+                )
+        tensor_keys.append(key)
+        tensor_means.append(torch.stack(scalar_values).to(torch.float64).mean())
+
+    if tensor_means:
+        materialized = torch.stack(tensor_means).cpu().tolist()
+        means.update(zip(tensor_keys, materialized))
+    return means
+
+
 def compute_loss_mask(dones):
     _, actual_bsz, num_action_chunks = dones.shape
     n_chunk_step = dones.shape[0] - 1

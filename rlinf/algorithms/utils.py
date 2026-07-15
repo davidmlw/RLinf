@@ -370,10 +370,11 @@ def preprocess_loss_inputs(
     return kwargs
 
 
-def postprocess_loss_metric(metrics_data: dict) -> dict:
+def postprocess_loss_metric(metrics_data: dict, *, materialize: bool = True) -> dict:
     for k, v in metrics_data.items():
         if isinstance(v, torch.Tensor):
-            metrics_data[k] = v.detach().item()
+            detached = v.detach()
+            metrics_data[k] = detached.item() if materialize else detached
         elif isinstance(v, (float, int)):
             metrics_data[k] = v
     return metrics_data

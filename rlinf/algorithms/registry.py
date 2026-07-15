@@ -79,6 +79,7 @@ def policy_loss(**kwargs) -> tuple[torch.Tensor, dict]:
     Unified actor loss entry.
     """
     loss_type = kwargs["loss_type"]
+    materialize_metrics = kwargs.pop("materialize_metrics", True)
     loss_fn = get_policy_loss(loss_type)
 
     task_type = kwargs["task_type"]
@@ -88,7 +89,9 @@ def policy_loss(**kwargs) -> tuple[torch.Tensor, dict]:
     loss, metrics_data = loss_fn(**kwargs)
 
     if task_type == "embodied":
-        metrics_data = postprocess_loss_metric(metrics_data)
+        metrics_data = postprocess_loss_metric(
+            metrics_data, materialize=materialize_metrics
+        )
     return loss, metrics_data
 
 
