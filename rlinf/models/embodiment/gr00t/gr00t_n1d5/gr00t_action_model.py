@@ -15,7 +15,7 @@
 import json
 import random
 from pathlib import Path
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Mapping, Optional, Union
 
 import numpy as np
 import torch
@@ -42,6 +42,7 @@ from rlinf.models.embodiment.gr00t.utils import (
 )
 from rlinf.models.embodiment.modules.explore_noise_net import ExploreNoiseNet
 from rlinf.models.embodiment.modules.value_head import ValueHead
+from rlinf.utils.backbone_cache import BACKBONE_CACHE_OUTPUT_KEY
 
 
 class FlowMatchingActionHeadForRLActionPrediction(FlowmatchingActionHead):
@@ -512,6 +513,8 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         compute_entropy: bool = False,
         compute_values: bool = True,
         use_cache: bool = False,
+        backbone_cache: Optional[Mapping[str, torch.Tensor]] = None,
+        return_backbone_cache: bool = False,
         **kwargs,
     ) -> dict[str, Any]:
         normalized_input = {
@@ -528,7 +531,18 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
             "embodiment_id": forward_inputs["embodiment_id"],
         }
         backbone_inputs, action_inputs = self.prepare_input(normalized_input)
-        backbone_outputs = self.backbone(backbone_inputs)
+        if backbone_cache is not None and return_backbone_cache:
+            raise ValueError("cannot return a backbone cache while consuming one")
+
+        raw_backbone_cache = None
+        if backbone_cache is None:
+            backbone_outputs = self.backbone(backbone_inputs)
+            if return_backbone_cache:
+                raw_backbone_cache = {
+                    name: value.detach() for name, value in backbone_outputs.items()
+                }
+        else:
+            backbone_outputs = BatchFeature(data=dict(backbone_cache))
 
         chains = forward_inputs["chains"]
         denoise_inds = forward_inputs["denoise_inds"]
@@ -562,12 +576,15 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
             ]
         value_t = value_t.mean(dim=-1, keepdim=False)
 
-        return {
+        result = {
             "logprobs": log_probs.float(),
             "prev_logprobs": prev_logprobs.float(),
             "values": value_t,
             "entropy": None,
         }
+        if raw_backbone_cache is not None:
+            result[BACKBONE_CACHE_OUTPUT_KEY] = raw_backbone_cache
+        return result
 
     @torch.no_grad()
     def predict_action_batch(

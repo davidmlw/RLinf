@@ -43,6 +43,14 @@ from rlinf.hybrid_engines.weight_syncer import WeightSyncer
 from rlinf.models import get_model
 from rlinf.models.embodiment.base_policy import ForwardType
 from rlinf.scheduler import Channel, Cluster, Worker
+from rlinf.utils.backbone_cache import (
+    BACKBONE_CACHE_OUTPUT_KEY,
+    BACKBONE_CACHE_SAMPLE_IDS_KEY,
+    BackboneCacheKey,
+    PinnedBackboneCache,
+    make_backbone_cache_key,
+    validate_frozen_backbone,
+)
 from rlinf.utils.data_iter_utils import (
     get_iterator_k_split,
     get_reverse_idx,
@@ -79,6 +87,7 @@ from rlinf.utils.utils import (
     cpu_weight_swap,
     get_loss_agg_func,
     masked_mean,
+    nvtx_range,
     reshape_entropy,
     retrieve_model_state_dict_in_cpu,
 )
@@ -1344,6 +1353,36 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             )
         return loss
 
+    def _create_backbone_cache(self) -> PinnedBackboneCache | None:
+        if not self.cfg.actor.model.get("cache_frozen_backbone_features", False):
+            return None
+        if SupportedModel(self.cfg.actor.model.model_type) != SupportedModel.GR00T:
+            raise ValueError(
+                "cache_frozen_backbone_features currently supports GR00T N1.5 only"
+            )
+        if self.enable_sft_co_train:
+            raise ValueError(
+                "cache_frozen_backbone_features is incompatible with SFT co-training"
+            )
+        if self.cfg.algorithm.get("update_epoch", 1) < 2:
+            raise ValueError(
+                "cache_frozen_backbone_features requires update_epoch >= 2"
+            )
+        if not self.cfg.actor.model.rl_head_config.get("disable_dropout", False):
+            raise ValueError(
+                "cache_frozen_backbone_features requires disable_dropout=true"
+            )
+
+        model = self.model
+        while hasattr(model, "module"):
+            model = model.module
+        backbone = getattr(model, "backbone", None)
+        if backbone is None:
+            raise ValueError("GR00T model does not expose a backbone module")
+        backbone.eval()
+        validate_frozen_backbone(backbone)
+        return PinnedBackboneCache(Worker.torch_platform.current_device())
+
     @Worker.timer("run_training")
     def run_training(self) -> None:
         """
@@ -1355,6 +1394,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             self.load_optimizer(self.device)
 
         self.model.train()
+        backbone_cache = self._create_backbone_cache()
         rollout_size = (
             self.rollout_batch["prev_logprobs"].shape[0]
             * self.rollout_batch["prev_logprobs"].shape[1]
@@ -1371,13 +1411,17 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         # Split to make minibatch iterator for updating the actor
         # See PPO paper for details. https://arxiv.org/abs/1707.06347
         rollout_size = self.rollout_batch["prev_logprobs"].size(0)
+        if backbone_cache is not None:
+            self.rollout_batch[BACKBONE_CACHE_SAMPLE_IDS_KEY] = torch.arange(
+                rollout_size, dtype=torch.int64
+            )
         batch_size_per_rank = self.cfg.actor.global_batch_size // self._world_size
         assert rollout_size % batch_size_per_rank == 0, (
             f"{rollout_size} is not divisible by {batch_size_per_rank}"
         )
         metrics = {}
         update_epoch = self.cfg.algorithm.get("update_epoch", 1)
-        for _ in range(update_epoch):
+        for epoch_idx in range(update_epoch):
             rollout_dataloader_iter = split_dict_to_chunk(
                 self.rollout_batch,
                 rollout_size // batch_size_per_rank,
@@ -1401,10 +1445,17 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
                 self.optimizer.zero_grad()
                 for idx, batch in enumerate(train_micro_batch):
+                    cache_key = None
+                    if backbone_cache is not None:
+                        sample_ids = batch.pop(BACKBONE_CACHE_SAMPLE_IDS_KEY)
+                        cache_key = make_backbone_cache_key(sample_ids)
                     self.train_micro_batch(
                         micro_batch=batch,
                         metrics=metrics,
                         is_last=(idx + 1) == self.gradient_accumulation,
+                        backbone_cache=backbone_cache,
+                        backbone_cache_key=cache_key,
+                        populate_backbone_cache=epoch_idx == 0,
                     )
                     # avoid gpu memory leak
                     train_micro_batch[idx] = None
@@ -1420,6 +1471,22 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 if len(lr_list) > 1:
                     data["critic/lr"] = lr_list[1]
                 append_to_dict(metrics, data)
+            if backbone_cache is not None and epoch_idx == 0:
+                backbone_cache.synchronize()
+
+        if backbone_cache is not None:
+            stats = backbone_cache.stats()
+            append_to_dict(
+                metrics,
+                {
+                    "actor/backbone_cache_entries": stats.entries,
+                    "actor/backbone_cache_bytes": stats.bytes,
+                    "actor/backbone_cache_hits": stats.hits,
+                    "actor/backbone_cache_misses": stats.misses,
+                },
+            )
+            self.rollout_batch.pop(BACKBONE_CACHE_SAMPLE_IDS_KEY)
+            backbone_cache.clear()
         # put LR scheduler step here
         self.lr_scheduler.step()
         self.optimizer.zero_grad()
@@ -1437,7 +1504,34 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         metrics: dict[str, list[float]],
         *,
         is_last: bool,
+        backbone_cache: PinnedBackboneCache | None = None,
+        backbone_cache_key: BackboneCacheKey | None = None,
+        populate_backbone_cache: bool = False,
     ) -> None:
+        if (backbone_cache is None) != (backbone_cache_key is None):
+            raise ValueError("backbone cache and cache key must be provided together")
+
+        cached_backbone = None
+        return_backbone_cache = False
+        if backbone_cache is not None:
+            if populate_backbone_cache:
+                if backbone_cache_key in backbone_cache:
+                    raise KeyError(
+                        f"duplicate first-epoch cache key: {backbone_cache_key}"
+                    )
+                return_backbone_cache = True
+            else:
+                with nvtx_range("actor.backbone_cache_h2d"):
+                    cached_backbone = backbone_cache.load(backbone_cache_key)
+
+        if backbone_cache is not None:
+            kwargs_for_backbone_cache = {
+                "backbone_cache": cached_backbone,
+                "return_backbone_cache": return_backbone_cache,
+            }
+        else:
+            kwargs_for_backbone_cache = {}
+
         micro_batch = put_tensor_device(micro_batch, self.device)
         backward_ctx = self.before_micro_batch(self.model, is_last_micro_batch=is_last)
         advantages = micro_batch["advantages"]
@@ -1471,8 +1565,14 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 compute_entropy=self.cfg.algorithm.entropy_bonus > 0,
                 compute_values=compute_values,
                 use_cache=False,
+                **kwargs_for_backbone_cache,
                 **kwargs,
             )
+
+        if return_backbone_cache:
+            raw_backbone_cache = output_dict.pop(BACKBONE_CACHE_OUTPUT_KEY)
+            with nvtx_range("actor.backbone_cache_d2h"):
+                backbone_cache.store(backbone_cache_key, raw_backbone_cache)
 
         if SupportedModel(self.cfg.actor.model.model_type) in [
             SupportedModel.GR00T,
