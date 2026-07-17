@@ -268,6 +268,7 @@ class ClusterConfig:
             - `backend` selects the profiling backend (e.g. ``"nsight"`` for Nsight Systems). Required when `profiling` is specified.
             - `enabled` controls whether RLinf wraps matching workers with the profiler command.
             - `worker_groups` matches worker group names such as `cfg.actor.group_name`.
+            - `ranks` optionally limits profiling to selected worker ranks within matching groups. When omitted, all ranks are profiled.
             - `steps` lists training step indices to gate profiling around.
             - Backend-specific options (e.g. ``options``, ``flags`` for Nsight) are passed through to the selected backend.
 

@@ -486,6 +486,7 @@ def test_cluster_config_parses_profiling_settings():
             "profiling": {
                 "backend": "nsight",
                 "worker_groups": ["actor", "rollout"],
+                "ranks": [0, 5],
                 "options": {
                     "t": "cuda,cudnn,cublas,nvtx",
                     "capture-range": "nvtx",
@@ -501,6 +502,7 @@ def test_cluster_config_parses_profiling_settings():
     assert isinstance(cluster_cfg.profiling, NsightConfig)
     assert cluster_cfg.profiling.enabled is True
     assert cluster_cfg.profiling.worker_groups == ["actor", "rollout"]
+    assert cluster_cfg.profiling.ranks == [0, 5]
     assert cluster_cfg.profiling.options == {
         "t": "cuda,cudnn,cublas,nvtx",
         "capture-range": "nvtx",
@@ -733,6 +735,49 @@ def test_nsight_should_profile_step_returns_false_when_disabled():
     nsight_cfg = NsightConfig(enabled=False, steps=[5])
 
     assert nsight_cfg.should_profile_step(5) is False
+
+
+def test_nsight_normalizes_and_matches_selected_ranks():
+    nsight_cfg = NsightConfig(worker_groups=["actor"], ranks=[0, "5"])
+
+    assert nsight_cfg.ranks == [0, 5]
+    assert nsight_cfg.profiles_worker_rank(0) is True
+    assert nsight_cfg.profiles_worker_rank(5) is True
+    assert nsight_cfg.profiles_worker_rank(1) is False
+
+
+def test_nsight_rejects_negative_ranks():
+    with pytest.raises(AssertionError, match="Profiling ranks must be non-negative"):
+        NsightConfig(worker_groups=["actor"], ranks=[-1])
+
+
+def test_modify_profile_context_skips_non_matching_rank():
+    py_executable = Cluster.modify_profile_context(
+        python_interpreter_path=sys.executable,
+        worker_name="actor:1",
+        profiling_cfg=NsightConfig(
+            worker_groups=["actor"],
+            ranks=[0, 5],
+            options={"t": "cuda,nvtx"},
+        ),
+    )
+
+    assert py_executable == sys.executable
+
+
+def test_modify_profile_context_wraps_matching_rank():
+    py_executable = Cluster.modify_profile_context(
+        python_interpreter_path=sys.executable,
+        worker_name="actor:5",
+        profiling_cfg=NsightConfig(
+            worker_groups=["actor"],
+            ranks=[0, 5],
+            options={"t": "cuda,nvtx"},
+        ),
+    )
+
+    assert shlex.split(py_executable)[:2] == ["nsys", "profile"]
+    assert shlex.split(py_executable)[-1] == sys.executable
 
 
 def test_modify_profile_context_skips_non_matching_group():

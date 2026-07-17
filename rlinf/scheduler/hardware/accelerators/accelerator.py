@@ -52,6 +52,9 @@ class ProfileConfig:
     worker_groups: Optional[list[str] | str] = None
     """Worker group names to profile.  ``None`` means no groups are profiled."""
 
+    ranks: Optional[list[int] | int] = None
+    """Worker ranks to profile within matching groups. ``None`` means all ranks."""
+
     steps: Optional[list[int]] = None
     """Function step indices to gate profiling around.
 
@@ -79,6 +82,20 @@ class ProfileConfig:
                 )
                 self.worker_groups = [str(g) for g in worker_groups]
 
+        if self.ranks is not None:
+            ranks = self.ranks
+            if isinstance(ranks, int):
+                self.ranks = [ranks]
+            else:
+                assert isinstance(ranks, (list, ListConfig)), (
+                    "ranks must be a list of ints or a single int "
+                    f"in profiling config. But got {type(ranks)}: {ranks}"
+                )
+                self.ranks = [int(rank) for rank in ranks]
+            assert all(rank >= 0 for rank in self.ranks), (
+                f"Profiling ranks must be non-negative ints. But got: {self.ranks}"
+            )
+
         if self.steps is not None:
             assert isinstance(self.steps, (list, ListConfig)), (
                 "steps must be a list of ints in profiling config. "
@@ -95,6 +112,12 @@ class ProfileConfig:
             return False
         normalized = {g.lower() for g in self.worker_groups}
         return "all" in normalized or worker_group_name.lower() in normalized
+
+    def profiles_worker_rank(self, worker_rank: Optional[int]) -> bool:
+        """Return whether a worker rank is selected by this config."""
+        return self.ranks is None or (
+            worker_rank is not None and worker_rank in self.ranks
+        )
 
     def should_profile_step(self, step_idx: int) -> bool:
         """Return whether the given step should be gated for profiling."""

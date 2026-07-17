@@ -567,6 +567,7 @@ class Cluster:
         python_interpreter_path: str,
         worker_name: str,
         profiling_cfg: Optional[ProfileConfig],
+        worker_rank: Optional[int] = None,
     ) -> str:
         """Wrap ``py_executable`` with a profiler command if profiling is configured.
 
@@ -579,8 +580,13 @@ class Cluster:
         from ..hardware.accelerators.accelerator import AcceleratorManager
         from ..manager import WorkerAddress
 
-        worker_group_name = WorkerAddress.from_name(worker_name).root_group_name
+        worker_address = WorkerAddress.from_name(worker_name)
+        worker_group_name = worker_address.root_group_name
+        if worker_rank is None and worker_address.rank_path:
+            worker_rank = worker_address.rank_path[-1]
         if not profiling_cfg.profiles_worker_group(worker_group_name):
+            return python_interpreter_path
+        if not profiling_cfg.profiles_worker_rank(worker_rank):
             return python_interpreter_path
 
         # Resolve the accelerator manager registered for this profiling config class.
@@ -619,6 +625,7 @@ class Cluster:
         cls,
         worker_name: str,
         profiling_cfg: Optional[ProfileConfig],
+        worker_rank: Optional[int] = None,
     ) -> dict[str, str]:
         """Return backend-specific env vars to inject when profiling is active.
 
@@ -635,8 +642,13 @@ class Cluster:
         from ..hardware.accelerators.accelerator import AcceleratorManager
         from ..manager import WorkerAddress
 
-        worker_group_name = WorkerAddress.from_name(worker_name).root_group_name
+        worker_address = WorkerAddress.from_name(worker_name)
+        worker_group_name = worker_address.root_group_name
+        if worker_rank is None and worker_address.rank_path:
+            worker_rank = worker_address.rank_path[-1]
         if not profiling_cfg.profiles_worker_group(worker_group_name):
+            return {}
+        if not profiling_cfg.profiles_worker_rank(worker_rank):
             return {}
 
         manager = None
@@ -726,6 +738,7 @@ class Cluster:
             worker_group_name = WorkerAddress.from_name(worker_name).root_group_name
             if (
                 _profiling_cfg.profiles_worker_group(worker_group_name)
+                and _profiling_cfg.profiles_worker_rank(worker_rank)
                 and _profiling_cfg.backend not in node.profiler_backends
             ):
                 raise RuntimeError(
@@ -739,10 +752,12 @@ class Cluster:
             python_interpreter_path=python_interpreter_path,
             worker_name=worker_name,
             profiling_cfg=_profiling_cfg,
+            worker_rank=worker_rank,
         )
         profiling_env_vars = self.get_profiling_env_vars_for_worker(
             worker_name=worker_name,
             profiling_cfg=_profiling_cfg,
+            worker_rank=worker_rank,
         )
         if profiling_env_vars:
             merged_env_vars = self.merge_worker_env_vars(
