@@ -80,6 +80,11 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
             tune_llm=False,
             rl_head_config=cfg.rl_head_config,
         )
+
+        if cfg.get("skip_unused_lm_head", False):
+            from .unused_logits import replace_unused_lm_head
+
+            replace_unused_lm_head(model)
     finally:
         restore_npu_patches(Patcher, npu_patch_state)
 
