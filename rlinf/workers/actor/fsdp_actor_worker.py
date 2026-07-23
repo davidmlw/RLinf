@@ -46,6 +46,8 @@ from rlinf.scheduler import Channel, Cluster, Worker
 from rlinf.utils.backbone_cache import (
     BACKBONE_CACHE_OUTPUT_KEY,
     BACKBONE_CACHE_SAMPLE_IDS_KEY,
+    ROLLOUT_BACKBONE_FEATURE_KEY,
+    ROLLOUT_BACKBONE_MASK_KEY,
     BackboneCacheKey,
     PinnedBackboneCache,
     make_backbone_cache_key,
@@ -1383,6 +1385,38 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         validate_frozen_backbone(backbone)
         return PinnedBackboneCache(Worker.torch_platform.current_device())
 
+    def _reuse_rollout_backbone_enabled(self) -> bool:
+        """W62: reuse the Rollout-computed frozen backbone feature in Actor.
+
+        Fail closed: only GR00T N1.5 with a fully frozen, eval-mode backbone,
+        no SFT co-training, and disable_dropout is supported. The feature is
+        delivered per micro batch via forward_inputs, so no cross-epoch pinned
+        cache and no update_epoch>=2 requirement.
+        """
+        if not self.cfg.actor.model.get("reuse_rollout_backbone_features", False):
+            return False
+        if SupportedModel(self.cfg.actor.model.model_type) != SupportedModel.GR00T:
+            raise ValueError(
+                "reuse_rollout_backbone_features currently supports GR00T N1.5 only"
+            )
+        if self.enable_sft_co_train:
+            raise ValueError(
+                "reuse_rollout_backbone_features is incompatible with SFT co-training"
+            )
+        if not self.cfg.actor.model.rl_head_config.get("disable_dropout", False):
+            raise ValueError(
+                "reuse_rollout_backbone_features requires disable_dropout=true"
+            )
+        model = self.model
+        while hasattr(model, "module"):
+            model = model.module
+        backbone = getattr(model, "backbone", None)
+        if backbone is None:
+            raise ValueError("GR00T model does not expose a backbone module")
+        backbone.eval()
+        validate_frozen_backbone(backbone)
+        return True
+
     @Worker.timer("run_training")
     def run_training(self) -> None:
         """
@@ -1395,6 +1429,13 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
         self.model.train()
         backbone_cache = self._create_backbone_cache()
+        reuse_rollout_feature = self._reuse_rollout_backbone_enabled()
+        self._reuse_feature_fallbacks = 0
+        if reuse_rollout_feature and backbone_cache is not None:
+            raise ValueError(
+                "reuse_rollout_backbone_features and cache_frozen_backbone_features "
+                "are mutually exclusive"
+            )
         rollout_size = (
             self.rollout_batch["prev_logprobs"].shape[0]
             * self.rollout_batch["prev_logprobs"].shape[1]
@@ -1456,6 +1497,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                         backbone_cache=backbone_cache,
                         backbone_cache_key=cache_key,
                         populate_backbone_cache=epoch_idx == 0,
+                        reuse_rollout_feature=reuse_rollout_feature,
                     )
                     # avoid gpu memory leak
                     train_micro_batch[idx] = None
@@ -1487,6 +1529,11 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             )
             self.rollout_batch.pop(BACKBONE_CACHE_SAMPLE_IDS_KEY)
             backbone_cache.clear()
+        if reuse_rollout_feature:
+            append_to_dict(
+                metrics,
+                {"actor/reuse_feature_fallbacks": float(self._reuse_feature_fallbacks)},
+            )
         # put LR scheduler step here
         self.lr_scheduler.step()
         self.optimizer.zero_grad()
@@ -1507,9 +1554,14 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         backbone_cache: PinnedBackboneCache | None = None,
         backbone_cache_key: BackboneCacheKey | None = None,
         populate_backbone_cache: bool = False,
+        reuse_rollout_feature: bool = False,
     ) -> None:
         if (backbone_cache is None) != (backbone_cache_key is None):
             raise ValueError("backbone cache and cache key must be provided together")
+        if reuse_rollout_feature and backbone_cache is not None:
+            raise ValueError(
+                "reuse_rollout_feature and the W50 pinned cache are mutually exclusive"
+            )
 
         cached_backbone = None
         return_backbone_cache = False
@@ -1533,6 +1585,27 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             kwargs_for_backbone_cache = {}
 
         micro_batch = put_tensor_device(micro_batch, self.device)
+
+        # W62: reuse the Rollout-computed frozen backbone feature as the detached
+        # conditioning instead of recomputing self.backbone(...). The feature was
+        # piggybacked on forward_inputs, so it is already sample-aligned with this
+        # micro batch. Fail closed to the fresh backbone path if it is absent.
+        if reuse_rollout_feature:
+            fwd = micro_batch.get("forward_inputs", {})
+            reuse_feat = fwd.pop(ROLLOUT_BACKBONE_FEATURE_KEY, None)
+            reuse_mask = fwd.pop(ROLLOUT_BACKBONE_MASK_KEY, None)
+            if reuse_feat is not None and reuse_mask is not None:
+                kwargs_for_backbone_cache = {
+                    "backbone_cache": {
+                        "backbone_features": reuse_feat.detach(),
+                        "backbone_attention_mask": reuse_mask.detach(),
+                    },
+                    "return_backbone_cache": False,
+                }
+            else:
+                self._reuse_feature_fallbacks += 1
+                kwargs_for_backbone_cache = {}
+
         backward_ctx = self.before_micro_batch(self.model, is_last_micro_batch=is_last)
         advantages = micro_batch["advantages"]
         prev_logprobs = micro_batch["prev_logprobs"]

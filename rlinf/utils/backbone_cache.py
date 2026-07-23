@@ -23,6 +23,13 @@ from torch import nn
 BACKBONE_CACHE_OUTPUT_KEY = "_rlinf_backbone_cache"
 BACKBONE_CACHE_SAMPLE_IDS_KEY = "_rlinf_backbone_cache_sample_ids"
 
+# W62: keys carrying the Rollout-computed frozen-backbone feature through the
+# trajectory (piggybacked on forward_inputs so it rides the existing per-sample
+# merge/split/shuffle machinery). Actor reuses this as the detached backbone
+# conditioning instead of recomputing self.backbone(...).
+ROLLOUT_BACKBONE_FEATURE_KEY = "rollout_backbone_features"
+ROLLOUT_BACKBONE_MASK_KEY = "rollout_backbone_attention_mask"
+
 BackboneCacheKey = tuple[int, ...]
 BackboneOutput = dict[str, torch.Tensor]
 

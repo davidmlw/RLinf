@@ -36,6 +36,10 @@ from rlinf.hybrid_engines.weight_syncer import WeightSyncer
 from rlinf.models import get_model
 from rlinf.models.embodiment.base_policy import BasePolicy
 from rlinf.scheduler import Channel, Cluster, Worker, split_channel_message
+from rlinf.utils.backbone_cache import (
+    ROLLOUT_BACKBONE_FEATURE_KEY,
+    ROLLOUT_BACKBONE_MASK_KEY,
+)
 from rlinf.utils.placement import HybridComponentPlacement
 
 
@@ -587,6 +591,13 @@ class MultiStepRolloutWorker(Worker):
                 dtype=torch.bool,
                 device=actions.device,
             )
+        # W62: only retain the exposed rollout backbone feature (and pay its
+        # D2H/transport cost) when Actor is configured to reuse it.
+        if not self.model_cfg.get("reuse_rollout_backbone_features", False):
+            forward_inputs = result.get("forward_inputs")
+            if forward_inputs is not None:
+                forward_inputs.pop(ROLLOUT_BACKBONE_FEATURE_KEY, None)
+                forward_inputs.pop(ROLLOUT_BACKBONE_MASK_KEY, None)
         return RolloutResult(
             actions=actions,
             prev_logprobs=result["prev_logprobs"] if self.collect_prev_infos else None,
