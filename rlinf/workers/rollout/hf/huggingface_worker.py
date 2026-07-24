@@ -36,7 +36,11 @@ from rlinf.hybrid_engines.weight_syncer import WeightSyncer
 from rlinf.models import get_model
 from rlinf.models.embodiment.base_policy import BasePolicy
 from rlinf.scheduler import Channel, Cluster, Worker, split_channel_message
-from rlinf.utils.backbone_cache import filter_rollout_backbone_transport
+from rlinf.utils.backbone_cache import (
+    ROLLOUT_BACKBONE_FEATURE_KEY,
+    ROLLOUT_BACKBONE_MASK_KEY,
+    filter_rollout_backbone_transport,
+)
 from rlinf.utils.placement import HybridComponentPlacement
 
 
@@ -136,6 +140,92 @@ class MultiStepRolloutWorker(Worker):
                 "rollout_results": [],
             }
         self.rollout_queue_size = self.cfg.rollout.get("rollout_queue_size", 0)
+
+        capacity_probe = self.cfg.rollout.get("gpu_feature_capacity_probe", {})
+        self._gpu_feature_capacity_probe_enabled = bool(
+            capacity_probe.get("enabled", False)
+        )
+        self._gpu_feature_capacity_probe_target_samples = int(
+            capacity_probe.get("target_samples_per_rank", 0)
+        )
+        if (
+            self._gpu_feature_capacity_probe_enabled
+            and self._gpu_feature_capacity_probe_target_samples <= 0
+        ):
+            raise ValueError(
+                "rollout.gpu_feature_capacity_probe.target_samples_per_rank "
+                "must be positive when the probe is enabled"
+            )
+        self._gpu_feature_capacity_probe_tensors: list[torch.Tensor] = []
+        self._gpu_feature_capacity_probe_samples = 0
+        self._gpu_feature_capacity_probe_bytes = 0
+        self._gpu_feature_capacity_probe_milestones: set[int] = set()
+
+    def _capacity_probe_memory(self, label: str) -> None:
+        allocated = self.torch_platform.memory_allocated(self.device)
+        reserved = self.torch_platform.memory_reserved(self.device)
+        peak_allocated = self.torch_platform.max_memory_allocated(self.device)
+        peak_reserved = self.torch_platform.max_memory_reserved(self.device)
+        self.log_info(
+            "W63_GPU_CAPACITY "
+            f"rank={self._rank} label={label} "
+            f"samples={self._gpu_feature_capacity_probe_samples} "
+            f"feature_bytes={self._gpu_feature_capacity_probe_bytes} "
+            f"allocated_bytes={allocated} reserved_bytes={reserved} "
+            f"peak_allocated_bytes={peak_allocated} "
+            f"peak_reserved_bytes={peak_reserved}"
+        )
+
+    def _reset_gpu_feature_capacity_probe(self) -> None:
+        if not self._gpu_feature_capacity_probe_enabled:
+            return
+        if self._gpu_feature_capacity_probe_tensors:
+            self._capacity_probe_memory("before_release")
+        self._gpu_feature_capacity_probe_tensors.clear()
+        self._gpu_feature_capacity_probe_samples = 0
+        self._gpu_feature_capacity_probe_bytes = 0
+        self._gpu_feature_capacity_probe_milestones.clear()
+        self.torch_platform.empty_cache()
+        self.torch_platform.reset_peak_memory_stats(self.device)
+        self._capacity_probe_memory("after_release")
+
+    def _retain_gpu_feature_capacity_probe(
+        self, forward_inputs: dict[str, torch.Tensor]
+    ) -> None:
+        if not self._gpu_feature_capacity_probe_enabled:
+            return
+        if (
+            self._gpu_feature_capacity_probe_samples
+            >= self._gpu_feature_capacity_probe_target_samples
+        ):
+            return
+
+        feature = forward_inputs.get(ROLLOUT_BACKBONE_FEATURE_KEY)
+        mask = forward_inputs.get(ROLLOUT_BACKBONE_MASK_KEY)
+        if feature is None or mask is None:
+            raise RuntimeError("W63 capacity probe requires complete rollout features")
+        if feature.device.type != "cuda" or mask.device.type != "cuda":
+            raise RuntimeError(
+                "W63 capacity probe must retain the producer CUDA allocations"
+            )
+
+        self._gpu_feature_capacity_probe_tensors.extend(
+            (feature.detach(), mask.detach())
+        )
+        self._gpu_feature_capacity_probe_samples += int(feature.shape[0])
+        self._gpu_feature_capacity_probe_bytes += sum(
+            tensor.numel() * tensor.element_size() for tensor in (feature, mask)
+        )
+
+        target = self._gpu_feature_capacity_probe_target_samples
+        for percent in (25, 50, 75, 100):
+            threshold = (target * percent + 99) // 100
+            if (
+                percent not in self._gpu_feature_capacity_probe_milestones
+                and self._gpu_feature_capacity_probe_samples >= threshold
+            ):
+                self._gpu_feature_capacity_probe_milestones.add(percent)
+                self._capacity_probe_memory(f"retained_{percent}pct")
 
     def init_worker(self):
         rollout_model_config = copy.deepcopy(self.model_cfg)
@@ -593,6 +683,7 @@ class MultiStepRolloutWorker(Worker):
         # transporting inputs that Actor no longer consumes.
         forward_inputs = result.get("forward_inputs")
         if forward_inputs is not None:
+            self._retain_gpu_feature_capacity_probe(forward_inputs)
             filter_rollout_backbone_transport(
                 forward_inputs,
                 reuse_enabled=self.model_cfg.get(
@@ -761,6 +852,7 @@ class MultiStepRolloutWorker(Worker):
         input_channel: Channel,
         output_channel: Channel,
     ):
+        self._reset_gpu_feature_capacity_probe()
         if self.enable_offload:
             self.reload_model()
 
@@ -773,6 +865,8 @@ class MultiStepRolloutWorker(Worker):
 
         if self.enable_offload:
             self.offload_model()
+        if self._gpu_feature_capacity_probe_enabled:
+            self._capacity_probe_memory("rollout_complete_model_offloaded")
 
     async def evaluate(self, input_channel: Channel, output_channel: Channel):
         if self.enable_offload:
