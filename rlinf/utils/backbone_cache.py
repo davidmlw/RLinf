@@ -29,9 +29,40 @@ BACKBONE_CACHE_SAMPLE_IDS_KEY = "_rlinf_backbone_cache_sample_ids"
 # conditioning instead of recomputing self.backbone(...).
 ROLLOUT_BACKBONE_FEATURE_KEY = "rollout_backbone_features"
 ROLLOUT_BACKBONE_MASK_KEY = "rollout_backbone_attention_mask"
+ROLLOUT_BACKBONE_INPUT_KEYS = (
+    "eagle_input_ids",
+    "eagle_attention_mask",
+    "eagle_pixel_values",
+    "eagle_image_sizes",
+)
 
 BackboneCacheKey = tuple[int, ...]
 BackboneOutput = dict[str, torch.Tensor]
+
+
+def filter_rollout_backbone_transport(
+    forward_inputs: dict[str, torch.Tensor],
+    *,
+    reuse_enabled: bool,
+) -> bool:
+    """Keep either raw Eagle inputs or a complete reusable backbone output."""
+    if not reuse_enabled:
+        forward_inputs.pop(ROLLOUT_BACKBONE_FEATURE_KEY, None)
+        forward_inputs.pop(ROLLOUT_BACKBONE_MASK_KEY, None)
+        return False
+
+    has_complete_feature = all(
+        key in forward_inputs
+        for key in (ROLLOUT_BACKBONE_FEATURE_KEY, ROLLOUT_BACKBONE_MASK_KEY)
+    )
+    if not has_complete_feature:
+        forward_inputs.pop(ROLLOUT_BACKBONE_FEATURE_KEY, None)
+        forward_inputs.pop(ROLLOUT_BACKBONE_MASK_KEY, None)
+        return False
+
+    for key in ROLLOUT_BACKBONE_INPUT_KEYS:
+        forward_inputs.pop(key, None)
+    return True
 
 
 def make_backbone_cache_key(sample_ids: torch.Tensor) -> BackboneCacheKey:

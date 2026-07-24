@@ -47,6 +47,7 @@ from rlinf.utils.backbone_cache import (
     BACKBONE_CACHE_OUTPUT_KEY,
     BACKBONE_CACHE_SAMPLE_IDS_KEY,
     ROLLOUT_BACKBONE_FEATURE_KEY,
+    ROLLOUT_BACKBONE_INPUT_KEYS,
     ROLLOUT_BACKBONE_MASK_KEY,
     BackboneCacheKey,
     PinnedBackboneCache,
@@ -1586,10 +1587,9 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
         micro_batch = put_tensor_device(micro_batch, self.device)
 
-        # W62: reuse the Rollout-computed frozen backbone feature as the detached
-        # conditioning instead of recomputing self.backbone(...). The feature was
-        # piggybacked on forward_inputs, so it is already sample-aligned with this
-        # micro batch. Fail closed to the fresh backbone path if it is absent.
+        # W62: reuse the Rollout-computed frozen backbone feature as detached
+        # conditioning. A complete producer feature permits pruning Eagle-only
+        # inputs; an incomplete producer contract retains them for fresh fallback.
         if reuse_rollout_feature:
             fwd = micro_batch.get("forward_inputs", {})
             reuse_feat = fwd.pop(ROLLOUT_BACKBONE_FEATURE_KEY, None)
@@ -1604,6 +1604,14 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 }
             else:
                 self._reuse_feature_fallbacks += 1
+                missing_raw_inputs = [
+                    key for key in ROLLOUT_BACKBONE_INPUT_KEYS if key not in fwd
+                ]
+                if missing_raw_inputs:
+                    raise RuntimeError(
+                        "rollout backbone feature is incomplete after raw Eagle "
+                        f"inputs were pruned: missing {missing_raw_inputs}"
+                    )
                 kwargs_for_backbone_cache = {}
 
         backward_ctx = self.before_micro_batch(self.model, is_last_micro_batch=is_last)

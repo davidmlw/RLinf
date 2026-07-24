@@ -17,7 +17,11 @@ import torch
 from torch import nn
 
 from rlinf.utils.backbone_cache import (
+    ROLLOUT_BACKBONE_FEATURE_KEY,
+    ROLLOUT_BACKBONE_INPUT_KEYS,
+    ROLLOUT_BACKBONE_MASK_KEY,
     PinnedBackboneCache,
+    filter_rollout_backbone_transport,
     make_backbone_cache_key,
     validate_frozen_backbone,
 )
@@ -91,3 +95,42 @@ def test_frozen_eval_backbone_is_required():
 
     backbone.eval()
     validate_frozen_backbone(backbone)
+
+
+def _rollout_forward_inputs():
+    return {
+        **{key: torch.ones(1) for key in ROLLOUT_BACKBONE_INPUT_KEYS},
+        ROLLOUT_BACKBONE_FEATURE_KEY: torch.ones(1),
+        ROLLOUT_BACKBONE_MASK_KEY: torch.ones(1),
+    }
+
+
+def test_transport_disabled_drops_feature_and_keeps_raw_inputs():
+    forward_inputs = _rollout_forward_inputs()
+    assert not filter_rollout_backbone_transport(forward_inputs, reuse_enabled=False)
+    assert ROLLOUT_BACKBONE_FEATURE_KEY not in forward_inputs
+    assert ROLLOUT_BACKBONE_MASK_KEY not in forward_inputs
+    assert all(key in forward_inputs for key in ROLLOUT_BACKBONE_INPUT_KEYS)
+
+
+def test_complete_feature_drops_raw_backbone_inputs():
+    forward_inputs = _rollout_forward_inputs()
+    assert filter_rollout_backbone_transport(
+        forward_inputs,
+        reuse_enabled=True,
+    )
+    assert ROLLOUT_BACKBONE_FEATURE_KEY in forward_inputs
+    assert ROLLOUT_BACKBONE_MASK_KEY in forward_inputs
+    assert all(key not in forward_inputs for key in ROLLOUT_BACKBONE_INPUT_KEYS)
+
+
+def test_incomplete_feature_keeps_raw_inputs_for_fallback():
+    forward_inputs = _rollout_forward_inputs()
+    forward_inputs.pop(ROLLOUT_BACKBONE_MASK_KEY)
+    assert not filter_rollout_backbone_transport(
+        forward_inputs,
+        reuse_enabled=True,
+    )
+    assert ROLLOUT_BACKBONE_FEATURE_KEY not in forward_inputs
+    assert ROLLOUT_BACKBONE_MASK_KEY not in forward_inputs
+    assert all(key in forward_inputs for key in ROLLOUT_BACKBONE_INPUT_KEYS)

@@ -38,6 +38,11 @@ def test_gr00t_fresh_and_cached_backbone_outputs_match():
     class FakeActionHead:
         action_chunk = 1
         rl_config = SimpleNamespace(joint_logprob=False)
+        dtype = torch.float32
+
+        @staticmethod
+        def prepare_input(batch):
+            return BatchFeature(data=batch)
 
         def __call__(
             self,
@@ -56,6 +61,10 @@ def test_gr00t_fresh_and_cached_backbone_outputs_match():
 
     class FakePolicy:
         valid_action_dim = 2
+        device = torch.device("cpu")
+        _prepare_action_head_input = (
+            GR00T_N1_5_ForRLActionPrediction._prepare_action_head_input
+        )
 
         def __init__(self):
             self.backbone = FakeBackbone()
@@ -91,14 +100,20 @@ def test_gr00t_fresh_and_cached_backbone_outputs_match():
     raw_cache = fresh.pop(BACKBONE_CACHE_OUTPUT_KEY)
 
     policy = FakePolicy()
+    feature_only_inputs = {
+        key: value
+        for key, value in forward_inputs.items()
+        if not key.startswith("eagle_")
+    }
     cached = GR00T_N1_5_ForRLActionPrediction.default_forward(
         policy,
-        forward_inputs=forward_inputs,
+        forward_inputs=feature_only_inputs,
         prev_logprobs=prev_logprobs,
         backbone_cache=raw_cache,
     )
 
     assert policy.backbone.calls == 0
+    assert all(not key.startswith("eagle_") for key in feature_only_inputs)
     assert not raw_cache["backbone_features"].requires_grad
     for key in ("logprobs", "prev_logprobs", "values"):
         torch.testing.assert_close(cached[key], fresh[key])

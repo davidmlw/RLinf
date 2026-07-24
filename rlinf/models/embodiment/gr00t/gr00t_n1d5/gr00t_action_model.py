@@ -510,6 +510,26 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         else:
             raise NotImplementedError
 
+    def _prepare_action_head_input(
+        self, forward_inputs: Mapping[str, torch.Tensor]
+    ) -> BatchFeature:
+        action_inputs = self.action_head.prepare_input(
+            {
+                "state": forward_inputs["state"],
+                "state_mask": forward_inputs["state_mask"],
+                "embodiment_id": forward_inputs["embodiment_id"],
+            }
+        )
+        for name, value in action_inputs.items():
+            if torch.is_floating_point(value):
+                action_inputs[name] = value.to(
+                    self.device,
+                    dtype=self.action_head.dtype,
+                )
+            else:
+                action_inputs[name] = value.to(self.device)
+        return action_inputs
+
     def default_forward(
         self,
         forward_inputs: dict[str, torch.Tensor],
@@ -521,31 +541,32 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         return_backbone_cache: bool = False,
         **kwargs,
     ) -> dict[str, Any]:
-        normalized_input = {
-            "state": forward_inputs["state"],
-            "state_mask": forward_inputs["state_mask"],
-            "eagle_input_ids": forward_inputs["eagle_input_ids"],
-            "eagle_attention_mask": forward_inputs["eagle_attention_mask"],
-            "eagle_pixel_values": forward_inputs["eagle_pixel_values"].reshape(
-                -1, *forward_inputs["eagle_pixel_values"].shape[2:]
-            ),
-            "eagle_image_sizes": forward_inputs["eagle_image_sizes"].reshape(
-                -1, *forward_inputs["eagle_image_sizes"].shape[2:]
-            ),
-            "embodiment_id": forward_inputs["embodiment_id"],
-        }
-        backbone_inputs, action_inputs = self.prepare_input(normalized_input)
         if backbone_cache is not None and return_backbone_cache:
             raise ValueError("cannot return a backbone cache while consuming one")
 
         raw_backbone_cache = None
         if backbone_cache is None:
+            normalized_input = {
+                "state": forward_inputs["state"],
+                "state_mask": forward_inputs["state_mask"],
+                "eagle_input_ids": forward_inputs["eagle_input_ids"],
+                "eagle_attention_mask": forward_inputs["eagle_attention_mask"],
+                "eagle_pixel_values": forward_inputs["eagle_pixel_values"].reshape(
+                    -1, *forward_inputs["eagle_pixel_values"].shape[2:]
+                ),
+                "eagle_image_sizes": forward_inputs["eagle_image_sizes"].reshape(
+                    -1, *forward_inputs["eagle_image_sizes"].shape[2:]
+                ),
+                "embodiment_id": forward_inputs["embodiment_id"],
+            }
+            backbone_inputs, action_inputs = self.prepare_input(normalized_input)
             backbone_outputs = self.backbone(backbone_inputs)
             if return_backbone_cache:
                 raw_backbone_cache = {
                     name: value.detach() for name, value in backbone_outputs.items()
                 }
         else:
+            action_inputs = self._prepare_action_head_input(forward_inputs)
             backbone_outputs = BatchFeature(data=dict(backbone_cache))
 
         chains = forward_inputs["chains"]

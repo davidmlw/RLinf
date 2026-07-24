@@ -94,7 +94,5 @@ def test_rollout_reuse_captures_raw_backbone_output_before_action_head_mutation(
     torch.testing.assert_close(
         forward_inputs[ROLLOUT_BACKBONE_FEATURE_KEY], raw_features.detach()
     )
-    torch.testing.assert_close(
-        forward_inputs[ROLLOUT_BACKBONE_MASK_KEY], raw_mask
-    )
+    torch.testing.assert_close(forward_inputs[ROLLOUT_BACKBONE_MASK_KEY], raw_mask)
     assert not forward_inputs[ROLLOUT_BACKBONE_FEATURE_KEY].requires_grad
