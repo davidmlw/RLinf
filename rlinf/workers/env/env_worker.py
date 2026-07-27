@@ -37,6 +37,13 @@ from rlinf.envs.action_utils import prepare_actions
 from rlinf.envs.utils import get_env_attr
 from rlinf.envs.wrappers import RecordVideo
 from rlinf.scheduler import Channel, Cluster, CommMapper, Worker
+from rlinf.utils.backbone_cache import (
+    ROLLOUT_BACKBONE_BORROWED_IPC,
+    ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
+    ROLLOUT_BACKBONE_SAMPLE_IDS_KEY,
+    ROLLOUT_BACKBONE_TRANSPORT_KEY,
+    rollout_backbone_channel_key,
+)
 from rlinf.utils.data_iter_utils import split_list
 from rlinf.utils.distributed import masked_stats, normalize_from_stats
 from rlinf.utils.metric_utils import compute_split_num
@@ -103,6 +110,10 @@ class EnvWorker(Worker):
         self.model_cfg = (
             self.cfg.rollout.model if self.only_eval else self.cfg.actor.model
         )
+        self._borrowed_feature_ipc_enabled = (
+            self.model_cfg.get(ROLLOUT_BACKBONE_TRANSPORT_KEY, "trajectory")
+            == ROLLOUT_BACKBONE_BORROWED_IPC
+        )
         train_env_cfg = self.cfg.env.get("train", None)
         eval_env_cfg = self.cfg.env.get("eval", None)
         self.enable_train = not self.only_eval and train_env_cfg is not None
@@ -158,6 +169,10 @@ class EnvWorker(Worker):
         self.actor_split_num = (
             1 if not self.enable_train else self.get_actor_split_num()
         )
+        if self._borrowed_feature_ipc_enabled and self.actor_split_num != 1:
+            raise ValueError(
+                "borrowed rollout backbone IPC currently requires actor_split_num=1"
+            )
         if self.use_training_pipeline and self.enable_train:
             self._init_pipeline_params()
 
@@ -984,7 +999,31 @@ class EnvWorker(Worker):
         )
         rollout_result.clear()
         for trajectory in trajectories:
-            channel.put(trajectory, async_op=True)
+            if self._borrowed_feature_ipc_enabled:
+                sample_ids = trajectory.forward_inputs.get(
+                    ROLLOUT_BACKBONE_SAMPLE_IDS_KEY
+                )
+                if sample_ids is None:
+                    raise RuntimeError(
+                        "borrowed backbone trajectory is missing sample IDs"
+                    )
+                producer_ranks = torch.div(
+                    sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu"),
+                    ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
+                    rounding_mode="floor",
+                ).unique()
+                if producer_ranks.numel() != 1:
+                    raise RuntimeError(
+                        "one Env trajectory spans multiple Rollout producers"
+                    )
+                actor_rank = int(producer_ranks.item())
+                channel.put(
+                    trajectory,
+                    key=rollout_backbone_channel_key(actor_rank),
+                    async_op=True,
+                )
+            else:
+                channel.put(trajectory, async_op=True)
         del trajectories
         gc.collect()
 

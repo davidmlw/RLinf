@@ -44,6 +44,10 @@ BackboneCacheKey = tuple[int, ...]
 BackboneOutput = dict[str, torch.Tensor]
 
 
+def rollout_backbone_channel_key(actor_rank: int) -> str:
+    return f"rollout_backbone_actor_rank_{int(actor_rank)}"
+
+
 def filter_rollout_backbone_transport(
     forward_inputs: dict[str, torch.Tensor],
     *,

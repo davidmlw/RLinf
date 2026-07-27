@@ -57,6 +57,7 @@ from rlinf.utils.backbone_cache import (
     BorrowedBackboneCache,
     PinnedBackboneCache,
     make_backbone_cache_key,
+    rollout_backbone_channel_key,
     validate_frozen_backbone,
 )
 from rlinf.utils.data_iter_utils import (
@@ -1188,7 +1189,16 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
         recv_list = []
         for _ in range(split_num):
-            trajectory: Trajectory = await input_channel.get(async_op=True).async_wait()
+            channel_key = (
+                rollout_backbone_channel_key(self._rank)
+                if self._borrowed_feature_ipc_enabled
+                else None
+            )
+            if channel_key is None:
+                recv_work = input_channel.get(async_op=True)
+            else:
+                recv_work = input_channel.get(key=channel_key, async_op=True)
+            trajectory: Trajectory = await recv_work.async_wait()
             recv_list.append(trajectory)
 
         self.rollout_batch = convert_trajectories_to_batch(recv_list)
