@@ -37,13 +37,14 @@ from rlinf.models import get_model
 from rlinf.models.embodiment.base_policy import BasePolicy
 from rlinf.scheduler import Channel, Cluster, Worker, split_channel_message
 from rlinf.utils.backbone_cache import (
-    ROLLOUT_BACKBONE_BORROWED_IPC,
+    ROLLOUT_BACKBONE_BORROWED_IPC_PINNED,
     ROLLOUT_BACKBONE_FEATURE_KEY,
     ROLLOUT_BACKBONE_MASK_KEY,
     ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
     ROLLOUT_BACKBONE_SAMPLE_IDS_KEY,
     ROLLOUT_BACKBONE_TRANSPORT_KEY,
     filter_rollout_backbone_transport,
+    is_rollout_backbone_ipc_transport,
 )
 from rlinf.utils.placement import HybridComponentPlacement
 
@@ -168,8 +169,11 @@ class MultiStepRolloutWorker(Worker):
         feature_transport = self.model_cfg.get(
             ROLLOUT_BACKBONE_TRANSPORT_KEY, "trajectory"
         )
-        self._borrowed_feature_ipc_enabled = (
-            feature_transport == ROLLOUT_BACKBONE_BORROWED_IPC
+        self._borrowed_feature_ipc_enabled = is_rollout_backbone_ipc_transport(
+            feature_transport
+        )
+        self._pinned_feature_ipc_enabled = (
+            feature_transport == ROLLOUT_BACKBONE_BORROWED_IPC_PINNED
         )
         if self._borrowed_feature_ipc_enabled and not self.model_cfg.get(
             "reuse_rollout_backbone_features", False
@@ -193,6 +197,11 @@ class MultiStepRolloutWorker(Worker):
         self._borrowed_feature_lease_seq = 0
         self._borrowed_feature_active_lease: str | None = None
         self._borrowed_feature_consumer_rank: int | None = None
+        self._borrowed_stream_expected_blocks = 0
+        self._borrowed_stream_expected_samples = 0
+        self._borrowed_stream_blocks = 0
+        self._borrowed_stream_bytes = 0
+        self._borrowed_stream_wait_seconds = 0.0
 
     def _capacity_probe_memory(self, label: str) -> None:
         allocated = self.torch_platform.memory_allocated(self.device)
@@ -273,6 +282,24 @@ class MultiStepRolloutWorker(Worker):
             )
         self._borrowed_feature_block_sizes.clear()
         self._borrowed_feature_samples = 0
+        self._borrowed_stream_blocks = 0
+        self._borrowed_stream_bytes = 0
+        self._borrowed_stream_wait_seconds = 0.0
+        if self._pinned_feature_ipc_enabled:
+            self._borrowed_feature_lease_seq += 1
+            self._borrowed_feature_active_lease = (
+                f"w63-r{self._rank}-l{self._borrowed_feature_lease_seq}"
+            )
+            self._borrowed_feature_consumer_rank = self._rank
+            self._borrowed_stream_expected_blocks = int(
+                self.cfg.env.train.rollout_epoch
+                * self.cfg.env.train.max_steps_per_rollout_epoch
+            )
+            self._borrowed_stream_expected_samples = int(
+                self._borrowed_stream_expected_blocks
+                * self.cfg.env.train.total_num_envs
+                // self._world_size
+            )
 
     def _retain_borrowed_feature_block(
         self, forward_inputs: dict[str, torch.Tensor]
@@ -280,7 +307,9 @@ class MultiStepRolloutWorker(Worker):
         feature = forward_inputs.get(ROLLOUT_BACKBONE_FEATURE_KEY)
         mask = forward_inputs.get(ROLLOUT_BACKBONE_MASK_KEY)
         if feature is None or mask is None:
-            raise RuntimeError("borrowed backbone IPC requires complete rollout features")
+            raise RuntimeError(
+                "borrowed backbone IPC requires complete rollout features"
+            )
         if feature.device.type != "cuda" or mask.device.type != "cuda":
             raise RuntimeError("borrowed backbone IPC requires producer CUDA tensors")
         if feature.shape[0] != mask.shape[0]:
@@ -299,15 +328,113 @@ class MultiStepRolloutWorker(Worker):
         if not self._borrowed_feature_verify_trajectory:
             forward_inputs.pop(ROLLOUT_BACKBONE_FEATURE_KEY)
             forward_inputs.pop(ROLLOUT_BACKBONE_MASK_KEY)
-        self._borrowed_feature_tensors.extend((feature.detach(), mask.detach()))
-        self._borrowed_feature_block_sizes.append(block_size)
+        if self._pinned_feature_ipc_enabled:
+            self._stream_borrowed_feature_block(
+                feature=feature, mask=mask, block_size=block_size
+            )
+        else:
+            self._borrowed_feature_tensors.extend((feature.detach(), mask.detach()))
+            self._borrowed_feature_block_sizes.append(block_size)
         self._borrowed_feature_samples += block_size
+
+    def _stream_borrowed_feature_block(
+        self, *, feature: torch.Tensor, mask: torch.Tensor, block_size: int
+    ) -> None:
+        lease_id = self._borrowed_feature_active_lease
+        consumer_rank = self._borrowed_feature_consumer_rank
+        if lease_id is None or consumer_rank is None:
+            raise RuntimeError("pinned backbone stream is not active")
+        block_index = self._borrowed_stream_blocks
+        byte_count = sum(
+            tensor.numel() * tensor.element_size() for tensor in (feature, mask)
+        )
+        metadata = {
+            "schema": 2,
+            "lease_id": lease_id,
+            "block_index": block_index,
+            "total_blocks": self._borrowed_stream_expected_blocks,
+            "offset": self._borrowed_feature_samples,
+            "block_size": block_size,
+            "total_samples": self._borrowed_stream_expected_samples,
+            "producer_rank": self._rank,
+            "consumer_rank": consumer_rank,
+            "model_version": int(self.version),
+            "sample_id_base": self._rank * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
+            "bytes": byte_count,
+            "verify_trajectory": self._borrowed_feature_verify_trajectory,
+        }
+        wait_start = time.perf_counter()
+        self.send(
+            [feature.detach(), mask.detach()],
+            dst_group_name=self.actor_group_name,
+            dst_rank=consumer_rank,
+            piggyback_payload=metadata,
+            borrowed_ipc=True,
+        )
+        ack = self.recv(
+            src_group_name=self.actor_group_name,
+            src_rank=consumer_rank,
+        )
+        self._borrowed_stream_wait_seconds += time.perf_counter() - wait_start
+        if (
+            not isinstance(ack, dict)
+            or ack.get("lease_id") != lease_id
+            or int(ack.get("block_index", -1)) != block_index
+        ):
+            raise RuntimeError(
+                f"pinned backbone block ACK mismatch at block {block_index}: {ack}"
+            )
+        self._borrowed_stream_blocks += 1
+        self._borrowed_stream_bytes += byte_count
+        log_stride = max(1, self._borrowed_stream_expected_blocks // 4)
+        if block_index == 0 or self._borrowed_stream_blocks % log_stride == 0:
+            self.log_info(
+                "W63_PINNED_IPC_BLOCK_RELEASE "
+                f"rank={self._rank} lease={lease_id} "
+                f"blocks={self._borrowed_stream_blocks}/"
+                f"{self._borrowed_stream_expected_blocks} bytes={self._borrowed_stream_bytes}"
+            )
+
+    @Worker.timer("rollout/feature_stream")
+    def finish_rollout_backbone_feature_stream(self) -> dict[str, float]:
+        if not self._pinned_feature_ipc_enabled:
+            return {}
+        if self._borrowed_stream_blocks != self._borrowed_stream_expected_blocks:
+            raise RuntimeError(
+                "pinned backbone block stream count mismatch: "
+                f"{self._borrowed_stream_blocks}/"
+                f"{self._borrowed_stream_expected_blocks}"
+            )
+        if self._borrowed_feature_samples != self._borrowed_stream_expected_samples:
+            raise RuntimeError(
+                "pinned backbone sample stream count mismatch: "
+                f"{self._borrowed_feature_samples}/"
+                f"{self._borrowed_stream_expected_samples}"
+            )
+        lease_id = self._borrowed_feature_active_lease
+        self.log_info(
+            "W63_PINNED_IPC_STREAM_DONE "
+            f"rank={self._rank} lease={lease_id} "
+            f"blocks={self._borrowed_stream_blocks} "
+            f"samples={self._borrowed_feature_samples} "
+            f"bytes={self._borrowed_stream_bytes} "
+            f"wait_s={self._borrowed_stream_wait_seconds:.6f}"
+        )
+        self._borrowed_feature_active_lease = None
+        self._borrowed_feature_consumer_rank = None
+        return {
+            "rollout/pinned_feature_bytes": float(self._borrowed_stream_bytes),
+            "rollout/pinned_feature_blocks": float(self._borrowed_stream_blocks),
+            "rollout/pinned_feature_wait_seconds": self._borrowed_stream_wait_seconds,
+        }
 
     @Worker.timer("rollout/feature_send")
     def send_rollout_backbone_features_to_actor(
         self, source_ranks: list[int]
     ) -> dict[str, float]:
         if not self._borrowed_feature_ipc_enabled:
+            return {}
+        if self._pinned_feature_ipc_enabled:
             return {}
         if not self._borrowed_feature_tensors or self._borrowed_feature_samples <= 0:
             raise RuntimeError("rollout produced no backbone feature lease")
@@ -363,6 +490,8 @@ class MultiStepRolloutWorker(Worker):
     def wait_rollout_backbone_feature_release(self) -> dict[str, float]:
         if not self._borrowed_feature_ipc_enabled:
             return {}
+        if self._pinned_feature_ipc_enabled:
+            return {}
         if (
             self._borrowed_feature_active_lease is None
             or self._borrowed_feature_consumer_rank is None
@@ -389,9 +518,7 @@ class MultiStepRolloutWorker(Worker):
         self._borrowed_feature_consumer_rank = None
         self.torch_platform.ipc_collect()
         self.torch_platform.empty_cache()
-        self.log_info(
-            f"W63_BORROWED_IPC_RELEASE rank={self._rank} lease={expected}"
-        )
+        self.log_info(f"W63_BORROWED_IPC_RELEASE rank={self._rank} lease={expected}")
         return {"rollout/borrowed_feature_released_bytes": float(released_bytes)}
 
     def init_worker(self):

@@ -38,10 +38,10 @@ from rlinf.envs.utils import get_env_attr
 from rlinf.envs.wrappers import RecordVideo
 from rlinf.scheduler import Channel, Cluster, CommMapper, Worker
 from rlinf.utils.backbone_cache import (
-    ROLLOUT_BACKBONE_BORROWED_IPC,
     ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
     ROLLOUT_BACKBONE_SAMPLE_IDS_KEY,
     ROLLOUT_BACKBONE_TRANSPORT_KEY,
+    is_rollout_backbone_ipc_transport,
     rollout_backbone_channel_key,
 )
 from rlinf.utils.data_iter_utils import split_list
@@ -110,9 +110,8 @@ class EnvWorker(Worker):
         self.model_cfg = (
             self.cfg.rollout.model if self.only_eval else self.cfg.actor.model
         )
-        self._borrowed_feature_ipc_enabled = (
+        self._borrowed_feature_ipc_enabled = is_rollout_backbone_ipc_transport(
             self.model_cfg.get(ROLLOUT_BACKBONE_TRANSPORT_KEY, "trajectory")
-            == ROLLOUT_BACKBONE_BORROWED_IPC
         )
         train_env_cfg = self.cfg.env.get("train", None)
         eval_env_cfg = self.cfg.env.get("eval", None)

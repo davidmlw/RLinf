@@ -46,7 +46,7 @@ from rlinf.scheduler import Channel, Cluster, Worker
 from rlinf.utils.backbone_cache import (
     BACKBONE_CACHE_OUTPUT_KEY,
     BACKBONE_CACHE_SAMPLE_IDS_KEY,
-    ROLLOUT_BACKBONE_BORROWED_IPC,
+    ROLLOUT_BACKBONE_BORROWED_IPC_PINNED,
     ROLLOUT_BACKBONE_FEATURE_KEY,
     ROLLOUT_BACKBONE_INPUT_KEYS,
     ROLLOUT_BACKBONE_MASK_KEY,
@@ -56,6 +56,7 @@ from rlinf.utils.backbone_cache import (
     BackboneCacheKey,
     BorrowedBackboneCache,
     PinnedBackboneCache,
+    is_rollout_backbone_ipc_transport,
     make_backbone_cache_key,
     rollout_backbone_channel_key,
     validate_frozen_backbone,
@@ -85,6 +86,8 @@ from rlinf.utils.nested_dict_process import (
     put_tensor_device,
     split_dict_to_chunk,
 )
+from rlinf.utils.pinned_feature_stream import receive_pinned_rollout_backbone_stream
+from rlinf.utils.pinned_rollout_cache import PinnedRolloutBackboneCache
 from rlinf.utils.placement import (
     HybridComponentPlacement,
     ModelParallelComponentPlacement,
@@ -1052,8 +1055,11 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         feature_transport = cfg.actor.model.get(
             ROLLOUT_BACKBONE_TRANSPORT_KEY, "trajectory"
         )
-        self._borrowed_feature_ipc_enabled = (
-            feature_transport == ROLLOUT_BACKBONE_BORROWED_IPC
+        self._borrowed_feature_ipc_enabled = is_rollout_backbone_ipc_transport(
+            feature_transport
+        )
+        self._pinned_feature_ipc_enabled = (
+            feature_transport == ROLLOUT_BACKBONE_BORROWED_IPC_PINNED
         )
         if self._borrowed_feature_ipc_enabled and (
             self._component_placement.get_world_size("rollout")
@@ -1065,6 +1071,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         self._borrowed_backbone_cache: BorrowedBackboneCache | None = None
         self._borrowed_backbone_metadata: dict[str, Any] | None = None
         self._borrowed_feature_source_rank: int | None = None
+        self._pinned_rollout_backbone_cache: PinnedRolloutBackboneCache | None = None
         if self.enable_sft_co_train:
             self._build_sft_data_loader()
 
@@ -1230,12 +1237,87 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             )
         return int(unique_ranks[0])
 
+    @Worker.timer("actor/feature_stream_recv")
+    async def recv_rollout_backbone_feature_stream(self) -> dict[str, float]:
+        if not self._pinned_feature_ipc_enabled:
+            return {}
+        if (
+            self._borrowed_backbone_cache is not None
+            or self._pinned_rollout_backbone_cache is not None
+        ):
+            raise RuntimeError("previous rollout backbone cache is still active")
+        expected_blocks = int(
+            self.cfg.env.train.rollout_epoch
+            * self.cfg.env.train.max_steps_per_rollout_epoch
+        )
+        expected_samples = int(
+            expected_blocks * self.cfg.env.train.total_num_envs // self._world_size
+        )
+        cache, metadata, metrics = await receive_pinned_rollout_backbone_stream(
+            self,
+            source_rank=self._rank,
+            consumer_rank=self._rank,
+            model_version=int(self.version),
+            expected_blocks=expected_blocks,
+            expected_samples=expected_samples,
+            rollout_group_name=self._rollout_group_name,
+        )
+        self._pinned_rollout_backbone_cache = cache
+        self._borrowed_backbone_metadata = metadata
+        self._borrowed_feature_source_rank = self._rank
+        return metrics
+
+    def validate_rollout_backbone_feature_stream(
+        self, source_ranks: list[int]
+    ) -> dict[str, float]:
+        if not self._pinned_feature_ipc_enabled:
+            return {}
+        if len(source_ranks) != self._world_size or sorted(source_ranks) != list(
+            range(self._world_size)
+        ):
+            raise RuntimeError(
+                f"pinned backbone route must be a rank permutation: {source_ranks}"
+            )
+        source_rank = int(source_ranks[self._rank])
+        if source_rank != self._rank:
+            raise RuntimeError(
+                "streaming pinned backbone IPC requires identity same-GPU routing"
+            )
+        cache = self._pinned_rollout_backbone_cache
+        metadata = self._borrowed_backbone_metadata
+        if cache is None or metadata is None:
+            raise RuntimeError("pinned backbone stream is not ready")
+        forward_inputs = self.rollout_batch.get("forward_inputs", {})
+        sample_ids = forward_inputs.get(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY)
+        if sample_ids is None:
+            raise RuntimeError("trajectory is missing pinned backbone sample IDs")
+        flat_ids = sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu")
+        sample_id_base = int(metadata["sample_id_base"])
+        expected_ids = torch.arange(
+            sample_id_base,
+            sample_id_base + cache.samples,
+            dtype=torch.int64,
+        )
+        if flat_ids.numel() != cache.samples or not torch.equal(
+            flat_ids.sort().values, expected_ids
+        ):
+            raise RuntimeError(
+                "trajectory sample IDs do not form the pinned backbone cache"
+            )
+        self.log_info(
+            "W63_PINNED_IPC_ROUTE_VALID "
+            f"rank={self._rank} source={source_rank} samples={cache.samples}"
+        )
+        return {"actor/pinned_feature_route_valid": 1.0}
+
     @Worker.timer("actor/feature_recv")
     def recv_rollout_backbone_features(
         self, source_ranks: list[int]
     ) -> dict[str, float]:
         if not self._borrowed_feature_ipc_enabled:
             return {}
+        if self._pinned_feature_ipc_enabled:
+            return self.validate_rollout_backbone_feature_stream(source_ranks)
         if self._borrowed_backbone_cache is not None:
             raise RuntimeError("previous borrowed backbone lease is still active")
         if len(source_ranks) != self._world_size or sorted(source_ranks) != list(
@@ -1315,6 +1397,8 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
     @Worker.timer("actor/feature_release")
     def release_rollout_backbone_features(self) -> dict[str, float]:
         if not self._borrowed_feature_ipc_enabled:
+            return {}
+        if self._pinned_feature_ipc_enabled:
             return {}
         cache = self._borrowed_backbone_cache
         metadata = self._borrowed_backbone_metadata
@@ -1607,7 +1691,13 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         backbone_cache = self._create_backbone_cache()
         reuse_rollout_feature = self._reuse_rollout_backbone_enabled()
         borrowed_backbone_cache = self._borrowed_backbone_cache
-        if self._borrowed_feature_ipc_enabled and borrowed_backbone_cache is None:
+        pinned_rollout_cache = self._pinned_rollout_backbone_cache
+        rollout_feature_cache = (
+            pinned_rollout_cache
+            if pinned_rollout_cache is not None
+            else borrowed_backbone_cache
+        )
+        if self._borrowed_feature_ipc_enabled and rollout_feature_cache is None:
             raise RuntimeError("borrowed backbone transport is enabled without a lease")
         if self._borrowed_feature_ipc_enabled and not reuse_rollout_feature:
             raise RuntimeError("borrowed backbone transport requires feature reuse")
@@ -1667,7 +1757,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
                 self.optimizer.zero_grad()
                 for idx, batch in enumerate(train_micro_batch):
-                    if borrowed_backbone_cache is not None:
+                    if rollout_feature_cache is not None:
                         forward_inputs = batch.get("forward_inputs", {})
                         sample_ids = forward_inputs.pop(
                             ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None
@@ -1678,13 +1768,11 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                             )
                         metadata = self._borrowed_backbone_metadata
                         if metadata is None:
-                            raise RuntimeError("borrowed backbone metadata was released early")
-                        local_sample_ids = sample_ids - int(
-                            metadata["sample_id_base"]
-                        )
-                        borrowed_output = borrowed_backbone_cache.load(
-                            local_sample_ids
-                        )
+                            raise RuntimeError(
+                                "borrowed backbone metadata was released early"
+                            )
+                        local_sample_ids = sample_ids - int(metadata["sample_id_base"])
+                        borrowed_output = rollout_feature_cache.load(local_sample_ids)
                         if bool(metadata.get("verify_trajectory", False)):
                             trajectory_feature = forward_inputs.get(
                                 ROLLOUT_BACKBONE_FEATURE_KEY
@@ -1701,9 +1789,13 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                                 trajectory_feature.to(self.device),
                             ):
                                 max_diff = (
-                                    borrowed_output["backbone_features"].float()
-                                    - trajectory_feature.to(self.device).float()
-                                ).abs().max()
+                                    (
+                                        borrowed_output["backbone_features"].float()
+                                        - trajectory_feature.to(self.device).float()
+                                    )
+                                    .abs()
+                                    .max()
+                                )
                                 raise RuntimeError(
                                     "borrowed IPC feature mismatch against trajectory "
                                     f"reference: max_diff={float(max_diff.item())}"
@@ -1778,6 +1870,42 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                     ),
                 },
             )
+        if pinned_rollout_cache is not None:
+            pinned_stats = pinned_rollout_cache.stats()
+            append_to_dict(
+                metrics,
+                {
+                    "actor/pinned_feature_loads": float(pinned_stats.loads),
+                    "actor/pinned_feature_loaded_samples": float(
+                        pinned_stats.loaded_samples
+                    ),
+                    "actor/pinned_feature_bytes": float(pinned_stats.bytes),
+                    "actor/pinned_feature_staging_bytes": float(
+                        pinned_stats.staging_bytes
+                    ),
+                    "actor/pinned_feature_allocation_seconds": (
+                        pinned_stats.allocation_seconds
+                    ),
+                    "actor/pinned_feature_d2h_seconds": pinned_stats.d2h_seconds,
+                    "actor/pinned_feature_cpu_gather_seconds": (
+                        pinned_stats.cpu_gather_seconds
+                    ),
+                    "actor/pinned_feature_h2d_seconds": pinned_stats.h2d_seconds,
+                },
+            )
+            self.log_info(
+                "W63_PINNED_IPC_TRAINING_DONE "
+                f"rank={self._rank} loads={pinned_stats.loads} "
+                f"loaded_samples={pinned_stats.loaded_samples} "
+                f"cpu_gather_s={pinned_stats.cpu_gather_seconds:.6f} "
+                f"h2d_s={pinned_stats.h2d_seconds:.6f}"
+            )
+            pinned_rollout_cache.clear()
+            self._pinned_rollout_backbone_cache = None
+            self._borrowed_backbone_metadata = None
+            self._borrowed_feature_source_rank = None
+            forward_inputs = self.rollout_batch.get("forward_inputs", {})
+            forward_inputs.pop(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None)
         if reuse_rollout_feature:
             append_to_dict(
                 metrics,

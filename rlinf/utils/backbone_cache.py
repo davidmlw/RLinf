@@ -33,6 +33,16 @@ ROLLOUT_BACKBONE_SAMPLE_IDS_KEY = "_rlinf_rollout_backbone_sample_ids"
 ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE = 1 << 40
 ROLLOUT_BACKBONE_TRANSPORT_KEY = "rollout_backbone_feature_transport"
 ROLLOUT_BACKBONE_BORROWED_IPC = "borrowed_ipc"
+ROLLOUT_BACKBONE_BORROWED_IPC_PINNED = "borrowed_ipc_pinned"
+ROLLOUT_BACKBONE_IPC_TRANSPORTS = frozenset(
+    (ROLLOUT_BACKBONE_BORROWED_IPC, ROLLOUT_BACKBONE_BORROWED_IPC_PINNED)
+)
+
+
+def is_rollout_backbone_ipc_transport(transport: str) -> bool:
+    return transport in ROLLOUT_BACKBONE_IPC_TRANSPORTS
+
+
 ROLLOUT_BACKBONE_INPUT_KEYS = (
     "eagle_input_ids",
     "eagle_attention_mask",
@@ -173,9 +183,7 @@ class BorrowedBackboneCache:
         self._loads += 1
 
         first = int(sample_ids[0].item())
-        block_idx = max(
-            idx for idx, start in enumerate(self._starts) if start <= first
-        )
+        block_idx = max(idx for idx, start in enumerate(self._starts) if start <= first)
         local_first = first - self._starts[block_idx]
         expected = torch.arange(first, first + sample_ids.numel(), dtype=torch.int64)
         if (
@@ -189,9 +197,7 @@ class BorrowedBackboneCache:
                 "backbone_attention_mask": self._masks[block_idx][selection],
             }
 
-        boundaries = torch.tensor(
-            self._starts[1:], dtype=torch.int64, device="cpu"
-        )
+        boundaries = torch.tensor(self._starts[1:], dtype=torch.int64, device="cpu")
         block_ids = torch.bucketize(sample_ids, boundaries, right=True)
         device = self._features[0].device
         feature_out = torch.empty(
