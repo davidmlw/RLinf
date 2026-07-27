@@ -558,6 +558,7 @@ class Worker(metaclass=WorkerMeta):
         async_op: bool = False,
         options: Optional["CollectiveGroupOptions"] = None,
         piggyback_payload: Optional[Any] = None,
+        borrowed_ipc: bool = False,
     ):
         """Send an object to a specific worker address in the collective group.
 
@@ -597,6 +598,7 @@ class Worker(metaclass=WorkerMeta):
             async_op=async_op,
             options=options,
             piggyback_payload=piggyback_payload,
+            borrowed_ipc=borrowed_ipc,
         )
 
     def recv(
@@ -605,6 +607,7 @@ class Worker(metaclass=WorkerMeta):
         src_rank: int | list[int],
         async_op: bool = False,
         options: Optional["CollectiveGroupOptions"] = None,
+        borrowed_ipc: bool = False,
     ):
         """Out-of-place receive of an object from a specific worker address in the collective group.
 
@@ -628,7 +631,11 @@ class Worker(metaclass=WorkerMeta):
         """
         src_addr = WorkerAddress(src_group_name, ranks=src_rank)
         group = self._get_collective_group(src_addr)
-        return group.recv(async_op=async_op, options=options)
+        return group.recv(
+            async_op=async_op,
+            options=options,
+            borrowed_ipc=borrowed_ipc,
+        )
 
     def send_tensor(
         self,

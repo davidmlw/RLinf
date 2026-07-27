@@ -14,7 +14,7 @@
 
 import time
 from functools import partial
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -46,10 +46,14 @@ from rlinf.scheduler import Channel, Cluster, Worker
 from rlinf.utils.backbone_cache import (
     BACKBONE_CACHE_OUTPUT_KEY,
     BACKBONE_CACHE_SAMPLE_IDS_KEY,
+    ROLLOUT_BACKBONE_BORROWED_IPC,
     ROLLOUT_BACKBONE_FEATURE_KEY,
     ROLLOUT_BACKBONE_INPUT_KEYS,
     ROLLOUT_BACKBONE_MASK_KEY,
+    ROLLOUT_BACKBONE_SAMPLE_IDS_KEY,
+    ROLLOUT_BACKBONE_TRANSPORT_KEY,
     BackboneCacheKey,
+    BorrowedBackboneCache,
     PinnedBackboneCache,
     make_backbone_cache_key,
     validate_frozen_backbone,
@@ -1043,6 +1047,21 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
         self.enable_sft_co_train = cfg.actor.get("enable_sft_co_train", False)
         self.version = 0
+        feature_transport = cfg.actor.model.get(
+            ROLLOUT_BACKBONE_TRANSPORT_KEY, "trajectory"
+        )
+        self._borrowed_feature_ipc_enabled = (
+            feature_transport == ROLLOUT_BACKBONE_BORROWED_IPC
+        )
+        if self._borrowed_feature_ipc_enabled and (
+            self._component_placement.get_world_size("rollout")
+            != self._component_placement.get_world_size("actor")
+        ):
+            raise ValueError(
+                "borrowed rollout backbone IPC currently requires equal Rollout/Actor world sizes"
+            )
+        self._borrowed_backbone_cache: BorrowedBackboneCache | None = None
+        self._borrowed_backbone_metadata: dict[str, Any] | None = None
         if self.enable_sft_co_train:
             self._build_sft_data_loader()
 
@@ -1173,6 +1192,101 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         self.rollout_batch = convert_trajectories_to_batch(recv_list)
 
         self.rollout_batch = self._process_received_rollout_batch(self.rollout_batch)
+
+    @Worker.timer("actor/feature_recv")
+    def recv_rollout_backbone_features(self) -> dict[str, float]:
+        if not self._borrowed_feature_ipc_enabled:
+            return {}
+        if self._borrowed_backbone_cache is not None:
+            raise RuntimeError("previous borrowed backbone lease is still active")
+
+        received = self.recv(
+            src_group_name=self._rollout_group_name,
+            src_rank=self._rank,
+            borrowed_ipc=True,
+        )
+        if not isinstance(received, tuple) or len(received) != 2:
+            raise RuntimeError("borrowed backbone IPC requires tensors and metadata")
+        tensors, metadata = received
+        if not isinstance(metadata, dict) or metadata.get("schema") != 1:
+            raise RuntimeError(f"unsupported borrowed backbone metadata: {metadata}")
+        if int(metadata.get("producer_rank", -1)) != self._rank:
+            raise RuntimeError("borrowed backbone producer/Actor rank mismatch")
+        if int(metadata.get("model_version", -1)) != int(self.version):
+            raise RuntimeError(
+                "borrowed backbone model version does not match Actor version"
+            )
+
+        cache = BorrowedBackboneCache(
+            tensors=tensors,
+            block_sizes=list(metadata.get("block_sizes", [])),
+            lease_id=str(metadata.get("lease_id", "")),
+        )
+        stats = cache.stats()
+        if stats.samples != int(metadata.get("samples", -1)):
+            raise RuntimeError("borrowed backbone sample count does not match metadata")
+        if stats.bytes != int(metadata.get("bytes", -1)):
+            raise RuntimeError("borrowed backbone byte count does not match metadata")
+
+        forward_inputs = self.rollout_batch.get("forward_inputs", {})
+        sample_ids = forward_inputs.get(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY)
+        if sample_ids is None:
+            raise RuntimeError("trajectory is missing borrowed backbone sample IDs")
+        flat_ids = sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu")
+        expected_ids = torch.arange(stats.samples, dtype=torch.int64)
+        if flat_ids.numel() != stats.samples or not torch.equal(
+            flat_ids.sort().values, expected_ids
+        ):
+            raise RuntimeError(
+                "trajectory sample IDs do not form the borrowed backbone lease"
+            )
+
+        self._borrowed_backbone_cache = cache
+        self._borrowed_backbone_metadata = metadata
+        self.log_info(
+            "W63_BORROWED_IPC_RECV "
+            f"rank={self._rank} lease={cache.lease_id} samples={stats.samples} "
+            f"blocks={len(metadata['block_sizes'])} bytes={stats.bytes}"
+        )
+        return {
+            "actor/borrowed_feature_bytes": float(stats.bytes),
+            "actor/borrowed_feature_samples": float(stats.samples),
+        }
+
+    @Worker.timer("actor/feature_release")
+    def release_rollout_backbone_features(self) -> dict[str, float]:
+        if not self._borrowed_feature_ipc_enabled:
+            return {}
+        cache = self._borrowed_backbone_cache
+        metadata = self._borrowed_backbone_metadata
+        if cache is None or metadata is None:
+            raise RuntimeError("no borrowed backbone lease to release")
+
+        self.torch_platform.current_stream().synchronize()
+        stats = cache.stats()
+        lease_id = cache.lease_id
+        cache.clear()
+        self._borrowed_backbone_cache = None
+        self._borrowed_backbone_metadata = None
+        forward_inputs = self.rollout_batch.get("forward_inputs", {})
+        forward_inputs.pop(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None)
+        self.send(
+            {"schema": 1, "lease_id": lease_id},
+            dst_group_name=self._rollout_group_name,
+            dst_rank=self._rank,
+        )
+        self.torch_platform.ipc_collect()
+        self.torch_platform.empty_cache()
+        self.log_info(
+            "W63_BORROWED_IPC_ACK "
+            f"rank={self._rank} lease={lease_id} loads={stats.loads} "
+            f"view_samples={stats.view_samples} gathered_samples={stats.gathered_samples}"
+        )
+        return {
+            "actor/borrowed_feature_loads": float(stats.loads),
+            "actor/borrowed_feature_view_samples": float(stats.view_samples),
+            "actor/borrowed_feature_gathered_samples": float(stats.gathered_samples),
+        }
 
     def _process_received_rollout_batch(
         self, rollout_batch: dict[str, torch.Tensor]
@@ -1431,6 +1545,11 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         self.model.train()
         backbone_cache = self._create_backbone_cache()
         reuse_rollout_feature = self._reuse_rollout_backbone_enabled()
+        borrowed_backbone_cache = self._borrowed_backbone_cache
+        if self._borrowed_feature_ipc_enabled and borrowed_backbone_cache is None:
+            raise RuntimeError("borrowed backbone transport is enabled without a lease")
+        if self._borrowed_feature_ipc_enabled and not reuse_rollout_feature:
+            raise RuntimeError("borrowed backbone transport requires feature reuse")
         self._reuse_feature_fallbacks = 0
         if reuse_rollout_feature and backbone_cache is not None:
             raise ValueError(
@@ -1487,6 +1606,22 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
                 self.optimizer.zero_grad()
                 for idx, batch in enumerate(train_micro_batch):
+                    if borrowed_backbone_cache is not None:
+                        forward_inputs = batch.get("forward_inputs", {})
+                        sample_ids = forward_inputs.pop(
+                            ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None
+                        )
+                        if sample_ids is None:
+                            raise RuntimeError(
+                                "training microbatch is missing borrowed backbone sample IDs"
+                            )
+                        borrowed_output = borrowed_backbone_cache.load(sample_ids)
+                        forward_inputs[ROLLOUT_BACKBONE_FEATURE_KEY] = borrowed_output[
+                            "backbone_features"
+                        ]
+                        forward_inputs[ROLLOUT_BACKBONE_MASK_KEY] = borrowed_output[
+                            "backbone_attention_mask"
+                        ]
                     cache_key = None
                     if backbone_cache is not None:
                         sample_ids = batch.pop(BACKBONE_CACHE_SAMPLE_IDS_KEY)
@@ -1530,6 +1665,20 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             )
             self.rollout_batch.pop(BACKBONE_CACHE_SAMPLE_IDS_KEY)
             backbone_cache.clear()
+        if borrowed_backbone_cache is not None:
+            borrowed_stats = borrowed_backbone_cache.stats()
+            append_to_dict(
+                metrics,
+                {
+                    "actor/borrowed_feature_loads": float(borrowed_stats.loads),
+                    "actor/borrowed_feature_view_samples": float(
+                        borrowed_stats.view_samples
+                    ),
+                    "actor/borrowed_feature_gathered_samples": float(
+                        borrowed_stats.gathered_samples
+                    ),
+                },
+            )
         if reuse_rollout_feature:
             append_to_dict(
                 metrics,
