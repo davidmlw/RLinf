@@ -191,6 +191,11 @@ class MultiStepRolloutWorker(Worker):
         self._borrowed_feature_verify_trajectory = bool(
             self.cfg.rollout.get("borrowed_feature_ipc_verify_trajectory", False)
         )
+        self._pinned_feature_ipc_batch_blocks = int(
+            self.cfg.rollout.get("pinned_feature_ipc_batch_blocks", 1)
+        )
+        if self._pinned_feature_ipc_batch_blocks <= 0:
+            raise ValueError("rollout.pinned_feature_ipc_batch_blocks must be positive")
         self._borrowed_feature_tensors: list[torch.Tensor] = []
         self._borrowed_feature_block_sizes: list[int] = []
         self._borrowed_feature_samples = 0
@@ -200,6 +205,8 @@ class MultiStepRolloutWorker(Worker):
         self._borrowed_stream_expected_blocks = 0
         self._borrowed_stream_expected_samples = 0
         self._borrowed_stream_blocks = 0
+        self._borrowed_stream_expected_batches = 0
+        self._borrowed_stream_batches = 0
         self._borrowed_stream_bytes = 0
         self._borrowed_stream_wait_seconds = 0.0
 
@@ -283,6 +290,7 @@ class MultiStepRolloutWorker(Worker):
         self._borrowed_feature_block_sizes.clear()
         self._borrowed_feature_samples = 0
         self._borrowed_stream_blocks = 0
+        self._borrowed_stream_batches = 0
         self._borrowed_stream_bytes = 0
         self._borrowed_stream_wait_seconds = 0.0
         if self._pinned_feature_ipc_enabled:
@@ -300,6 +308,11 @@ class MultiStepRolloutWorker(Worker):
                 * self.cfg.env.train.total_num_envs
                 // self._world_size
             )
+            self._borrowed_stream_expected_batches = (
+                self._borrowed_stream_expected_blocks
+                + self._pinned_feature_ipc_batch_blocks
+                - 1
+            ) // self._pinned_feature_ipc_batch_blocks
 
     def _retain_borrowed_feature_block(
         self, forward_inputs: dict[str, torch.Tensor]
@@ -328,33 +341,40 @@ class MultiStepRolloutWorker(Worker):
         if not self._borrowed_feature_verify_trajectory:
             forward_inputs.pop(ROLLOUT_BACKBONE_FEATURE_KEY)
             forward_inputs.pop(ROLLOUT_BACKBONE_MASK_KEY)
-        if self._pinned_feature_ipc_enabled:
-            self._stream_borrowed_feature_block(
-                feature=feature, mask=mask, block_size=block_size
-            )
-        else:
-            self._borrowed_feature_tensors.extend((feature.detach(), mask.detach()))
-            self._borrowed_feature_block_sizes.append(block_size)
+        self._borrowed_feature_tensors.extend((feature.detach(), mask.detach()))
+        self._borrowed_feature_block_sizes.append(block_size)
         self._borrowed_feature_samples += block_size
+        if self._pinned_feature_ipc_enabled and (
+            len(self._borrowed_feature_block_sizes)
+            >= self._pinned_feature_ipc_batch_blocks
+            or self._borrowed_feature_samples == self._borrowed_stream_expected_samples
+        ):
+            self._flush_borrowed_feature_batch()
 
-    def _stream_borrowed_feature_block(
-        self, *, feature: torch.Tensor, mask: torch.Tensor, block_size: int
-    ) -> None:
+    def _flush_borrowed_feature_batch(self) -> None:
         lease_id = self._borrowed_feature_active_lease
         consumer_rank = self._borrowed_feature_consumer_rank
         if lease_id is None or consumer_rank is None:
             raise RuntimeError("pinned backbone stream is not active")
-        block_index = self._borrowed_stream_blocks
-        byte_count = sum(
-            tensor.numel() * tensor.element_size() for tensor in (feature, mask)
-        )
+        if not self._borrowed_feature_block_sizes:
+            raise RuntimeError("pinned backbone batch is empty")
+        block_sizes = list(self._borrowed_feature_block_sizes)
+        tensors = list(self._borrowed_feature_tensors)
+        if len(tensors) != 2 * len(block_sizes):
+            raise RuntimeError("pinned backbone batch tensor count is invalid")
+        batch_index = self._borrowed_stream_batches
+        start_block_index = self._borrowed_stream_blocks
+        batch_samples = sum(block_sizes)
+        offset = self._borrowed_feature_samples - batch_samples
+        byte_count = sum(tensor.numel() * tensor.element_size() for tensor in tensors)
         metadata = {
-            "schema": 2,
+            "schema": 3,
             "lease_id": lease_id,
-            "block_index": block_index,
+            "batch_index": batch_index,
+            "start_block_index": start_block_index,
             "total_blocks": self._borrowed_stream_expected_blocks,
-            "offset": self._borrowed_feature_samples,
-            "block_size": block_size,
+            "offset": offset,
+            "block_sizes": block_sizes,
             "total_samples": self._borrowed_stream_expected_samples,
             "producer_rank": self._rank,
             "consumer_rank": consumer_rank,
@@ -365,7 +385,7 @@ class MultiStepRolloutWorker(Worker):
         }
         wait_start = time.perf_counter()
         self.send(
-            [feature.detach(), mask.detach()],
+            tensors,
             dst_group_name=self.actor_group_name,
             dst_rank=consumer_rank,
             piggyback_payload=metadata,
@@ -379,18 +399,27 @@ class MultiStepRolloutWorker(Worker):
         if (
             not isinstance(ack, dict)
             or ack.get("lease_id") != lease_id
-            or int(ack.get("block_index", -1)) != block_index
+            or int(ack.get("batch_index", -1)) != batch_index
+            or int(ack.get("completed_blocks", -1))
+            != start_block_index + len(block_sizes)
         ):
             raise RuntimeError(
-                f"pinned backbone block ACK mismatch at block {block_index}: {ack}"
+                f"pinned backbone batch ACK mismatch at batch {batch_index}: {ack}"
             )
-        self._borrowed_stream_blocks += 1
+        self._borrowed_stream_batches += 1
+        self._borrowed_stream_blocks += len(block_sizes)
         self._borrowed_stream_bytes += byte_count
+        self._borrowed_feature_tensors.clear()
+        self._borrowed_feature_block_sizes.clear()
+        tensors.clear()
+        self.torch_platform.ipc_collect()
         log_stride = max(1, self._borrowed_stream_expected_blocks // 4)
-        if block_index == 0 or self._borrowed_stream_blocks % log_stride == 0:
+        if batch_index == 0 or self._borrowed_stream_blocks % log_stride == 0:
             self.log_info(
-                "W63_PINNED_IPC_BLOCK_RELEASE "
+                "W63_PINNED_IPC_BATCH_RELEASE "
                 f"rank={self._rank} lease={lease_id} "
+                f"batches={self._borrowed_stream_batches}/"
+                f"{self._borrowed_stream_expected_batches} "
                 f"blocks={self._borrowed_stream_blocks}/"
                 f"{self._borrowed_stream_expected_blocks} bytes={self._borrowed_stream_bytes}"
             )
@@ -399,11 +428,19 @@ class MultiStepRolloutWorker(Worker):
     def finish_rollout_backbone_feature_stream(self) -> dict[str, float]:
         if not self._pinned_feature_ipc_enabled:
             return {}
+        if self._borrowed_feature_tensors or self._borrowed_feature_block_sizes:
+            raise RuntimeError("pinned backbone stream has an unflushed batch")
         if self._borrowed_stream_blocks != self._borrowed_stream_expected_blocks:
             raise RuntimeError(
                 "pinned backbone block stream count mismatch: "
                 f"{self._borrowed_stream_blocks}/"
                 f"{self._borrowed_stream_expected_blocks}"
+            )
+        if self._borrowed_stream_batches != self._borrowed_stream_expected_batches:
+            raise RuntimeError(
+                "pinned backbone batch stream count mismatch: "
+                f"{self._borrowed_stream_batches}/"
+                f"{self._borrowed_stream_expected_batches}"
             )
         if self._borrowed_feature_samples != self._borrowed_stream_expected_samples:
             raise RuntimeError(
@@ -415,6 +452,7 @@ class MultiStepRolloutWorker(Worker):
         self.log_info(
             "W63_PINNED_IPC_STREAM_DONE "
             f"rank={self._rank} lease={lease_id} "
+            f"batches={self._borrowed_stream_batches} "
             f"blocks={self._borrowed_stream_blocks} "
             f"samples={self._borrowed_feature_samples} "
             f"bytes={self._borrowed_stream_bytes} "
@@ -425,6 +463,7 @@ class MultiStepRolloutWorker(Worker):
         return {
             "rollout/pinned_feature_bytes": float(self._borrowed_stream_bytes),
             "rollout/pinned_feature_blocks": float(self._borrowed_stream_blocks),
+            "rollout/pinned_feature_batches": float(self._borrowed_stream_batches),
             "rollout/pinned_feature_wait_seconds": self._borrowed_stream_wait_seconds,
         }
 

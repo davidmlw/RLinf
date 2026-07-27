@@ -152,7 +152,13 @@ def test_streamed_pinned_cache_round_trip_and_stats():
     )
 
     cache.store_block(offset=0, feature=features[:2], mask=masks[:2])
-    cache.store_block(offset=2, feature=features[2:], mask=masks[2:])
+    cache.store_blocks(
+        offset=2,
+        blocks=[
+            (features[2:4], masks[2:4]),
+            (features[4:], masks[4:]),
+        ],
+    )
     cache.finalize()
 
     first_ids = torch.tensor([4, 0, 2], dtype=torch.int64)

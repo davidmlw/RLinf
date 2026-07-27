@@ -28,15 +28,21 @@ async def receive_pinned_rollout_backbone_stream(
     model_version: int,
     expected_blocks: int,
     expected_samples: int,
+    blocks_per_batch: int,
     rollout_group_name: str,
 ) -> tuple[PinnedRolloutBackboneCache, dict[str, Any], dict[str, float]]:
     if expected_blocks <= 0 or expected_samples <= 0:
         raise ValueError("pinned backbone stream requires positive expected counts")
+    if blocks_per_batch <= 0:
+        raise ValueError("pinned backbone batch size must be positive")
 
     cache: PinnedRolloutBackboneCache | None = None
     stream_metadata: dict[str, Any] | None = None
     received_bytes = 0
-    for expected_block_index in range(expected_blocks):
+    completed_blocks = 0
+    completed_samples = 0
+    expected_batches = (expected_blocks + blocks_per_batch - 1) // blocks_per_batch
+    for expected_batch_index in range(expected_batches):
         received = await worker.recv(
             src_group_name=rollout_group_name,
             src_rank=source_rank,
@@ -46,12 +52,14 @@ async def receive_pinned_rollout_backbone_stream(
         if not isinstance(received, tuple) or len(received) != 2:
             raise RuntimeError("pinned backbone IPC requires tensors and metadata")
         tensors, metadata = received
-        if not isinstance(metadata, dict) or metadata.get("schema") != 2:
+        if not isinstance(metadata, dict) or metadata.get("schema") != 3:
             raise RuntimeError(f"unsupported pinned backbone metadata: {metadata}")
-        if not isinstance(tensors, list) or len(tensors) != 2:
-            raise RuntimeError("pinned backbone block requires one feature/mask pair")
-        if int(metadata.get("block_index", -1)) != expected_block_index:
-            raise RuntimeError("pinned backbone blocks arrived out of order")
+        if not isinstance(tensors, list) or not tensors or len(tensors) % 2:
+            raise RuntimeError("pinned backbone batch requires feature/mask pairs")
+        if int(metadata.get("batch_index", -1)) != expected_batch_index:
+            raise RuntimeError("pinned backbone batches arrived out of order")
+        if int(metadata.get("start_block_index", -1)) != completed_blocks:
+            raise RuntimeError("pinned backbone batch block range is invalid")
         if int(metadata.get("total_blocks", -1)) != expected_blocks:
             raise RuntimeError("pinned backbone total block count changed")
         if int(metadata.get("total_samples", -1)) != expected_samples:
@@ -65,66 +73,88 @@ async def receive_pinned_rollout_backbone_stream(
         expected_base = source_rank * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE
         if int(metadata.get("sample_id_base", -1)) != expected_base:
             raise RuntimeError("pinned backbone sample-ID namespace is invalid")
+        if int(metadata.get("offset", -1)) != completed_samples:
+            raise RuntimeError("pinned backbone batch sample offset is invalid")
 
-        feature, mask = tensors
-        block_size = int(metadata.get("block_size", -1))
-        offset = int(metadata.get("offset", -1))
-        if block_size <= 0 or feature.shape[0] != block_size:
-            raise RuntimeError("pinned backbone feature block size mismatch")
-        if mask.shape[0] != block_size:
-            raise RuntimeError("pinned backbone mask block size mismatch")
-        block_bytes = sum(
-            tensor.numel() * tensor.element_size() for tensor in (feature, mask)
+        block_sizes = [int(size) for size in metadata.get("block_sizes", [])]
+        expected_batch_blocks = min(
+            blocks_per_batch, expected_blocks - completed_blocks
         )
-        if block_bytes != int(metadata.get("bytes", -1)):
-            raise RuntimeError("pinned backbone block byte count mismatch")
+        if len(block_sizes) != expected_batch_blocks:
+            raise RuntimeError("pinned backbone batch block count mismatch")
+        if len(tensors) != 2 * len(block_sizes) or any(
+            size <= 0 for size in block_sizes
+        ):
+            raise RuntimeError("pinned backbone batch tensor schema is invalid")
+
+        blocks = []
+        batch_bytes = 0
+        for block_offset, block_size in enumerate(block_sizes):
+            feature = tensors[2 * block_offset]
+            mask = tensors[2 * block_offset + 1]
+            if feature.shape[0] != block_size or mask.shape[0] != block_size:
+                raise RuntimeError("pinned backbone feature/mask block size mismatch")
+            blocks.append((feature, mask))
+            batch_bytes += sum(
+                tensor.numel() * tensor.element_size() for tensor in (feature, mask)
+            )
+        if batch_bytes != int(metadata.get("bytes", -1)):
+            raise RuntimeError("pinned backbone batch byte count mismatch")
 
         if cache is None:
+            first_feature, first_mask = blocks[0]
             cache = PinnedRolloutBackboneCache(
                 total_samples=expected_samples,
-                feature_example=feature,
-                mask_example=mask,
+                feature_example=first_feature,
+                mask_example=first_mask,
                 device=worker.torch_platform.current_device(),
             )
             stream_metadata = dict(metadata)
+            del first_feature, first_mask
         elif stream_metadata is None or metadata.get("lease_id") != stream_metadata.get(
             "lease_id"
         ):
             raise RuntimeError("pinned backbone lease changed within one stream")
 
-        cache.store_block(offset=offset, feature=feature, mask=mask)
-        received_bytes += block_bytes
+        cache.store_blocks(offset=completed_samples, blocks=blocks)
+        completed_blocks += len(block_sizes)
+        completed_samples += sum(block_sizes)
+        received_bytes += batch_bytes
         lease_id = str(metadata.get("lease_id", ""))
+        blocks.clear()
         tensors.clear()
         del feature, mask, received
         worker.torch_platform.ipc_collect()
         worker.send(
             {
-                "schema": 2,
+                "schema": 3,
                 "lease_id": lease_id,
-                "block_index": expected_block_index,
+                "batch_index": expected_batch_index,
+                "completed_blocks": completed_blocks,
             },
             dst_group_name=rollout_group_name,
             dst_rank=source_rank,
         )
 
-        completed = expected_block_index + 1
         log_stride = max(1, expected_blocks // 4)
-        if expected_block_index == 0 or completed % log_stride == 0:
+        if expected_batch_index == 0 or completed_blocks % log_stride == 0:
             worker.log_info(
-                "W63_PINNED_IPC_BLOCK_STORED "
+                "W63_PINNED_IPC_BATCH_STORED "
                 f"rank={consumer_rank} lease={lease_id} "
-                f"blocks={completed}/{expected_blocks} bytes={received_bytes}"
+                f"batches={expected_batch_index + 1}/{expected_batches} "
+                f"blocks={completed_blocks}/{expected_blocks} bytes={received_bytes}"
             )
 
     if cache is None or stream_metadata is None:
         raise RuntimeError("pinned backbone stream produced no cache")
+    if completed_blocks != expected_blocks or completed_samples != expected_samples:
+        raise RuntimeError("pinned backbone stream ended with incomplete counts")
     cache.finalize()
     stats = cache.stats()
     worker.log_info(
         "W63_PINNED_IPC_CACHE_READY "
         f"rank={consumer_rank} lease={stream_metadata['lease_id']} "
-        f"samples={stats.samples} bytes={stats.bytes} "
+        f"batches={expected_batches} samples={stats.samples} bytes={stats.bytes} "
         f"alloc_s={stats.allocation_seconds:.6f} d2h_s={stats.d2h_seconds:.6f}"
     )
     return (
@@ -133,6 +163,7 @@ async def receive_pinned_rollout_backbone_stream(
         {
             "actor/pinned_feature_bytes": float(stats.bytes),
             "actor/pinned_feature_samples": float(stats.samples),
+            "actor/pinned_feature_batches": float(expected_batches),
             "actor/pinned_feature_allocation_seconds": stats.allocation_seconds,
             "actor/pinned_feature_d2h_seconds": stats.d2h_seconds,
         },

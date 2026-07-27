@@ -104,6 +104,14 @@ class PinnedRolloutBackboneCache:
         feature: torch.Tensor,
         mask: torch.Tensor,
     ) -> None:
+        self.store_blocks(offset=offset, blocks=[(feature, mask)])
+
+    def store_blocks(
+        self,
+        *,
+        offset: int,
+        blocks: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> None:
         if self._features is None or self._masks is None:
             raise RuntimeError("pinned rollout backbone cache was cleared")
         if offset != self._stored_samples:
@@ -111,29 +119,42 @@ class PinnedRolloutBackboneCache:
                 "pinned rollout backbone blocks must arrive in order: "
                 f"expected offset {self._stored_samples}, got {offset}"
             )
-        if feature.device != self._device or mask.device != self._device:
-            raise ValueError(
-                "pinned rollout backbone block is on the wrong CUDA device"
-            )
-        if feature.shape[0] != mask.shape[0]:
-            raise ValueError("pinned rollout backbone feature/mask block mismatch")
-        block_size = int(feature.shape[0])
-        end = offset + block_size
-        if end > self._samples:
-            raise ValueError("pinned rollout backbone block exceeds cache capacity")
-        if tuple(feature.shape[1:]) != tuple(self._features.shape[1:]):
-            raise ValueError("pinned rollout backbone feature shape changed")
-        if tuple(mask.shape[1:]) != tuple(self._masks.shape[1:]):
-            raise ValueError("pinned rollout backbone mask shape changed")
-        if feature.dtype != self._features.dtype or mask.dtype != self._masks.dtype:
-            raise ValueError("pinned rollout backbone dtype changed")
+        if not blocks:
+            raise ValueError("pinned rollout backbone batch must not be empty")
+
+        validated_blocks: list[tuple[torch.Tensor, torch.Tensor, int, int]] = []
+        end = offset
+        for feature, mask in blocks:
+            if feature.device != self._device or mask.device != self._device:
+                raise ValueError(
+                    "pinned rollout backbone block is on the wrong CUDA device"
+                )
+            if feature.shape[0] != mask.shape[0]:
+                raise ValueError("pinned rollout backbone feature/mask block mismatch")
+            block_size = int(feature.shape[0])
+            block_end = end + block_size
+            if block_end > self._samples:
+                raise ValueError("pinned rollout backbone block exceeds cache capacity")
+            if tuple(feature.shape[1:]) != tuple(self._features.shape[1:]):
+                raise ValueError("pinned rollout backbone feature shape changed")
+            if tuple(mask.shape[1:]) != tuple(self._masks.shape[1:]):
+                raise ValueError("pinned rollout backbone mask shape changed")
+            if feature.dtype != self._features.dtype or mask.dtype != self._masks.dtype:
+                raise ValueError("pinned rollout backbone dtype changed")
+            validated_blocks.append((feature, mask, end, block_end))
+            end = block_end
 
         start_event = torch.cuda.Event(enable_timing=True)
         end_event = torch.cuda.Event(enable_timing=True)
         with torch.cuda.stream(self._copy_stream):
             start_event.record(self._copy_stream)
-            self._features[offset:end].copy_(feature.detach(), non_blocking=True)
-            self._masks[offset:end].copy_(mask.detach(), non_blocking=True)
+            for feature, mask, block_offset, block_end in validated_blocks:
+                self._features[block_offset:block_end].copy_(
+                    feature.detach(), non_blocking=True
+                )
+                self._masks[block_offset:block_end].copy_(
+                    mask.detach(), non_blocking=True
+                )
             end_event.record(self._copy_stream)
         end_event.synchronize()
         self._d2h_seconds += start_event.elapsed_time(end_event) / 1000.0

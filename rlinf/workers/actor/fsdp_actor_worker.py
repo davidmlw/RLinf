@@ -1061,6 +1061,11 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         self._pinned_feature_ipc_enabled = (
             feature_transport == ROLLOUT_BACKBONE_BORROWED_IPC_PINNED
         )
+        self._pinned_feature_ipc_batch_blocks = int(
+            cfg.rollout.get("pinned_feature_ipc_batch_blocks", 1)
+        )
+        if self._pinned_feature_ipc_batch_blocks <= 0:
+            raise ValueError("rollout.pinned_feature_ipc_batch_blocks must be positive")
         if self._borrowed_feature_ipc_enabled and (
             self._component_placement.get_world_size("rollout")
             != self._component_placement.get_world_size("actor")
@@ -1260,6 +1265,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             model_version=int(self.version),
             expected_blocks=expected_blocks,
             expected_samples=expected_samples,
+            blocks_per_batch=self._pinned_feature_ipc_batch_blocks,
             rollout_group_name=self._rollout_group_name,
         )
         self._pinned_rollout_backbone_cache = cache
