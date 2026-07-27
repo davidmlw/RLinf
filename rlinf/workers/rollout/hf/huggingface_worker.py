@@ -192,6 +192,7 @@ class MultiStepRolloutWorker(Worker):
         self._borrowed_feature_samples = 0
         self._borrowed_feature_lease_seq = 0
         self._borrowed_feature_active_lease: str | None = None
+        self._borrowed_feature_consumer_rank: int | None = None
 
     def _capacity_probe_memory(self, label: str) -> None:
         allocated = self.torch_platform.memory_allocated(self.device)
@@ -262,7 +263,11 @@ class MultiStepRolloutWorker(Worker):
     def _begin_borrowed_feature_lease(self) -> None:
         if not self._borrowed_feature_ipc_enabled:
             return
-        if self._borrowed_feature_tensors or self._borrowed_feature_active_lease:
+        if (
+            self._borrowed_feature_tensors
+            or self._borrowed_feature_active_lease
+            or self._borrowed_feature_consumer_rank is not None
+        ):
             raise RuntimeError(
                 "previous borrowed backbone lease was not released before rollout"
             )
@@ -299,11 +304,20 @@ class MultiStepRolloutWorker(Worker):
         self._borrowed_feature_samples += block_size
 
     @Worker.timer("rollout/feature_send")
-    def send_rollout_backbone_features_to_actor(self) -> dict[str, float]:
+    def send_rollout_backbone_features_to_actor(
+        self, source_ranks: list[int]
+    ) -> dict[str, float]:
         if not self._borrowed_feature_ipc_enabled:
             return {}
         if not self._borrowed_feature_tensors or self._borrowed_feature_samples <= 0:
             raise RuntimeError("rollout produced no backbone feature lease")
+        if len(source_ranks) != self._world_size or sorted(source_ranks) != list(
+            range(self._world_size)
+        ):
+            raise RuntimeError(
+                f"borrowed backbone route must be a rank permutation: {source_ranks}"
+            )
+        consumer_rank = source_ranks.index(self._rank)
         if self._borrowed_feature_active_lease is not None:
             raise RuntimeError("borrowed backbone lease is already active")
 
@@ -317,6 +331,7 @@ class MultiStepRolloutWorker(Worker):
             "schema": 1,
             "lease_id": lease_id,
             "producer_rank": self._rank,
+            "consumer_rank": consumer_rank,
             "model_version": int(self.version),
             "sample_id_base": self._rank * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
             "samples": self._borrowed_feature_samples,
@@ -327,14 +342,16 @@ class MultiStepRolloutWorker(Worker):
         self.send(
             self._borrowed_feature_tensors,
             dst_group_name=self.actor_group_name,
-            dst_rank=self._rank,
+            dst_rank=consumer_rank,
             piggyback_payload=metadata,
             borrowed_ipc=True,
         )
         self._borrowed_feature_active_lease = lease_id
+        self._borrowed_feature_consumer_rank = consumer_rank
         self.log_info(
             "W63_BORROWED_IPC_SEND "
-            f"rank={self._rank} lease={lease_id} samples={self._borrowed_feature_samples} "
+            f"rank={self._rank} consumer={consumer_rank} lease={lease_id} "
+            f"samples={self._borrowed_feature_samples} "
             f"blocks={len(self._borrowed_feature_block_sizes)} bytes={byte_count}"
         )
         return {
@@ -346,11 +363,15 @@ class MultiStepRolloutWorker(Worker):
     def wait_rollout_backbone_feature_release(self) -> dict[str, float]:
         if not self._borrowed_feature_ipc_enabled:
             return {}
-        if self._borrowed_feature_active_lease is None:
+        if (
+            self._borrowed_feature_active_lease is None
+            or self._borrowed_feature_consumer_rank is None
+        ):
             raise RuntimeError("no active borrowed backbone lease to release")
+        consumer_rank = self._borrowed_feature_consumer_rank
         ack = self.recv(
             src_group_name=self.actor_group_name,
-            src_rank=self._rank,
+            src_rank=consumer_rank,
         )
         expected = self._borrowed_feature_active_lease
         if not isinstance(ack, dict) or ack.get("lease_id") != expected:
@@ -365,6 +386,7 @@ class MultiStepRolloutWorker(Worker):
         self._borrowed_feature_block_sizes.clear()
         self._borrowed_feature_samples = 0
         self._borrowed_feature_active_lease = None
+        self._borrowed_feature_consumer_rank = None
         self.torch_platform.ipc_collect()
         self.torch_platform.empty_cache()
         self.log_info(

@@ -1063,6 +1063,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             )
         self._borrowed_backbone_cache: BorrowedBackboneCache | None = None
         self._borrowed_backbone_metadata: dict[str, Any] | None = None
+        self._borrowed_feature_source_rank: int | None = None
         if self.enable_sft_co_train:
             self._build_sft_data_loader()
 
@@ -1194,16 +1195,50 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
         self.rollout_batch = self._process_received_rollout_batch(self.rollout_batch)
 
+    def get_rollout_backbone_feature_source_rank(self) -> int:
+        if not self._borrowed_feature_ipc_enabled:
+            return self._rank
+        forward_inputs = self.rollout_batch.get("forward_inputs", {})
+        sample_ids = forward_inputs.get(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY)
+        if sample_ids is None:
+            raise RuntimeError("trajectory is missing borrowed backbone sample IDs")
+        flat_ids = sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu")
+        producer_ranks = torch.div(
+            flat_ids,
+            ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
+            rounding_mode="floor",
+        )
+        unique_ranks = producer_ranks.unique().tolist()
+        if len(unique_ranks) != 1:
+            counts = {
+                int(rank): int((producer_ranks == rank).sum().item())
+                for rank in unique_ranks
+            }
+            raise RuntimeError(
+                "one Actor trajectory spans multiple Rollout producers; "
+                f"counts={counts}"
+            )
+        return int(unique_ranks[0])
+
     @Worker.timer("actor/feature_recv")
-    def recv_rollout_backbone_features(self) -> dict[str, float]:
+    def recv_rollout_backbone_features(
+        self, source_ranks: list[int]
+    ) -> dict[str, float]:
         if not self._borrowed_feature_ipc_enabled:
             return {}
         if self._borrowed_backbone_cache is not None:
             raise RuntimeError("previous borrowed backbone lease is still active")
+        if len(source_ranks) != self._world_size or sorted(source_ranks) != list(
+            range(self._world_size)
+        ):
+            raise RuntimeError(
+                f"borrowed backbone route must be a rank permutation: {source_ranks}"
+            )
+        source_rank = int(source_ranks[self._rank])
 
         received = self.recv(
             src_group_name=self._rollout_group_name,
-            src_rank=self._rank,
+            src_rank=source_rank,
             borrowed_ipc=True,
         )
         if not isinstance(received, tuple) or len(received) != 2:
@@ -1211,8 +1246,10 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         tensors, metadata = received
         if not isinstance(metadata, dict) or metadata.get("schema") != 1:
             raise RuntimeError(f"unsupported borrowed backbone metadata: {metadata}")
-        if int(metadata.get("producer_rank", -1)) != self._rank:
-            raise RuntimeError("borrowed backbone producer/Actor rank mismatch")
+        if int(metadata.get("producer_rank", -1)) != source_rank:
+            raise RuntimeError("borrowed backbone producer rank does not match route")
+        if int(metadata.get("consumer_rank", -1)) != self._rank:
+            raise RuntimeError("borrowed backbone consumer rank does not match Actor")
         if int(metadata.get("model_version", -1)) != int(self.version):
             raise RuntimeError(
                 "borrowed backbone model version does not match Actor version"
@@ -1235,7 +1272,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             raise RuntimeError("trajectory is missing borrowed backbone sample IDs")
         flat_ids = sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu")
         sample_id_base = int(metadata.get("sample_id_base", -1))
-        expected_base = self._rank * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE
+        expected_base = source_rank * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE
         if sample_id_base != expected_base:
             raise RuntimeError(
                 "borrowed backbone sample-ID namespace does not match Actor rank"
@@ -1254,6 +1291,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
         self._borrowed_backbone_cache = cache
         self._borrowed_backbone_metadata = metadata
+        self._borrowed_feature_source_rank = source_rank
         self.log_info(
             "W63_BORROWED_IPC_RECV "
             f"rank={self._rank} lease={cache.lease_id} samples={stats.samples} "
@@ -1270,7 +1308,8 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             return {}
         cache = self._borrowed_backbone_cache
         metadata = self._borrowed_backbone_metadata
-        if cache is None or metadata is None:
+        source_rank = self._borrowed_feature_source_rank
+        if cache is None or metadata is None or source_rank is None:
             raise RuntimeError("no borrowed backbone lease to release")
 
         self.torch_platform.current_stream().synchronize()
@@ -1279,12 +1318,13 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         cache.clear()
         self._borrowed_backbone_cache = None
         self._borrowed_backbone_metadata = None
+        self._borrowed_feature_source_rank = None
         forward_inputs = self.rollout_batch.get("forward_inputs", {})
         forward_inputs.pop(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None)
         self.send(
             {"schema": 1, "lease_id": lease_id},
             dst_group_name=self._rollout_group_name,
-            dst_rank=self._rank,
+            dst_rank=source_rank,
         )
         self.torch_platform.ipc_collect()
         self.torch_platform.empty_cache()

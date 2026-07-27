@@ -534,11 +534,21 @@ class EmbodiedRunner:
                     if self.reward is not None:
                         reward_handle.wait()
                     if self.borrowed_feature_ipc:
+                        source_ranks = [
+                            int(rank)
+                            for rank in self.actor.get_rollout_backbone_feature_source_rank().wait()
+                        ]
+                        logger.info(
+                            "Borrowed backbone Actor-to-Rollout route: %s",
+                            source_ranks,
+                        )
                         feature_recv_handle: Handle = (
-                            self.actor.recv_rollout_backbone_features()
+                            self.actor.recv_rollout_backbone_features(source_ranks)
                         )
                         feature_send_handle: Handle = (
-                            self.rollout.send_rollout_backbone_features_to_actor()
+                            self.rollout.send_rollout_backbone_features_to_actor(
+                                source_ranks
+                            )
                         )
                         feature_send_handle.wait()
                         feature_recv_handle.wait()
