@@ -40,6 +40,7 @@ from rlinf.utils.backbone_cache import (
     ROLLOUT_BACKBONE_BORROWED_IPC,
     ROLLOUT_BACKBONE_FEATURE_KEY,
     ROLLOUT_BACKBONE_MASK_KEY,
+    ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
     ROLLOUT_BACKBONE_SAMPLE_IDS_KEY,
     ROLLOUT_BACKBONE_TRANSPORT_KEY,
     filter_rollout_backbone_transport,
@@ -183,6 +184,9 @@ class MultiStepRolloutWorker(Worker):
             raise ValueError(
                 "borrowed rollout backbone IPC currently requires equal Rollout/Actor world sizes"
             )
+        self._borrowed_feature_verify_trajectory = bool(
+            self.cfg.rollout.get("borrowed_feature_ipc_verify_trajectory", False)
+        )
         self._borrowed_feature_tensors: list[torch.Tensor] = []
         self._borrowed_feature_block_sizes: list[int] = []
         self._borrowed_feature_samples = 0
@@ -279,15 +283,17 @@ class MultiStepRolloutWorker(Worker):
 
         filter_rollout_backbone_transport(forward_inputs, reuse_enabled=True)
         block_size = int(feature.shape[0])
+        sample_id_base = self._rank * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE
         sample_ids = torch.arange(
-            self._borrowed_feature_samples,
-            self._borrowed_feature_samples + block_size,
+            sample_id_base + self._borrowed_feature_samples,
+            sample_id_base + self._borrowed_feature_samples + block_size,
             dtype=torch.int64,
             device="cpu",
         )
         forward_inputs[ROLLOUT_BACKBONE_SAMPLE_IDS_KEY] = sample_ids
-        forward_inputs.pop(ROLLOUT_BACKBONE_FEATURE_KEY)
-        forward_inputs.pop(ROLLOUT_BACKBONE_MASK_KEY)
+        if not self._borrowed_feature_verify_trajectory:
+            forward_inputs.pop(ROLLOUT_BACKBONE_FEATURE_KEY)
+            forward_inputs.pop(ROLLOUT_BACKBONE_MASK_KEY)
         self._borrowed_feature_tensors.extend((feature.detach(), mask.detach()))
         self._borrowed_feature_block_sizes.append(block_size)
         self._borrowed_feature_samples += block_size
@@ -312,9 +318,11 @@ class MultiStepRolloutWorker(Worker):
             "lease_id": lease_id,
             "producer_rank": self._rank,
             "model_version": int(self.version),
+            "sample_id_base": self._rank * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
             "samples": self._borrowed_feature_samples,
             "block_sizes": list(self._borrowed_feature_block_sizes),
             "bytes": byte_count,
+            "verify_trajectory": self._borrowed_feature_verify_trajectory,
         }
         self.send(
             self._borrowed_feature_tensors,

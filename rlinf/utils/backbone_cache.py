@@ -30,6 +30,7 @@ BACKBONE_CACHE_SAMPLE_IDS_KEY = "_rlinf_backbone_cache_sample_ids"
 ROLLOUT_BACKBONE_FEATURE_KEY = "rollout_backbone_features"
 ROLLOUT_BACKBONE_MASK_KEY = "rollout_backbone_attention_mask"
 ROLLOUT_BACKBONE_SAMPLE_IDS_KEY = "_rlinf_rollout_backbone_sample_ids"
+ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE = 1 << 40
 ROLLOUT_BACKBONE_TRANSPORT_KEY = "rollout_backbone_feature_transport"
 ROLLOUT_BACKBONE_BORROWED_IPC = "borrowed_ipc"
 ROLLOUT_BACKBONE_INPUT_KEYS = (

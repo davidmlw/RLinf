@@ -50,6 +50,7 @@ from rlinf.utils.backbone_cache import (
     ROLLOUT_BACKBONE_FEATURE_KEY,
     ROLLOUT_BACKBONE_INPUT_KEYS,
     ROLLOUT_BACKBONE_MASK_KEY,
+    ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
     ROLLOUT_BACKBONE_SAMPLE_IDS_KEY,
     ROLLOUT_BACKBONE_TRANSPORT_KEY,
     BackboneCacheKey,
@@ -1233,7 +1234,17 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         if sample_ids is None:
             raise RuntimeError("trajectory is missing borrowed backbone sample IDs")
         flat_ids = sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu")
-        expected_ids = torch.arange(stats.samples, dtype=torch.int64)
+        sample_id_base = int(metadata.get("sample_id_base", -1))
+        expected_base = self._rank * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE
+        if sample_id_base != expected_base:
+            raise RuntimeError(
+                "borrowed backbone sample-ID namespace does not match Actor rank"
+            )
+        expected_ids = torch.arange(
+            sample_id_base,
+            sample_id_base + stats.samples,
+            dtype=torch.int64,
+        )
         if flat_ids.numel() != stats.samples or not torch.equal(
             flat_ids.sort().values, expected_ids
         ):
@@ -1615,7 +1626,45 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                             raise RuntimeError(
                                 "training microbatch is missing borrowed backbone sample IDs"
                             )
-                        borrowed_output = borrowed_backbone_cache.load(sample_ids)
+                        metadata = self._borrowed_backbone_metadata
+                        if metadata is None:
+                            raise RuntimeError("borrowed backbone metadata was released early")
+                        local_sample_ids = sample_ids - int(
+                            metadata["sample_id_base"]
+                        )
+                        borrowed_output = borrowed_backbone_cache.load(
+                            local_sample_ids
+                        )
+                        if bool(metadata.get("verify_trajectory", False)):
+                            trajectory_feature = forward_inputs.get(
+                                ROLLOUT_BACKBONE_FEATURE_KEY
+                            )
+                            trajectory_mask = forward_inputs.get(
+                                ROLLOUT_BACKBONE_MASK_KEY
+                            )
+                            if trajectory_feature is None or trajectory_mask is None:
+                                raise RuntimeError(
+                                    "borrowed IPC verification requires trajectory features"
+                                )
+                            if not torch.equal(
+                                borrowed_output["backbone_features"],
+                                trajectory_feature.to(self.device),
+                            ):
+                                max_diff = (
+                                    borrowed_output["backbone_features"].float()
+                                    - trajectory_feature.to(self.device).float()
+                                ).abs().max()
+                                raise RuntimeError(
+                                    "borrowed IPC feature mismatch against trajectory "
+                                    f"reference: max_diff={float(max_diff.item())}"
+                                )
+                            if not torch.equal(
+                                borrowed_output["backbone_attention_mask"],
+                                trajectory_mask.to(self.device),
+                            ):
+                                raise RuntimeError(
+                                    "borrowed IPC attention mask mismatch against trajectory"
+                                )
                         forward_inputs[ROLLOUT_BACKBONE_FEATURE_KEY] = borrowed_output[
                             "backbone_features"
                         ]
