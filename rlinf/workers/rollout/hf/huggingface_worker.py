@@ -46,6 +46,7 @@ from rlinf.utils.backbone_cache import (
     filter_rollout_backbone_transport,
     is_rollout_backbone_ipc_transport,
 )
+from rlinf.utils.convergence_seed import seed_rollout_step
 from rlinf.utils.placement import HybridComponentPlacement
 
 
@@ -1299,3 +1300,4 @@ class MultiStepRolloutWorker(Worker):
     def set_global_step(self, global_step: int):
         if hasattr(self.hf_model, "set_global_step"):
             self.hf_model.set_global_step(global_step)
+        seed_rollout_step(self, global_step)
