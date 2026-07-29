@@ -15,6 +15,8 @@
 import torch
 from omegaconf import DictConfig
 
+from rlinf.utils.convergence_seed import maybe_seeded_value_head_init
+
 from .npu_patches import apply_npu_patches, restore_npu_patches
 
 
@@ -86,7 +88,9 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
     model.to(torch_dtype)
     if cfg.rl_head_config.add_value_head:
         # reinitialize the value head after model loading, or there are nan values in the value head after model loading.
-        model.action_head.value_head._init_weights()
+        maybe_seeded_value_head_init(
+            model.action_head.value_head, cfg.get("value_head_init_seed", None)
+        )
 
     if cfg.rl_head_config.disable_dropout:
         replace_dropout_with_identity(model)
