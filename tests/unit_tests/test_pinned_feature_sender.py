@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -42,19 +43,32 @@ class _FakePlatform:
 
 
 class _FakeSender:
+    _begin_pinned_feature_lease = MultiStepRolloutWorker._begin_pinned_feature_lease
     _abort_pinned_feature_stream = (
         MultiStepRolloutWorker._abort_pinned_feature_stream
     )
 
     def __init__(self, ack) -> None:
         self._rank = 2
+        self._world_size = 4
         self.version = 7
+        self.cfg = SimpleNamespace(
+            env=SimpleNamespace(
+                train=SimpleNamespace(
+                    rollout_epoch=1,
+                    max_steps_per_rollout_epoch=1,
+                    total_num_envs=8,
+                )
+            )
+        )
         self.actor_group_name = "actor"
         self.torch_platform = _FakePlatform()
         self.sent = []
         self.logs = []
         self.ack = ack
         self._pinned_feature_verify_trajectory = False
+        self._pinned_feature_ipc_enabled = True
+        self._pinned_feature_ipc_batch_blocks = 1
         self._pinned_feature_ipc_timeout_seconds = 0.05
         self._pinned_feature_tensors = [
             torch.ones(2, 3),
@@ -63,6 +77,7 @@ class _FakeSender:
         self._pinned_feature_block_sizes = [2]
         self._pinned_feature_samples = 2
         self._pinned_feature_active_lease = "lease-1"
+        self._pinned_feature_lease_seq = 1
         self._pinned_feature_consumer_rank = 2
         self._pinned_stream_expected_blocks = 1
         self._pinned_stream_expected_samples = 2
@@ -140,3 +155,33 @@ def test_sender_times_out_and_aborts_lease_when_actor_does_not_ack():
     assert sender._pinned_feature_active_lease is None
     assert sender._pinned_feature_consumer_rank is None
     assert sender.torch_platform.collects == 1
+
+
+def test_sender_can_start_a_new_lease_after_nack_cleanup():
+    rejected = _ok_ack()
+    rejected.update(status="error", error="injected failure")
+    sender = _FakeSender(rejected)
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        _flush(sender)
+
+    sender._begin_pinned_feature_lease()
+    assert sender._pinned_feature_active_lease == "pinned-r2-l2"
+    assert sender._pinned_stream_expected_blocks == 1
+    assert sender._pinned_stream_expected_samples == 2
+
+    sender._pinned_feature_tensors = [
+        torch.ones(2, 3),
+        torch.ones(2, 3, dtype=torch.bool),
+    ]
+    sender._pinned_feature_block_sizes = [2]
+    sender._pinned_feature_samples = 2
+    sender.ack = {
+        **_ok_ack(),
+        "lease_id": "pinned-r2-l2",
+    }
+    _flush(sender)
+
+    assert sender._pinned_stream_batches == 1
+    assert sender._pinned_stream_blocks == 1
+    assert sender._pinned_feature_active_lease == "pinned-r2-l2"
