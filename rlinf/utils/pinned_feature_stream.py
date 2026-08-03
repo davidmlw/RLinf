@@ -172,7 +172,7 @@ async def receive_pinned_rollout_backbone_stream(
             log_stride = max(1, expected_blocks // 4)
             if expected_batch_index == 0 or completed_blocks % log_stride == 0:
                 worker.log_info(
-                    "W63_PINNED_IPC_BATCH_STORED "
+                    "PINNED_FEATURE_BATCH_STORED "
                     f"rank={consumer_rank} lease={lease_id} "
                     f"batches={expected_batch_index + 1}/{expected_batches} "
                     f"blocks={completed_blocks}/{expected_blocks} "
@@ -213,7 +213,7 @@ async def receive_pinned_rollout_backbone_stream(
         raise
     stats = cache.stats()
     worker.log_info(
-        "W63_PINNED_IPC_CACHE_READY "
+        "PINNED_FEATURE_CACHE_READY "
         f"rank={consumer_rank} lease={stream_metadata['lease_id']} "
         f"batches={expected_batches} samples={stats.samples} bytes={stats.bytes} "
         f"alloc_s={stats.allocation_seconds:.6f} d2h_s={stats.d2h_seconds:.6f}"

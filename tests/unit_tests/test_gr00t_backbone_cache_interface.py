@@ -108,7 +108,7 @@ def test_gr00t_fresh_and_precomputed_backbone_outputs_match():
         policy,
         forward_inputs=feature_only_inputs,
         prev_logprobs=prev_logprobs,
-        backbone_cache=raw_backbone,
+        precomputed_backbone=raw_backbone,
     )
 
     assert policy.backbone.calls == 0

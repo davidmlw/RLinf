@@ -54,23 +54,23 @@ class _FakeSender:
         self.sent = []
         self.logs = []
         self.ack = ack
-        self._borrowed_feature_verify_trajectory = False
+        self._pinned_feature_verify_trajectory = False
         self._pinned_feature_ipc_timeout_seconds = 0.05
-        self._borrowed_feature_tensors = [
+        self._pinned_feature_tensors = [
             torch.ones(2, 3),
             torch.ones(2, 3, dtype=torch.bool),
         ]
-        self._borrowed_feature_block_sizes = [2]
-        self._borrowed_feature_samples = 2
-        self._borrowed_feature_active_lease = "lease-1"
-        self._borrowed_feature_consumer_rank = 2
-        self._borrowed_stream_expected_blocks = 1
-        self._borrowed_stream_expected_samples = 2
-        self._borrowed_stream_expected_batches = 1
-        self._borrowed_stream_batches = 0
-        self._borrowed_stream_blocks = 0
-        self._borrowed_stream_bytes = 0
-        self._borrowed_stream_wait_seconds = 0.0
+        self._pinned_feature_block_sizes = [2]
+        self._pinned_feature_samples = 2
+        self._pinned_feature_active_lease = "lease-1"
+        self._pinned_feature_consumer_rank = 2
+        self._pinned_stream_expected_blocks = 1
+        self._pinned_stream_expected_samples = 2
+        self._pinned_stream_expected_batches = 1
+        self._pinned_stream_batches = 0
+        self._pinned_stream_blocks = 0
+        self._pinned_stream_bytes = 0
+        self._pinned_stream_wait_seconds = 0.0
 
     def send(self, tensors, **kwargs) -> None:
         self.sent.append((tensors, kwargs))
@@ -87,7 +87,7 @@ class _FakeSender:
 
 def _flush(sender):
     return asyncio.run(
-        MultiStepRolloutWorker._flush_borrowed_feature_batch(sender)
+        MultiStepRolloutWorker._flush_pinned_feature_batch(sender)
     )
 
 
@@ -106,11 +106,11 @@ def test_sender_releases_batch_only_after_valid_ack():
 
     _flush(sender)
 
-    assert sender._borrowed_stream_batches == 1
-    assert sender._borrowed_stream_blocks == 1
-    assert sender._borrowed_feature_tensors == []
-    assert sender._borrowed_feature_block_sizes == []
-    assert sender._borrowed_feature_active_lease == "lease-1"
+    assert sender._pinned_stream_batches == 1
+    assert sender._pinned_stream_blocks == 1
+    assert sender._pinned_feature_tensors == []
+    assert sender._pinned_feature_block_sizes == []
+    assert sender._pinned_feature_active_lease == "lease-1"
     assert sender.torch_platform.collects == 1
 
 
@@ -122,10 +122,10 @@ def test_sender_aborts_lease_when_actor_nacks_batch():
     with pytest.raises(RuntimeError, match="wrong model version"):
         _flush(sender)
 
-    assert sender._borrowed_feature_tensors == []
-    assert sender._borrowed_feature_block_sizes == []
-    assert sender._borrowed_feature_active_lease is None
-    assert sender._borrowed_feature_consumer_rank is None
+    assert sender._pinned_feature_tensors == []
+    assert sender._pinned_feature_block_sizes == []
+    assert sender._pinned_feature_active_lease is None
+    assert sender._pinned_feature_consumer_rank is None
     assert sender.torch_platform.collects == 1
 
 
@@ -135,8 +135,8 @@ def test_sender_times_out_and_aborts_lease_when_actor_does_not_ack():
     with pytest.raises(TimeoutError, match="lease lease-1"):
         _flush(sender)
 
-    assert sender._borrowed_feature_tensors == []
-    assert sender._borrowed_feature_block_sizes == []
-    assert sender._borrowed_feature_active_lease is None
-    assert sender._borrowed_feature_consumer_rank is None
+    assert sender._pinned_feature_tensors == []
+    assert sender._pinned_feature_block_sizes == []
+    assert sender._pinned_feature_active_lease is None
+    assert sender._pinned_feature_consumer_rank is None
     assert sender.torch_platform.collects == 1

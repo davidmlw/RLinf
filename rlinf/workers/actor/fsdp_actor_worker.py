@@ -1070,7 +1070,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             != self._component_placement.get_world_size("actor")
         ):
             raise ValueError(
-                "borrowed rollout backbone IPC currently requires equal Rollout/Actor world sizes"
+                "pinned rollout backbone transport currently requires equal Rollout/Actor world sizes"
             )
         self._pinned_backbone_metadata: dict[str, Any] | None = None
         self._pinned_rollout_backbone_cache: PinnedRolloutBackboneCache | None = None
@@ -1220,7 +1220,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         forward_inputs = self.rollout_batch.get("forward_inputs", {})
         sample_ids = forward_inputs.get(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY)
         if sample_ids is None:
-            raise RuntimeError("trajectory is missing borrowed backbone sample IDs")
+            raise RuntimeError("trajectory is missing pinned backbone sample IDs")
         flat_ids = sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu")
         producer_ranks = torch.div(
             flat_ids,
@@ -1305,7 +1305,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 "trajectory sample IDs do not form the pinned backbone cache"
             )
         self.log_info(
-            "W63_PINNED_IPC_ROUTE_VALID "
+            "PINNED_FEATURE_ROUTE_VALID "
             f"rank={self._rank} source={source_rank} samples={cache.samples}"
         )
         return {"actor/pinned_feature_route_valid": 1.0}
@@ -1620,7 +1620,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                         )
                         if sample_ids is None:
                             raise RuntimeError(
-                                "training microbatch is missing borrowed backbone sample IDs"
+                                "training microbatch is missing pinned backbone sample IDs"
                             )
                         metadata = self._pinned_backbone_metadata
                         if metadata is None:
@@ -1628,7 +1628,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                                 "pinned backbone metadata was released early"
                             )
                         local_sample_ids = sample_ids - int(metadata["sample_id_base"])
-                        borrowed_output = pinned_rollout_cache.load(local_sample_ids)
+                        pinned_output = pinned_rollout_cache.load(local_sample_ids)
                         if bool(metadata.get("verify_trajectory", False)):
                             trajectory_feature = forward_inputs.get(
                                 ROLLOUT_BACKBONE_FEATURE_KEY
@@ -1638,35 +1638,35 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                             )
                             if trajectory_feature is None or trajectory_mask is None:
                                 raise RuntimeError(
-                                    "borrowed IPC verification requires trajectory features"
+                                    "pinned feature transport verification requires trajectory features"
                                 )
                             if not torch.equal(
-                                borrowed_output["backbone_features"],
+                                pinned_output["backbone_features"],
                                 trajectory_feature.to(self.device),
                             ):
                                 max_diff = (
                                     (
-                                        borrowed_output["backbone_features"].float()
+                                        pinned_output["backbone_features"].float()
                                         - trajectory_feature.to(self.device).float()
                                     )
                                     .abs()
                                     .max()
                                 )
                                 raise RuntimeError(
-                                    "borrowed IPC feature mismatch against trajectory "
+                                    "pinned feature transport feature mismatch against trajectory "
                                     f"reference: max_diff={float(max_diff.item())}"
                                 )
                             if not torch.equal(
-                                borrowed_output["backbone_attention_mask"],
+                                pinned_output["backbone_attention_mask"],
                                 trajectory_mask.to(self.device),
                             ):
                                 raise RuntimeError(
-                                    "borrowed IPC attention mask mismatch against trajectory"
+                                    "pinned feature transport attention mask mismatch against trajectory"
                                 )
-                        forward_inputs[ROLLOUT_BACKBONE_FEATURE_KEY] = borrowed_output[
+                        forward_inputs[ROLLOUT_BACKBONE_FEATURE_KEY] = pinned_output[
                             "backbone_features"
                         ]
-                        forward_inputs[ROLLOUT_BACKBONE_MASK_KEY] = borrowed_output[
+                        forward_inputs[ROLLOUT_BACKBONE_MASK_KEY] = pinned_output[
                             "backbone_attention_mask"
                         ]
                     self.train_micro_batch(
@@ -1713,7 +1713,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 },
             )
             self.log_info(
-                "W63_PINNED_IPC_TRAINING_DONE "
+                "PINNED_FEATURE_TRAINING_DONE "
                 f"rank={self._rank} loads={pinned_stats.loads} "
                 f"loaded_samples={pinned_stats.loaded_samples} "
                 f"cpu_gather_s={pinned_stats.cpu_gather_seconds:.6f} "
@@ -1754,7 +1754,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             reuse_mask = fwd.pop(ROLLOUT_BACKBONE_MASK_KEY, None)
             if reuse_feat is not None and reuse_mask is not None:
                 backbone_kwargs = {
-                    "backbone_cache": {
+                    "precomputed_backbone": {
                         "backbone_features": reuse_feat.detach(),
                         "backbone_attention_mask": reuse_mask.detach(),
                     }

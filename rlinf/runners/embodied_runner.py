@@ -84,7 +84,7 @@ class EmbodiedRunner:
         )
         if self.pinned_feature_ipc and self.cfg.rollout.pipeline_stage_num != 1:
             raise ValueError(
-                "borrowed rollout backbone IPC currently requires pipeline_stage_num=1"
+                "pinned rollout backbone transport currently requires pipeline_stage_num=1"
             )
 
         # Step-gated profiling: ``cluster.profiling.steps`` lists the global step
@@ -551,7 +551,7 @@ class EmbodiedRunner:
                             for rank in self.actor.get_rollout_backbone_feature_source_rank().wait()
                         ]
                         logger.info(
-                            "Borrowed backbone Actor-to-Rollout route: %s",
+                            "Pinned backbone Actor-to-Rollout route: %s",
                             source_ranks,
                         )
                         feature_recv_handle: Handle = (

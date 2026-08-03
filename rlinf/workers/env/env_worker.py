@@ -170,7 +170,7 @@ class EnvWorker(Worker):
         )
         if self._pinned_feature_ipc_enabled and self.actor_split_num != 1:
             raise ValueError(
-                "borrowed rollout backbone IPC currently requires actor_split_num=1"
+                "pinned rollout backbone transport currently requires actor_split_num=1"
             )
         if self.use_training_pipeline and self.enable_train:
             self._init_pipeline_params()
@@ -1004,7 +1004,7 @@ class EnvWorker(Worker):
                 )
                 if sample_ids is None:
                     raise RuntimeError(
-                        "borrowed backbone trajectory is missing sample IDs"
+                        "pinned backbone trajectory is missing sample IDs"
                     )
                 producer_ranks = torch.div(
                     sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu"),

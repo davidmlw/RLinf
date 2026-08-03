@@ -536,10 +536,10 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         compute_entropy: bool = False,
         compute_values: bool = True,
         use_cache: bool = False,
-        backbone_cache: Optional[Mapping[str, torch.Tensor]] = None,
+        precomputed_backbone: Optional[Mapping[str, torch.Tensor]] = None,
         **kwargs,
     ) -> dict[str, Any]:
-        if backbone_cache is None:
+        if precomputed_backbone is None:
             normalized_input = {
                 "state": forward_inputs["state"],
                 "state_mask": forward_inputs["state_mask"],
@@ -557,7 +557,7 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
             backbone_outputs = self.backbone(backbone_inputs)
         else:
             action_inputs = self._prepare_action_head_input(forward_inputs)
-            backbone_outputs = BatchFeature(data=dict(backbone_cache))
+            backbone_outputs = BatchFeature(data=dict(precomputed_backbone))
 
         chains = forward_inputs["chains"]
         denoise_inds = forward_inputs["denoise_inds"]
@@ -694,7 +694,7 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         # process_backbone_output() replaces backbone_features in this BatchFeature
         # with trainable action-head transforms. Snapshot the raw frozen-backbone
         # tensors before get_rl_action() mutates the mapping.
-        rollout_backbone_cache = {
+        rollout_backbone_output = {
             ROLLOUT_BACKBONE_FEATURE_KEY: backbone_outputs[
                 "backbone_features"
             ].detach(),
@@ -731,7 +731,7 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         # Detached; rides forward_inputs' per-sample merge/split machinery. The
         # rollout worker drops these keys again when reuse is disabled, so the
         # D2H/transport cost is only paid when the feature is actually consumed.
-        forward_inputs.update(rollout_backbone_cache)
+        forward_inputs.update(rollout_backbone_output)
 
         result = {
             "prev_logprobs": rlinf_outputs["prev_logprobs"],
