@@ -174,8 +174,15 @@ class MultiStepRolloutWorker(Worker):
         self._pinned_feature_ipc_batch_blocks = int(
             self.cfg.rollout.get("pinned_feature_ipc_batch_blocks", 1)
         )
+        self._pinned_feature_ipc_timeout_seconds = float(
+            self.cfg.rollout.get("pinned_feature_ipc_timeout_seconds", 300.0)
+        )
         if self._pinned_feature_ipc_batch_blocks <= 0:
             raise ValueError("rollout.pinned_feature_ipc_batch_blocks must be positive")
+        if self._pinned_feature_ipc_timeout_seconds <= 0:
+            raise ValueError(
+                "rollout.pinned_feature_ipc_timeout_seconds must be positive"
+            )
         self._borrowed_feature_tensors: list[torch.Tensor] = []
         self._borrowed_feature_block_sizes: list[int] = []
         self._borrowed_feature_samples = 0
@@ -227,7 +234,15 @@ class MultiStepRolloutWorker(Worker):
             - 1
         ) // self._pinned_feature_ipc_batch_blocks
 
-    def _retain_borrowed_feature_block(
+    def _abort_pinned_feature_stream(self) -> None:
+        self._borrowed_feature_tensors.clear()
+        self._borrowed_feature_block_sizes.clear()
+        self._borrowed_feature_samples = 0
+        self._borrowed_feature_active_lease = None
+        self._borrowed_feature_consumer_rank = None
+        self.torch_platform.ipc_collect()
+
+    async def _retain_borrowed_feature_block(
         self, forward_inputs: dict[str, torch.Tensor]
     ) -> None:
         feature = forward_inputs.get(ROLLOUT_BACKBONE_FEATURE_KEY)
@@ -262,9 +277,9 @@ class MultiStepRolloutWorker(Worker):
             >= self._pinned_feature_ipc_batch_blocks
             or self._borrowed_feature_samples == self._borrowed_stream_expected_samples
         ):
-            self._flush_borrowed_feature_batch()
+            await self._flush_borrowed_feature_batch()
 
-    def _flush_borrowed_feature_batch(self) -> None:
+    async def _flush_borrowed_feature_batch(self) -> None:
         lease_id = self._borrowed_feature_active_lease
         consumer_rank = self._borrowed_feature_consumer_rank
         if lease_id is None or consumer_rank is None:
@@ -297,28 +312,52 @@ class MultiStepRolloutWorker(Worker):
             "verify_trajectory": self._borrowed_feature_verify_trajectory,
         }
         wait_start = time.perf_counter()
-        self.send(
-            tensors,
-            dst_group_name=self.actor_group_name,
-            dst_rank=consumer_rank,
-            piggyback_payload=metadata,
-            borrowed_ipc=True,
-        )
-        ack = self.recv(
-            src_group_name=self.actor_group_name,
-            src_rank=consumer_rank,
-        )
-        self._borrowed_stream_wait_seconds += time.perf_counter() - wait_start
-        if (
-            not isinstance(ack, dict)
-            or ack.get("lease_id") != lease_id
-            or int(ack.get("batch_index", -1)) != batch_index
-            or int(ack.get("completed_blocks", -1))
-            != start_block_index + len(block_sizes)
-        ):
-            raise RuntimeError(
-                f"pinned backbone batch ACK mismatch at batch {batch_index}: {ack}"
+        try:
+            self.send(
+                tensors,
+                dst_group_name=self.actor_group_name,
+                dst_rank=consumer_rank,
+                piggyback_payload=metadata,
+                borrowed_ipc=True,
             )
+            recv_work = self.recv(
+                src_group_name=self.actor_group_name,
+                src_rank=consumer_rank,
+                async_op=True,
+            )
+            try:
+                ack = await asyncio.wait_for(
+                    recv_work.async_wait(),
+                    timeout=self._pinned_feature_ipc_timeout_seconds,
+                )
+            except TimeoutError as error:
+                raise TimeoutError(
+                    "timed out waiting for Actor ACK for pinned backbone batch "
+                    f"{batch_index} lease {lease_id}"
+                ) from error
+            if isinstance(ack, dict) and ack.get("status") == "error":
+                raise RuntimeError(
+                    "Actor rejected pinned backbone batch "
+                    f"{batch_index}: {ack.get('error', 'unknown error')}"
+                )
+            if (
+                not isinstance(ack, dict)
+                or ack.get("schema") != 3
+                or ack.get("status") != "ok"
+                or ack.get("lease_id") != lease_id
+                or int(ack.get("batch_index", -1)) != batch_index
+                or int(ack.get("completed_blocks", -1))
+                != start_block_index + len(block_sizes)
+            ):
+                raise RuntimeError(
+                    f"pinned backbone batch ACK mismatch at batch {batch_index}: {ack}"
+                )
+        except Exception:
+            tensors.clear()
+            self._abort_pinned_feature_stream()
+            raise
+        finally:
+            self._borrowed_stream_wait_seconds += time.perf_counter() - wait_start
         self._borrowed_stream_batches += 1
         self._borrowed_stream_blocks += len(block_sizes)
         self._borrowed_stream_bytes += byte_count
@@ -341,26 +380,36 @@ class MultiStepRolloutWorker(Worker):
     def finish_rollout_backbone_feature_stream(self) -> dict[str, float]:
         if not self._pinned_feature_ipc_enabled:
             return {}
-        if self._borrowed_feature_tensors or self._borrowed_feature_block_sizes:
-            raise RuntimeError("pinned backbone stream has an unflushed batch")
-        if self._borrowed_stream_blocks != self._borrowed_stream_expected_blocks:
-            raise RuntimeError(
-                "pinned backbone block stream count mismatch: "
-                f"{self._borrowed_stream_blocks}/"
-                f"{self._borrowed_stream_expected_blocks}"
-            )
-        if self._borrowed_stream_batches != self._borrowed_stream_expected_batches:
-            raise RuntimeError(
-                "pinned backbone batch stream count mismatch: "
-                f"{self._borrowed_stream_batches}/"
-                f"{self._borrowed_stream_expected_batches}"
-            )
-        if self._borrowed_feature_samples != self._borrowed_stream_expected_samples:
-            raise RuntimeError(
-                "pinned backbone sample stream count mismatch: "
-                f"{self._borrowed_feature_samples}/"
-                f"{self._borrowed_stream_expected_samples}"
-            )
+        try:
+            if self._borrowed_feature_tensors or self._borrowed_feature_block_sizes:
+                raise RuntimeError("pinned backbone stream has an unflushed batch")
+            if self._borrowed_stream_blocks != self._borrowed_stream_expected_blocks:
+                raise RuntimeError(
+                    "pinned backbone block stream count mismatch: "
+                    f"{self._borrowed_stream_blocks}/"
+                    f"{self._borrowed_stream_expected_blocks}"
+                )
+            if (
+                self._borrowed_stream_batches
+                != self._borrowed_stream_expected_batches
+            ):
+                raise RuntimeError(
+                    "pinned backbone batch stream count mismatch: "
+                    f"{self._borrowed_stream_batches}/"
+                    f"{self._borrowed_stream_expected_batches}"
+                )
+            if (
+                self._borrowed_feature_samples
+                != self._borrowed_stream_expected_samples
+            ):
+                raise RuntimeError(
+                    "pinned backbone sample stream count mismatch: "
+                    f"{self._borrowed_feature_samples}/"
+                    f"{self._borrowed_stream_expected_samples}"
+                )
+        except Exception:
+            self._abort_pinned_feature_stream()
+            raise
         lease_id = self._borrowed_feature_active_lease
         self.log_info(
             "W63_PINNED_IPC_STREAM_DONE "
@@ -816,7 +865,7 @@ class MultiStepRolloutWorker(Worker):
             )
         return self.predict(env_obs, mode=mode)
 
-    def _build_rollout_result(
+    async def _build_rollout_result(
         self,
         actions: torch.Tensor,
         result: dict[str, Any],
@@ -834,7 +883,7 @@ class MultiStepRolloutWorker(Worker):
         forward_inputs = result.get("forward_inputs")
         if forward_inputs is not None:
             if self._pinned_feature_ipc_enabled:
-                self._retain_borrowed_feature_block(forward_inputs)
+                await self._retain_borrowed_feature_block(forward_inputs)
             else:
                 filter_rollout_backbone_transport(
                     forward_inputs,
@@ -940,7 +989,7 @@ class MultiStepRolloutWorker(Worker):
                     intervene_requested=env_output.get("intervene_flags", None),
                 )
 
-                rollout_result = self._build_rollout_result(
+                rollout_result = await self._build_rollout_result(
                     actions,
                     result,
                     final_obs=env_output.get("final_obs", None),

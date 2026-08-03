@@ -73,6 +73,11 @@ class _ImmediateWork:
         return self.value
 
 
+class _NeverWork:
+    async def async_wait(self):
+        await asyncio.Event().wait()
+
+
 class _FakePlatform:
     def __init__(self) -> None:
         self.collects = 0
@@ -102,6 +107,16 @@ class _FakeWorker:
 
     def log_info(self, message) -> None:
         self.logs.append(message)
+
+
+class _TimeoutWorker(_FakeWorker):
+    def __init__(self) -> None:
+        super().__init__([])
+
+    def recv(self, **kwargs):
+        assert kwargs["async_op"] is True
+        assert kwargs["borrowed_ipc"] is True
+        return _NeverWork()
 
 
 def _block(size: int):
@@ -147,7 +162,14 @@ def _batch(
     return tensors, metadata
 
 
-def _receive(worker, *, expected_blocks=3, expected_samples=6, blocks_per_batch=2):
+def _receive(
+    worker,
+    *,
+    expected_blocks=3,
+    expected_samples=6,
+    blocks_per_batch=2,
+    timeout_seconds=1.0,
+):
     return asyncio.run(
         pinned_feature_stream.receive_pinned_rollout_backbone_stream(
             worker,
@@ -158,6 +180,7 @@ def _receive(worker, *, expected_blocks=3, expected_samples=6, blocks_per_batch=
             expected_samples=expected_samples,
             blocks_per_batch=blocks_per_batch,
             rollout_group_name="rollout",
+            timeout_seconds=timeout_seconds,
         )
     )
 
@@ -194,6 +217,7 @@ def test_receive_stream_validates_counts_and_acks_each_batch():
     assert metadata["lease_id"] == "lease-1"
     assert [entry[0]["batch_index"] for entry in worker.sent] == [0, 1]
     assert [entry[0]["completed_blocks"] for entry in worker.sent] == [2, 3]
+    assert all(entry[0]["status"] == "ok" for entry in worker.sent)
     assert worker.torch_platform.collects == 2
     assert metrics["actor/pinned_feature_samples"] == 6.0
     assert metrics["actor/pinned_feature_batches"] == 2.0
@@ -229,7 +253,9 @@ def test_receive_stream_rejects_malformed_first_batch(field, value, message):
     with pytest.raises(RuntimeError, match=message):
         _receive(worker)
 
-    assert not worker.sent
+    assert len(worker.sent) == 1
+    assert worker.sent[0][0]["status"] == "error"
+    assert message in worker.sent[0][0]["error"]
 
 
 def test_receive_stream_rejects_lease_change_before_second_ack():
@@ -256,8 +282,11 @@ def test_receive_stream_rejects_lease_change_before_second_ack():
     with pytest.raises(RuntimeError, match="lease changed"):
         _receive(worker, expected_blocks=2, blocks_per_batch=1)
 
-    assert len(worker.sent) == 1
+    assert len(worker.sent) == 2
     assert worker.sent[0][0]["lease_id"] == "lease-1"
+    assert worker.sent[0][0]["status"] == "ok"
+    assert worker.sent[1][0]["status"] == "error"
+    assert _FakeCache.instances[0].cleared
 
 
 def test_receive_stream_rejects_incomplete_sample_count():
@@ -281,6 +310,9 @@ def test_receive_stream_rejects_incomplete_sample_count():
     with pytest.raises(RuntimeError, match="incomplete counts"):
         _receive(worker)
 
+    assert worker.sent[-1][0]["status"] == "error"
+    assert _FakeCache.instances[0].cleared
+
 
 @pytest.mark.parametrize(
     ("expected_blocks", "expected_samples", "blocks_per_batch"),
@@ -297,3 +329,18 @@ def test_receive_stream_requires_positive_contract_counts(
             expected_samples=expected_samples,
             blocks_per_batch=blocks_per_batch,
         )
+
+
+def test_receive_stream_requires_positive_timeout():
+    with pytest.raises(ValueError, match="timeout"):
+        _receive(_FakeWorker([]), timeout_seconds=0)
+
+
+def test_receive_stream_times_out_without_a_producer_batch():
+    worker = _TimeoutWorker()
+
+    with pytest.raises(TimeoutError, match="Rollout rank 2"):
+        _receive(worker, timeout_seconds=0.01)
+
+    assert not worker.sent
+    assert worker.torch_platform.collects == 1

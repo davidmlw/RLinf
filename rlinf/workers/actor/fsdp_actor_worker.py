@@ -1056,8 +1056,15 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         self._pinned_feature_ipc_batch_blocks = int(
             cfg.rollout.get("pinned_feature_ipc_batch_blocks", 1)
         )
+        self._pinned_feature_ipc_timeout_seconds = float(
+            cfg.rollout.get("pinned_feature_ipc_timeout_seconds", 300.0)
+        )
         if self._pinned_feature_ipc_batch_blocks <= 0:
             raise ValueError("rollout.pinned_feature_ipc_batch_blocks must be positive")
+        if self._pinned_feature_ipc_timeout_seconds <= 0:
+            raise ValueError(
+                "rollout.pinned_feature_ipc_timeout_seconds must be positive"
+            )
         if self._pinned_feature_ipc_enabled and (
             self._component_placement.get_world_size("rollout")
             != self._component_placement.get_world_size("actor")
@@ -1254,6 +1261,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             expected_samples=expected_samples,
             blocks_per_batch=self._pinned_feature_ipc_batch_blocks,
             rollout_group_name=self._rollout_group_name,
+            timeout_seconds=self._pinned_feature_ipc_timeout_seconds,
         )
         self._pinned_rollout_backbone_cache = cache
         self._pinned_backbone_metadata = metadata
@@ -1523,8 +1531,26 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         validate_frozen_backbone(backbone)
         return True
 
-    @Worker.timer("run_training")
+    def _clear_pinned_rollout_backbone_cache(self) -> None:
+        cache = self._pinned_rollout_backbone_cache
+        if cache is not None:
+            cache.clear()
+        self._pinned_rollout_backbone_cache = None
+        self._pinned_backbone_metadata = None
+        rollout_batch = getattr(self, "rollout_batch", None)
+        if isinstance(rollout_batch, dict):
+            forward_inputs = rollout_batch.get("forward_inputs", {})
+            forward_inputs.pop(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None)
+
     def run_training(self) -> None:
+        try:
+            return self._run_training_impl()
+        except Exception:
+            self._clear_pinned_rollout_backbone_cache()
+            raise
+
+    @Worker.timer("run_training")
+    def _run_training_impl(self) -> None:
         """
         Run the training process using the received rollout batch.
         """
@@ -1693,11 +1719,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 f"cpu_gather_s={pinned_stats.cpu_gather_seconds:.6f} "
                 f"h2d_s={pinned_stats.h2d_seconds:.6f}"
             )
-            pinned_rollout_cache.clear()
-            self._pinned_rollout_backbone_cache = None
-            self._pinned_backbone_metadata = None
-            forward_inputs = self.rollout_batch.get("forward_inputs", {})
-            forward_inputs.pop(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None)
+            self._clear_pinned_rollout_backbone_cache()
         if reuse_rollout_feature:
             append_to_dict(
                 metrics,
