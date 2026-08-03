@@ -1898,7 +1898,7 @@ class CollectiveGroup:
         async_op: bool = False,
         borrowed: bool = False,
     ) -> Optional[AsyncWork]:
-        """Handle same device send/recv in _send_tensor_list."""
+        """Handle same-device send/recv, optionally retaining producer storage."""
         if borrowed:
             Worker.torch_platform.current_stream().synchronize()
         tensor_handles = [reduce_tensor(tensor) for tensor in tensors]
@@ -2119,6 +2119,8 @@ class CollectiveGroup:
             piggyback_payload (Optional[Any]): The payload to piggyback on the send operation.
             work (Optional[AsyncFuncWork]): If provided, payload-transfer time is
                 attributed to this work via :meth:`_track_payload_time`.
+            borrowed_ipc (bool): Send same-device CUDA aliases without cloning.
+                The application must retain tensors until receiver acknowledgement.
 
         Returns:
             Optional[AsyncWork]: If async_op is True, returns an AsyncWork object for the asynchronous operation. If async_op is False, returns None.
@@ -2216,6 +2218,7 @@ class CollectiveGroup:
             comm_id (int): The ID for the recv operation.
             work (Optional[AsyncFuncWork]): If provided, payload-transfer time is
                 attributed to this work.
+            borrowed_ipc (bool): Accept same-device producer-owned CUDA aliases.
 
         Returns:
             tuple[List[torch.Tensor], Any]: A tuple of the received list of tensors and the piggyback payload.
