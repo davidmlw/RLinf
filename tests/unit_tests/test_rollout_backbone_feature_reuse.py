@@ -66,6 +66,7 @@ def test_rollout_reuse_captures_raw_backbone_output_before_action_head_mutation(
         image_nums = 1
         backbone = FakeBackbone()
         action_head = MutatingActionHead()
+        capture_rollout_backbone_output = True
 
         @staticmethod
         def prepare_input(normalized_input):
@@ -96,3 +97,70 @@ def test_rollout_reuse_captures_raw_backbone_output_before_action_head_mutation(
     )
     torch.testing.assert_close(forward_inputs[ROLLOUT_BACKBONE_MASK_KEY], raw_mask)
     assert not forward_inputs[ROLLOUT_BACKBONE_FEATURE_KEY].requires_grad
+
+
+def test_rollout_does_not_retain_backbone_output_when_transport_is_disabled():
+    pytest.importorskip("gr00t")
+    from transformers.feature_extraction_utils import BatchFeature
+
+    from rlinf.models.embodiment.gr00t.gr00t_n1d5.gr00t_action_model import (
+        GR00T_N1_5_ForRLActionPrediction,
+    )
+    from rlinf.utils.backbone_cache import (
+        ROLLOUT_BACKBONE_FEATURE_KEY,
+        ROLLOUT_BACKBONE_MASK_KEY,
+    )
+
+    class FakeBackbone:
+        @staticmethod
+        def __call__(backbone_inputs):
+            del backbone_inputs
+            return BatchFeature(
+                data={
+                    "backbone_features": torch.ones(1, 1, 2),
+                    "backbone_attention_mask": torch.ones(1, 1, dtype=torch.bool),
+                }
+            )
+
+    class FakeActionHead:
+        @staticmethod
+        def get_rl_action(backbone_outputs, action_inputs, mode):
+            del backbone_outputs, action_inputs, mode
+            return {}, {
+                "actions": torch.zeros(1, 1),
+                "chains": torch.zeros(1, 1),
+                "denoise_inds": torch.zeros(1, 1, dtype=torch.int64),
+                "prev_logprobs": torch.zeros(1, 1),
+                "prev_values": torch.zeros(1, 1),
+            }
+
+    class FakePolicy:
+        image_nums = 1
+        backbone = FakeBackbone()
+        action_head = FakeActionHead()
+
+        @staticmethod
+        def prepare_input(normalized_input):
+            del normalized_input
+            return BatchFeature(data={}), BatchFeature(data={})
+
+        @staticmethod
+        def validate_data(action_head_outputs, backbone_outputs, is_training):
+            del action_head_outputs, backbone_outputs, is_training
+
+    normalized_input = {
+        "state": torch.zeros(1, 1),
+        "state_mask": torch.ones(1, 1),
+        "eagle_input_ids": torch.ones(1, 1, dtype=torch.int64),
+        "eagle_attention_mask": torch.ones(1, 1, dtype=torch.int64),
+        "eagle_pixel_values": torch.ones(1, 1, 1),
+        "eagle_image_sizes": torch.ones(1, 1, 1),
+        "embodiment_id": torch.zeros(1, dtype=torch.int64),
+    }
+
+    _, result = GR00T_N1_5_ForRLActionPrediction._get_rl_action(
+        FakePolicy(), normalized_input
+    )
+
+    assert ROLLOUT_BACKBONE_FEATURE_KEY not in result["forward_inputs"]
+    assert ROLLOUT_BACKBONE_MASK_KEY not in result["forward_inputs"]

@@ -155,11 +155,11 @@ class MultiStepRolloutWorker(Worker):
         self._pinned_feature_ipc_enabled = is_rollout_backbone_ipc_transport(
             feature_transport
         )
-        if self._pinned_feature_ipc_enabled and not self.model_cfg.get(
-            "reuse_rollout_backbone_features", False
-        ):
+        if self._pinned_feature_ipc_enabled and SupportedModel(
+            self.model_cfg.model_type
+        ) != SupportedModel.GR00T:
             raise ValueError(
-                "pinned rollout backbone transport requires reuse_rollout_backbone_features"
+                "pinned rollout backbone transport currently supports GR00T N1.5 only"
             )
         if self._pinned_feature_ipc_enabled and (
             self.placement.get_world_size("rollout")
@@ -436,6 +436,9 @@ class MultiStepRolloutWorker(Worker):
             rollout_model_config.model_path = self.cfg.rollout.model.model_path
 
         self.hf_model: BasePolicy = get_model(rollout_model_config)
+        self.hf_model.capture_rollout_backbone_output = (
+            self._pinned_feature_ipc_enabled
+        )
 
         if self.cfg.runner.get("ckpt_path", None):
             model_dict = torch.load(self.cfg.runner.ckpt_path)

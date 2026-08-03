@@ -691,17 +691,18 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         backbone_inputs, action_inputs = self.prepare_input(normalized_input)
         # Because the behavior of backbones remains the same for training and inference, we can use `forward` for backbones.
         backbone_outputs = self.backbone(backbone_inputs)
-        # process_backbone_output() replaces backbone_features in this BatchFeature
-        # with trainable action-head transforms. Snapshot the raw frozen-backbone
-        # tensors before get_rl_action() mutates the mapping.
-        rollout_backbone_output = {
-            ROLLOUT_BACKBONE_FEATURE_KEY: backbone_outputs[
-                "backbone_features"
-            ].detach(),
-            ROLLOUT_BACKBONE_MASK_KEY: backbone_outputs[
-                "backbone_attention_mask"
-            ].detach(),
-        }
+        rollout_backbone_output = None
+        if getattr(self, "capture_rollout_backbone_output", False):
+            # The action head mutates backbone_outputs, so retain the raw frozen
+            # tensors before entering it. Disabled runs do not extend their lifetime.
+            rollout_backbone_output = {
+                ROLLOUT_BACKBONE_FEATURE_KEY: backbone_outputs[
+                    "backbone_features"
+                ].detach(),
+                ROLLOUT_BACKBONE_MASK_KEY: backbone_outputs[
+                    "backbone_attention_mask"
+                ].detach(),
+            }
         action_head_outputs, rlinf_outputs = self.action_head.get_rl_action(
             backbone_outputs, action_inputs, mode=mode
         )
@@ -726,12 +727,8 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
             bsize, self.image_nums, *normalized_input["eagle_image_sizes"].shape[1:]
         )
 
-        # W62: expose the frozen backbone feature so Actor can reuse this exact
-        # behavior-policy conditioning instead of recomputing self.backbone(...).
-        # Detached; rides forward_inputs' per-sample merge/split machinery. The
-        # rollout worker drops these keys again when reuse is disabled, so the
-        # D2H/transport cost is only paid when the feature is actually consumed.
-        forward_inputs.update(rollout_backbone_output)
+        if rollout_backbone_output is not None:
+            forward_inputs.update(rollout_backbone_output)
 
         result = {
             "prev_logprobs": rlinf_outputs["prev_logprobs"],

@@ -1481,26 +1481,21 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             )
         return loss
 
-    def _reuse_rollout_backbone_enabled(self) -> bool:
+    def _validate_pinned_backbone_contract(self) -> bool:
         """Validate the pinned Rollout feature-reuse contract."""
         if not self._pinned_feature_ipc_enabled:
             return False
-        if not self.cfg.actor.model.get("reuse_rollout_backbone_features", False):
-            raise ValueError(
-                "pinned rollout backbone transport requires "
-                "reuse_rollout_backbone_features=true"
-            )
         if SupportedModel(self.cfg.actor.model.model_type) != SupportedModel.GR00T:
             raise ValueError(
-                "reuse_rollout_backbone_features currently supports GR00T N1.5 only"
+                "pinned rollout backbone transport currently supports GR00T N1.5 only"
             )
         if self.enable_sft_co_train:
             raise ValueError(
-                "reuse_rollout_backbone_features is incompatible with SFT co-training"
+                "pinned rollout backbone transport is incompatible with SFT co-training"
             )
         if not self.cfg.actor.model.rl_head_config.get("disable_dropout", False):
             raise ValueError(
-                "reuse_rollout_backbone_features requires disable_dropout=true"
+                "pinned rollout backbone transport requires disable_dropout=true"
             )
         model = self.model
         while hasattr(model, "module"):
@@ -1541,7 +1536,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             self.load_optimizer(self.device)
 
         self.model.train()
-        reuse_rollout_feature = self._reuse_rollout_backbone_enabled()
+        reuse_rollout_feature = self._validate_pinned_backbone_contract()
         pinned_rollout_cache = self._pinned_rollout_backbone_cache
         if self._pinned_feature_ipc_enabled and pinned_rollout_cache is None:
             raise RuntimeError("pinned backbone transport is enabled without a cache")
