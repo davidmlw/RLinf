@@ -43,6 +43,55 @@ def rollout_backbone_channel_key(actor_rank: int) -> str:
     return f"rollout_backbone_actor_rank_{int(actor_rank)}"
 
 
+def rollout_backbone_producer_rank(sample_ids: torch.Tensor) -> int:
+    """Return the single Rollout rank encoded by a sample-ID tensor."""
+    flat_ids = sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu")
+    if flat_ids.numel() == 0 or int(flat_ids.min().item()) < 0:
+        raise ValueError(
+            "rollout backbone sample IDs must be non-empty and non-negative"
+        )
+    producer_ranks = torch.div(
+        flat_ids,
+        ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
+        rounding_mode="floor",
+    )
+    unique_ranks, counts = producer_ranks.unique(return_counts=True)
+    if unique_ranks.numel() != 1:
+        rank_counts = {
+            int(rank): int(count)
+            for rank, count in zip(unique_ranks.tolist(), counts.tolist())
+        }
+        raise ValueError(
+            "one trajectory spans multiple Rollout feature producers: "
+            f"counts={rank_counts}"
+        )
+    return int(unique_ranks.item())
+
+
+def validate_rollout_backbone_sample_ids(
+    sample_ids: torch.Tensor,
+    *,
+    producer_rank: int,
+    total_samples: int,
+) -> None:
+    """Require exactly one occurrence of every sample in a producer namespace."""
+    if producer_rank < 0 or total_samples <= 0:
+        raise ValueError("invalid rollout backbone sample-ID contract")
+    flat_ids = sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu")
+    sample_id_base = producer_rank * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE
+    expected_ids = torch.arange(
+        sample_id_base,
+        sample_id_base + total_samples,
+        dtype=torch.int64,
+    )
+    if flat_ids.numel() != total_samples or not torch.equal(
+        flat_ids.sort().values, expected_ids
+    ):
+        raise ValueError(
+            "trajectory sample IDs do not form the pinned backbone cache"
+        )
+
+
 def filter_rollout_backbone_transport(
     forward_inputs: dict[str, torch.Tensor],
     *,

@@ -52,6 +52,8 @@ from rlinf.utils.backbone_cache import (
     ROLLOUT_BACKBONE_TRANSPORT_KEY,
     is_rollout_backbone_ipc_transport,
     rollout_backbone_channel_key,
+    rollout_backbone_producer_rank,
+    validate_rollout_backbone_sample_ids,
     validate_frozen_backbone,
 )
 from rlinf.utils.data_iter_utils import (
@@ -1221,23 +1223,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         sample_ids = forward_inputs.get(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY)
         if sample_ids is None:
             raise RuntimeError("trajectory is missing pinned backbone sample IDs")
-        flat_ids = sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu")
-        producer_ranks = torch.div(
-            flat_ids,
-            ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
-            rounding_mode="floor",
-        )
-        unique_ranks = producer_ranks.unique().tolist()
-        if len(unique_ranks) != 1:
-            counts = {
-                int(rank): int((producer_ranks == rank).sum().item())
-                for rank in unique_ranks
-            }
-            raise RuntimeError(
-                "one Actor trajectory spans multiple Rollout producers; "
-                f"counts={counts}"
-            )
-        return int(unique_ranks[0])
+        return rollout_backbone_producer_rank(sample_ids)
 
     @Worker.timer("actor/feature_stream_recv")
     async def recv_rollout_backbone_feature_stream(self) -> dict[str, float]:
@@ -1291,19 +1277,14 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         sample_ids = forward_inputs.get(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY)
         if sample_ids is None:
             raise RuntimeError("trajectory is missing pinned backbone sample IDs")
-        flat_ids = sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu")
         sample_id_base = int(metadata["sample_id_base"])
-        expected_ids = torch.arange(
-            sample_id_base,
-            sample_id_base + cache.samples,
-            dtype=torch.int64,
+        if sample_id_base != source_rank * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE:
+            raise RuntimeError("pinned backbone sample-ID namespace is invalid")
+        validate_rollout_backbone_sample_ids(
+            sample_ids,
+            producer_rank=source_rank,
+            total_samples=cache.samples,
         )
-        if flat_ids.numel() != cache.samples or not torch.equal(
-            flat_ids.sort().values, expected_ids
-        ):
-            raise RuntimeError(
-                "trajectory sample IDs do not form the pinned backbone cache"
-            )
         self.log_info(
             "PINNED_FEATURE_ROUTE_VALID "
             f"rank={self._rank} source={source_rank} samples={cache.samples}"

@@ -38,11 +38,11 @@ from rlinf.envs.utils import get_env_attr
 from rlinf.envs.wrappers import RecordVideo
 from rlinf.scheduler import Channel, Cluster, CommMapper, Worker
 from rlinf.utils.backbone_cache import (
-    ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
     ROLLOUT_BACKBONE_SAMPLE_IDS_KEY,
     ROLLOUT_BACKBONE_TRANSPORT_KEY,
     is_rollout_backbone_ipc_transport,
     rollout_backbone_channel_key,
+    rollout_backbone_producer_rank,
 )
 from rlinf.utils.data_iter_utils import split_list
 from rlinf.utils.distributed import masked_stats, normalize_from_stats
@@ -1006,16 +1006,7 @@ class EnvWorker(Worker):
                     raise RuntimeError(
                         "pinned backbone trajectory is missing sample IDs"
                     )
-                producer_ranks = torch.div(
-                    sample_ids.reshape(-1).to(dtype=torch.int64, device="cpu"),
-                    ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
-                    rounding_mode="floor",
-                ).unique()
-                if producer_ranks.numel() != 1:
-                    raise RuntimeError(
-                        "one Env trajectory spans multiple Rollout producers"
-                    )
-                actor_rank = int(producer_ranks.item())
+                actor_rank = rollout_backbone_producer_rank(sample_ids)
                 channel.put(
                     trajectory,
                     key=rollout_backbone_channel_key(actor_rank),

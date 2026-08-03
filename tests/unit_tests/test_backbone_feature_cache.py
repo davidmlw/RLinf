@@ -20,10 +20,59 @@ from rlinf.utils.backbone_cache import (
     ROLLOUT_BACKBONE_FEATURE_KEY,
     ROLLOUT_BACKBONE_INPUT_KEYS,
     ROLLOUT_BACKBONE_MASK_KEY,
+    ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
     filter_rollout_backbone_transport,
+    rollout_backbone_producer_rank,
+    validate_rollout_backbone_sample_ids,
     validate_frozen_backbone,
 )
 from rlinf.utils.pinned_rollout_cache import PinnedRolloutBackboneCache
+
+
+def test_sample_ids_encode_one_rollout_producer():
+    base = 3 * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE
+    sample_ids = torch.tensor([[base + 2, base], [base + 1, base + 3]])
+
+    assert rollout_backbone_producer_rank(sample_ids) == 3
+
+
+@pytest.mark.parametrize(
+    "sample_ids",
+    [
+        torch.tensor([], dtype=torch.int64),
+        torch.tensor([-1]),
+        torch.tensor([0, ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE]),
+    ],
+)
+def test_sample_ids_reject_invalid_producer_namespaces(sample_ids):
+    with pytest.raises(ValueError):
+        rollout_backbone_producer_rank(sample_ids)
+
+
+def test_sample_ids_form_complete_permuted_cache_namespace():
+    base = 2 * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE
+    validate_rollout_backbone_sample_ids(
+        torch.tensor([base + 2, base, base + 3, base + 1]),
+        producer_rank=2,
+        total_samples=4,
+    )
+
+
+@pytest.mark.parametrize(
+    "sample_ids",
+    [
+        torch.tensor([0, 1, 2]),
+        torch.tensor([0, 1, 1, 3]),
+        torch.tensor([0, 1, 2, ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE]),
+    ],
+)
+def test_sample_ids_reject_incomplete_or_mixed_cache(sample_ids):
+    with pytest.raises(ValueError, match="do not form"):
+        validate_rollout_backbone_sample_ids(
+            sample_ids,
+            producer_rank=0,
+            total_samples=4,
+        )
 
 
 def test_frozen_eval_backbone_is_required():
