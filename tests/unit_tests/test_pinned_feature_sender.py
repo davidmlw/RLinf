@@ -54,6 +54,7 @@ class _FakeSender:
         self.sent = []
         self.logs = []
         self.ack = ack
+        self._borrowed_feature_verify_trajectory = False
         self._pinned_feature_ipc_timeout_seconds = 0.05
         self._borrowed_feature_tensors = [
             torch.ones(2, 3),
