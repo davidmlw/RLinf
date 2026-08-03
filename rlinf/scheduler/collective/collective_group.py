@@ -298,11 +298,25 @@ class CollectiveGroup:
 
         This function calls _atomic_send in a way so that it can be chained with previous send operations in the same channel.
         Otherwise, async send operations in the same channel may become out-of-order and mismatch with recv.
+
+        ``borrowed_ipc`` returns same-device CUDA views at the receiver. The
+        caller must retain the source tensors until an application-level
+        acknowledgement confirms that the receiver has finished with the views.
         """
+        object_type, tensor_data = self._get_object_info(object)
+        if borrowed_ipc and object_type not in (
+            CollectiveGroup.TENSOR,
+            CollectiveGroup.TENSOR_LIST,
+        ):
+            raise TypeError("borrowed IPC only supports a tensor or tensor list")
+        if borrowed_ipc and (
+            tensor_data.cpu_tensors or not tensor_data.accel_tensors
+        ):
+            raise ValueError("borrowed IPC only supports CUDA tensor payloads")
+
         # Only iter the channel here and pass the channel id along the way.
         # Because the _atomic_send and all the send in the way may be called asynchronously while the channel_id in the class may be different.
         send_comm_id = next(self._send_comm_id_iter)
-        object_type, tensor_data = self._get_object_info(object)
 
         # Create AsyncFuncWork for the send operation
         send_work = AsyncFuncWork(
@@ -2227,17 +2241,13 @@ class CollectiveGroup:
         pb_data = metadata["pb"]
         cpu_tensor_mask = metadata["cpu_tensor_mask"]
         sender_borrowed_ipc = bool(metadata.get("borrowed_ipc", False))
-        if sender_borrowed_ipc != borrowed_ipc:
-            raise RuntimeError(
-                "borrowed IPC mode must be enabled explicitly on both sender and receiver"
-            )
-        if borrowed_ipc and any(cpu_tensor_mask):
-            raise RuntimeError("borrowed IPC only supports CUDA tensor payloads")
+        mode_mismatch = sender_borrowed_ipc != borrowed_ipc
+        invalid_borrowed_payload = sender_borrowed_ipc and any(cpu_tensor_mask)
         has_accel_tensor = any(not m for m in cpu_tensor_mask)
 
         tensors = [
             None
-            if borrowed_ipc and not is_cpu
+            if sender_borrowed_ipc and not is_cpu
             else torch.empty(
                 shape,
                 dtype=dtype,
@@ -2284,7 +2294,7 @@ class CollectiveGroup:
                         tensors[idx] = tensor
                 elif check_cuda_device_result == 1:
                     received_accel_tensors = self._recv_tensor_list_via_ipc(
-                        comm_id, borrowed=borrowed_ipc
+                        comm_id, borrowed=sender_borrowed_ipc
                     )
                     for (idx, _, _), tensor in zip(
                         accel_entries, received_accel_tensors
@@ -2293,6 +2303,16 @@ class CollectiveGroup:
                 else:
                     for _, tensor, _ in accel_entries:
                         self._recv(tensor, CollectiveGroup.ACCEL, comm_id)
+
+        if mode_mismatch or invalid_borrowed_payload:
+            if sender_borrowed_ipc:
+                tensors.clear()
+                Worker.torch_platform.ipc_collect()
+            if mode_mismatch:
+                raise RuntimeError(
+                    "borrowed IPC mode must be enabled explicitly on both sender and receiver"
+                )
+            raise RuntimeError("borrowed IPC only supports CUDA tensor payloads")
         return tensors, pb_data
 
     def _send_tensor_dict(
