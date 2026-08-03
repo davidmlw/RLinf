@@ -110,8 +110,8 @@ class EnvWorker(Worker):
         self.model_cfg = (
             self.cfg.rollout.model if self.only_eval else self.cfg.actor.model
         )
-        self._borrowed_feature_ipc_enabled = is_rollout_backbone_ipc_transport(
-            self.model_cfg.get(ROLLOUT_BACKBONE_TRANSPORT_KEY, "trajectory")
+        self._pinned_feature_ipc_enabled = is_rollout_backbone_ipc_transport(
+            self.model_cfg.get(ROLLOUT_BACKBONE_TRANSPORT_KEY)
         )
         train_env_cfg = self.cfg.env.get("train", None)
         eval_env_cfg = self.cfg.env.get("eval", None)
@@ -168,7 +168,7 @@ class EnvWorker(Worker):
         self.actor_split_num = (
             1 if not self.enable_train else self.get_actor_split_num()
         )
-        if self._borrowed_feature_ipc_enabled and self.actor_split_num != 1:
+        if self._pinned_feature_ipc_enabled and self.actor_split_num != 1:
             raise ValueError(
                 "borrowed rollout backbone IPC currently requires actor_split_num=1"
             )
@@ -998,7 +998,7 @@ class EnvWorker(Worker):
         )
         rollout_result.clear()
         for trajectory in trajectories:
-            if self._borrowed_feature_ipc_enabled:
+            if self._pinned_feature_ipc_enabled:
                 sample_ids = trajectory.forward_inputs.get(
                     ROLLOUT_BACKBONE_SAMPLE_IDS_KEY
                 )

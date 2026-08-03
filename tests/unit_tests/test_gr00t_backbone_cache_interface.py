@@ -18,15 +18,13 @@ import pytest
 import torch
 
 
-def test_gr00t_fresh_and_cached_backbone_outputs_match():
+def test_gr00t_fresh_and_precomputed_backbone_outputs_match():
     pytest.importorskip("gr00t")
     from transformers.feature_extraction_utils import BatchFeature
 
     from rlinf.models.embodiment.gr00t.gr00t_n1d5.gr00t_action_model import (
         GR00T_N1_5_ForRLActionPrediction,
     )
-    from rlinf.utils.backbone_cache import BACKBONE_CACHE_OUTPUT_KEY
-
     class FakeBackbone:
         def __init__(self):
             self.calls = 0
@@ -95,9 +93,10 @@ def test_gr00t_fresh_and_cached_backbone_outputs_match():
         FakePolicy(),
         forward_inputs=forward_inputs,
         prev_logprobs=prev_logprobs,
-        return_backbone_cache=True,
     )
-    raw_cache = fresh.pop(BACKBONE_CACHE_OUTPUT_KEY)
+    raw_backbone = {
+        "backbone_features": (forward_inputs["state"] * 2).detach(),
+    }
 
     policy = FakePolicy()
     feature_only_inputs = {
@@ -109,44 +108,11 @@ def test_gr00t_fresh_and_cached_backbone_outputs_match():
         policy,
         forward_inputs=feature_only_inputs,
         prev_logprobs=prev_logprobs,
-        backbone_cache=raw_cache,
+        backbone_cache=raw_backbone,
     )
 
     assert policy.backbone.calls == 0
     assert all(not key.startswith("eagle_") for key in feature_only_inputs)
-    assert not raw_cache["backbone_features"].requires_grad
+    assert not raw_backbone["backbone_features"].requires_grad
     for key in ("logprobs", "prev_logprobs", "values"):
         torch.testing.assert_close(cached[key], fresh[key])
-
-
-def test_gr00t_cache_cannot_be_consumed_and_returned_together():
-    pytest.importorskip("gr00t")
-    from transformers.feature_extraction_utils import BatchFeature
-
-    from rlinf.models.embodiment.gr00t.gr00t_n1d5.gr00t_action_model import (
-        GR00T_N1_5_ForRLActionPrediction,
-    )
-
-    class FakePolicy:
-        @staticmethod
-        def prepare_input(normalized_input):
-            del normalized_input
-            return BatchFeature(data={}), BatchFeature(data={})
-
-    forward_inputs = {
-        "state": torch.zeros(1, 1),
-        "state_mask": torch.zeros(1, 1),
-        "eagle_input_ids": torch.zeros(1, 1, dtype=torch.int64),
-        "eagle_attention_mask": torch.zeros(1, 1, dtype=torch.int64),
-        "eagle_pixel_values": torch.zeros(1, 1, 1),
-        "eagle_image_sizes": torch.zeros(1, 1, 1),
-        "embodiment_id": torch.zeros(1, dtype=torch.int64),
-    }
-
-    with pytest.raises(ValueError, match="consuming"):
-        GR00T_N1_5_ForRLActionPrediction.default_forward(
-            FakePolicy(),
-            forward_inputs=forward_inputs,
-            backbone_cache={"features": torch.zeros(1)},
-            return_backbone_cache=True,
-        )

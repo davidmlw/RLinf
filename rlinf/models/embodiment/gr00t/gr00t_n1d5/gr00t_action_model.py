@@ -43,7 +43,6 @@ from rlinf.models.embodiment.gr00t.utils import (
 from rlinf.models.embodiment.modules.explore_noise_net import ExploreNoiseNet
 from rlinf.models.embodiment.modules.value_head import ValueHead
 from rlinf.utils.backbone_cache import (
-    BACKBONE_CACHE_OUTPUT_KEY,
     ROLLOUT_BACKBONE_FEATURE_KEY,
     ROLLOUT_BACKBONE_MASK_KEY,
 )
@@ -538,13 +537,8 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         compute_values: bool = True,
         use_cache: bool = False,
         backbone_cache: Optional[Mapping[str, torch.Tensor]] = None,
-        return_backbone_cache: bool = False,
         **kwargs,
     ) -> dict[str, Any]:
-        if backbone_cache is not None and return_backbone_cache:
-            raise ValueError("cannot return a backbone cache while consuming one")
-
-        raw_backbone_cache = None
         if backbone_cache is None:
             normalized_input = {
                 "state": forward_inputs["state"],
@@ -561,10 +555,6 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
             }
             backbone_inputs, action_inputs = self.prepare_input(normalized_input)
             backbone_outputs = self.backbone(backbone_inputs)
-            if return_backbone_cache:
-                raw_backbone_cache = {
-                    name: value.detach() for name, value in backbone_outputs.items()
-                }
         else:
             action_inputs = self._prepare_action_head_input(forward_inputs)
             backbone_outputs = BatchFeature(data=dict(backbone_cache))
@@ -601,15 +591,12 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
             ]
         value_t = value_t.mean(dim=-1, keepdim=False)
 
-        result = {
+        return {
             "logprobs": log_probs.float(),
             "prev_logprobs": prev_logprobs.float(),
             "values": value_t,
             "entropy": None,
         }
-        if raw_backbone_cache is not None:
-            result[BACKBONE_CACHE_OUTPUT_KEY] = raw_backbone_cache
-        return result
 
     @torch.no_grad()
     def predict_action_batch(

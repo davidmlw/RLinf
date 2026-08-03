@@ -25,7 +25,6 @@ from omegaconf.dictconfig import DictConfig
 from rlinf.scheduler import Channel
 from rlinf.scheduler import WorkerGroupFuncResult as Handle
 from rlinf.utils.backbone_cache import (
-    ROLLOUT_BACKBONE_BORROWED_IPC_PINNED,
     ROLLOUT_BACKBONE_TRANSPORT_KEY,
     is_rollout_backbone_ipc_transport,
 )
@@ -79,14 +78,11 @@ class EmbodiedRunner:
         self.overlap_env_bootstrap = bool(
             self.cfg.runner.get("overlap_env_bootstrap", False)
         )
-        feature_transport = self.cfg.actor.model.get(
-            ROLLOUT_BACKBONE_TRANSPORT_KEY, "trajectory"
+        feature_transport = self.cfg.actor.model.get(ROLLOUT_BACKBONE_TRANSPORT_KEY)
+        self.pinned_feature_ipc = is_rollout_backbone_ipc_transport(
+            feature_transport
         )
-        self.borrowed_feature_ipc = is_rollout_backbone_ipc_transport(feature_transport)
-        self.pinned_feature_ipc = (
-            feature_transport == ROLLOUT_BACKBONE_BORROWED_IPC_PINNED
-        )
-        if self.borrowed_feature_ipc and self.cfg.rollout.pipeline_stage_num != 1:
+        if self.pinned_feature_ipc and self.cfg.rollout.pipeline_stage_num != 1:
             raise ValueError(
                 "borrowed rollout backbone IPC currently requires pipeline_stage_num=1"
             )
@@ -549,7 +545,7 @@ class EmbodiedRunner:
                         self.rollout.finish_rollout_backbone_feature_stream().wait()
                     if self.reward is not None:
                         reward_handle.wait()
-                    if self.borrowed_feature_ipc:
+                    if self.pinned_feature_ipc:
                         source_ranks = [
                             int(rank)
                             for rank in self.actor.get_rollout_backbone_feature_source_rank().wait()
@@ -561,12 +557,6 @@ class EmbodiedRunner:
                         feature_recv_handle: Handle = (
                             self.actor.recv_rollout_backbone_features(source_ranks)
                         )
-                        feature_send_handle: Handle = (
-                            self.rollout.send_rollout_backbone_features_to_actor(
-                                source_ranks
-                            )
-                        )
-                        feature_send_handle.wait()
                         feature_recv_handle.wait()
 
                 # compute advantages and returns.
@@ -584,15 +574,6 @@ class EmbodiedRunner:
                     )
 
                 actor_training_metrics = actor_training_handle.wait()
-                if self.borrowed_feature_ipc:
-                    feature_release_recv_handle: Handle = (
-                        self.rollout.wait_rollout_backbone_feature_release()
-                    )
-                    feature_release_send_handle: Handle = (
-                        self.actor.release_rollout_backbone_features()
-                    )
-                    feature_release_send_handle.wait()
-                    feature_release_recv_handle.wait()
                 if env_bootstrap_handle is not None:
                     env_bootstrap_handle.wait()
 

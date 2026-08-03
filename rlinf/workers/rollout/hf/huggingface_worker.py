@@ -146,42 +146,22 @@ class MultiStepRolloutWorker(Worker):
             }
         self.rollout_queue_size = self.cfg.rollout.get("rollout_queue_size", 0)
 
-        capacity_probe = self.cfg.rollout.get("gpu_feature_capacity_probe", {})
-        self._gpu_feature_capacity_probe_enabled = bool(
-            capacity_probe.get("enabled", False)
-        )
-        self._gpu_feature_capacity_probe_target_samples = int(
-            capacity_probe.get("target_samples_per_rank", 0)
-        )
-        if (
-            self._gpu_feature_capacity_probe_enabled
-            and self._gpu_feature_capacity_probe_target_samples <= 0
-        ):
+        feature_transport = self.model_cfg.get(ROLLOUT_BACKBONE_TRANSPORT_KEY)
+        if feature_transport not in (None, ROLLOUT_BACKBONE_BORROWED_IPC_PINNED):
             raise ValueError(
-                "rollout.gpu_feature_capacity_probe.target_samples_per_rank "
-                "must be positive when the probe is enabled"
+                "unsupported rollout backbone feature transport: "
+                f"{feature_transport}"
             )
-        self._gpu_feature_capacity_probe_tensors: list[torch.Tensor] = []
-        self._gpu_feature_capacity_probe_samples = 0
-        self._gpu_feature_capacity_probe_bytes = 0
-        self._gpu_feature_capacity_probe_milestones: set[int] = set()
-
-        feature_transport = self.model_cfg.get(
-            ROLLOUT_BACKBONE_TRANSPORT_KEY, "trajectory"
-        )
-        self._borrowed_feature_ipc_enabled = is_rollout_backbone_ipc_transport(
+        self._pinned_feature_ipc_enabled = is_rollout_backbone_ipc_transport(
             feature_transport
         )
-        self._pinned_feature_ipc_enabled = (
-            feature_transport == ROLLOUT_BACKBONE_BORROWED_IPC_PINNED
-        )
-        if self._borrowed_feature_ipc_enabled and not self.model_cfg.get(
+        if self._pinned_feature_ipc_enabled and not self.model_cfg.get(
             "reuse_rollout_backbone_features", False
         ):
             raise ValueError(
                 "borrowed rollout backbone IPC requires reuse_rollout_backbone_features"
             )
-        if self._borrowed_feature_ipc_enabled and (
+        if self._pinned_feature_ipc_enabled and (
             self.placement.get_world_size("rollout")
             != self.placement.get_world_size("actor")
         ):
@@ -210,74 +190,8 @@ class MultiStepRolloutWorker(Worker):
         self._borrowed_stream_bytes = 0
         self._borrowed_stream_wait_seconds = 0.0
 
-    def _capacity_probe_memory(self, label: str) -> None:
-        allocated = self.torch_platform.memory_allocated(self.device)
-        reserved = self.torch_platform.memory_reserved(self.device)
-        peak_allocated = self.torch_platform.max_memory_allocated(self.device)
-        peak_reserved = self.torch_platform.max_memory_reserved(self.device)
-        self.log_info(
-            "W63_GPU_CAPACITY "
-            f"rank={self._rank} label={label} "
-            f"samples={self._gpu_feature_capacity_probe_samples} "
-            f"feature_bytes={self._gpu_feature_capacity_probe_bytes} "
-            f"allocated_bytes={allocated} reserved_bytes={reserved} "
-            f"peak_allocated_bytes={peak_allocated} "
-            f"peak_reserved_bytes={peak_reserved}"
-        )
-
-    def _reset_gpu_feature_capacity_probe(self) -> None:
-        if not self._gpu_feature_capacity_probe_enabled:
-            return
-        if self._gpu_feature_capacity_probe_tensors:
-            self._capacity_probe_memory("before_release")
-        self._gpu_feature_capacity_probe_tensors.clear()
-        self._gpu_feature_capacity_probe_samples = 0
-        self._gpu_feature_capacity_probe_bytes = 0
-        self._gpu_feature_capacity_probe_milestones.clear()
-        self.torch_platform.empty_cache()
-        self.torch_platform.reset_peak_memory_stats(self.device)
-        self._capacity_probe_memory("after_release")
-
-    def _retain_gpu_feature_capacity_probe(
-        self, forward_inputs: dict[str, torch.Tensor]
-    ) -> None:
-        if not self._gpu_feature_capacity_probe_enabled:
-            return
-        if (
-            self._gpu_feature_capacity_probe_samples
-            >= self._gpu_feature_capacity_probe_target_samples
-        ):
-            return
-
-        feature = forward_inputs.get(ROLLOUT_BACKBONE_FEATURE_KEY)
-        mask = forward_inputs.get(ROLLOUT_BACKBONE_MASK_KEY)
-        if feature is None or mask is None:
-            raise RuntimeError("W63 capacity probe requires complete rollout features")
-        if feature.device.type != "cuda" or mask.device.type != "cuda":
-            raise RuntimeError(
-                "W63 capacity probe must retain the producer CUDA allocations"
-            )
-
-        self._gpu_feature_capacity_probe_tensors.extend(
-            (feature.detach(), mask.detach())
-        )
-        self._gpu_feature_capacity_probe_samples += int(feature.shape[0])
-        self._gpu_feature_capacity_probe_bytes += sum(
-            tensor.numel() * tensor.element_size() for tensor in (feature, mask)
-        )
-
-        target = self._gpu_feature_capacity_probe_target_samples
-        for percent in (25, 50, 75, 100):
-            threshold = (target * percent + 99) // 100
-            if (
-                percent not in self._gpu_feature_capacity_probe_milestones
-                and self._gpu_feature_capacity_probe_samples >= threshold
-            ):
-                self._gpu_feature_capacity_probe_milestones.add(percent)
-                self._capacity_probe_memory(f"retained_{percent}pct")
-
     def _begin_borrowed_feature_lease(self) -> None:
-        if not self._borrowed_feature_ipc_enabled:
+        if not self._pinned_feature_ipc_enabled:
             return
         if (
             self._borrowed_feature_tensors
@@ -293,26 +207,25 @@ class MultiStepRolloutWorker(Worker):
         self._borrowed_stream_batches = 0
         self._borrowed_stream_bytes = 0
         self._borrowed_stream_wait_seconds = 0.0
-        if self._pinned_feature_ipc_enabled:
-            self._borrowed_feature_lease_seq += 1
-            self._borrowed_feature_active_lease = (
-                f"w63-r{self._rank}-l{self._borrowed_feature_lease_seq}"
-            )
-            self._borrowed_feature_consumer_rank = self._rank
-            self._borrowed_stream_expected_blocks = int(
-                self.cfg.env.train.rollout_epoch
-                * self.cfg.env.train.max_steps_per_rollout_epoch
-            )
-            self._borrowed_stream_expected_samples = int(
-                self._borrowed_stream_expected_blocks
-                * self.cfg.env.train.total_num_envs
-                // self._world_size
-            )
-            self._borrowed_stream_expected_batches = (
-                self._borrowed_stream_expected_blocks
-                + self._pinned_feature_ipc_batch_blocks
-                - 1
-            ) // self._pinned_feature_ipc_batch_blocks
+        self._borrowed_feature_lease_seq += 1
+        self._borrowed_feature_active_lease = (
+            f"w63-r{self._rank}-l{self._borrowed_feature_lease_seq}"
+        )
+        self._borrowed_feature_consumer_rank = self._rank
+        self._borrowed_stream_expected_blocks = int(
+            self.cfg.env.train.rollout_epoch
+            * self.cfg.env.train.max_steps_per_rollout_epoch
+        )
+        self._borrowed_stream_expected_samples = int(
+            self._borrowed_stream_expected_blocks
+            * self.cfg.env.train.total_num_envs
+            // self._world_size
+        )
+        self._borrowed_stream_expected_batches = (
+            self._borrowed_stream_expected_blocks
+            + self._pinned_feature_ipc_batch_blocks
+            - 1
+        ) // self._pinned_feature_ipc_batch_blocks
 
     def _retain_borrowed_feature_block(
         self, forward_inputs: dict[str, torch.Tensor]
@@ -466,99 +379,6 @@ class MultiStepRolloutWorker(Worker):
             "rollout/pinned_feature_batches": float(self._borrowed_stream_batches),
             "rollout/pinned_feature_wait_seconds": self._borrowed_stream_wait_seconds,
         }
-
-    @Worker.timer("rollout/feature_send")
-    def send_rollout_backbone_features_to_actor(
-        self, source_ranks: list[int]
-    ) -> dict[str, float]:
-        if not self._borrowed_feature_ipc_enabled:
-            return {}
-        if self._pinned_feature_ipc_enabled:
-            return {}
-        if not self._borrowed_feature_tensors or self._borrowed_feature_samples <= 0:
-            raise RuntimeError("rollout produced no backbone feature lease")
-        if len(source_ranks) != self._world_size or sorted(source_ranks) != list(
-            range(self._world_size)
-        ):
-            raise RuntimeError(
-                f"borrowed backbone route must be a rank permutation: {source_ranks}"
-            )
-        consumer_rank = source_ranks.index(self._rank)
-        if self._borrowed_feature_active_lease is not None:
-            raise RuntimeError("borrowed backbone lease is already active")
-
-        self._borrowed_feature_lease_seq += 1
-        lease_id = f"w63-r{self._rank}-l{self._borrowed_feature_lease_seq}"
-        byte_count = sum(
-            tensor.numel() * tensor.element_size()
-            for tensor in self._borrowed_feature_tensors
-        )
-        metadata = {
-            "schema": 1,
-            "lease_id": lease_id,
-            "producer_rank": self._rank,
-            "consumer_rank": consumer_rank,
-            "model_version": int(self.version),
-            "sample_id_base": self._rank * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
-            "samples": self._borrowed_feature_samples,
-            "block_sizes": list(self._borrowed_feature_block_sizes),
-            "bytes": byte_count,
-            "verify_trajectory": self._borrowed_feature_verify_trajectory,
-        }
-        self.send(
-            self._borrowed_feature_tensors,
-            dst_group_name=self.actor_group_name,
-            dst_rank=consumer_rank,
-            piggyback_payload=metadata,
-            borrowed_ipc=True,
-        )
-        self._borrowed_feature_active_lease = lease_id
-        self._borrowed_feature_consumer_rank = consumer_rank
-        self.log_info(
-            "W63_BORROWED_IPC_SEND "
-            f"rank={self._rank} consumer={consumer_rank} lease={lease_id} "
-            f"samples={self._borrowed_feature_samples} "
-            f"blocks={len(self._borrowed_feature_block_sizes)} bytes={byte_count}"
-        )
-        return {
-            "rollout/borrowed_feature_bytes": float(byte_count),
-            "rollout/borrowed_feature_samples": float(self._borrowed_feature_samples),
-        }
-
-    @Worker.timer("rollout/feature_release")
-    def wait_rollout_backbone_feature_release(self) -> dict[str, float]:
-        if not self._borrowed_feature_ipc_enabled:
-            return {}
-        if self._pinned_feature_ipc_enabled:
-            return {}
-        if (
-            self._borrowed_feature_active_lease is None
-            or self._borrowed_feature_consumer_rank is None
-        ):
-            raise RuntimeError("no active borrowed backbone lease to release")
-        consumer_rank = self._borrowed_feature_consumer_rank
-        ack = self.recv(
-            src_group_name=self.actor_group_name,
-            src_rank=consumer_rank,
-        )
-        expected = self._borrowed_feature_active_lease
-        if not isinstance(ack, dict) or ack.get("lease_id") != expected:
-            raise RuntimeError(
-                f"borrowed backbone lease ACK mismatch: expected {expected}, got {ack}"
-            )
-        released_bytes = sum(
-            tensor.numel() * tensor.element_size()
-            for tensor in self._borrowed_feature_tensors
-        )
-        self._borrowed_feature_tensors.clear()
-        self._borrowed_feature_block_sizes.clear()
-        self._borrowed_feature_samples = 0
-        self._borrowed_feature_active_lease = None
-        self._borrowed_feature_consumer_rank = None
-        self.torch_platform.ipc_collect()
-        self.torch_platform.empty_cache()
-        self.log_info(f"W63_BORROWED_IPC_RELEASE rank={self._rank} lease={expected}")
-        return {"rollout/borrowed_feature_released_bytes": float(released_bytes)}
 
     def init_worker(self):
         rollout_model_config = copy.deepcopy(self.model_cfg)
@@ -1011,20 +831,14 @@ class MultiStepRolloutWorker(Worker):
                 dtype=torch.bool,
                 device=actions.device,
             )
-        # W62: retain either raw Eagle inputs for fresh Actor execution or a
-        # complete reusable backbone output. The feature-only route avoids
-        # transporting inputs that Actor no longer consumes.
         forward_inputs = result.get("forward_inputs")
         if forward_inputs is not None:
-            self._retain_gpu_feature_capacity_probe(forward_inputs)
-            if self._borrowed_feature_ipc_enabled:
+            if self._pinned_feature_ipc_enabled:
                 self._retain_borrowed_feature_block(forward_inputs)
             else:
                 filter_rollout_backbone_transport(
                     forward_inputs,
-                    reuse_enabled=self.model_cfg.get(
-                        "reuse_rollout_backbone_features", False
-                    ),
+                    reuse_enabled=False,
                 )
         return RolloutResult(
             actions=actions,
@@ -1188,7 +1002,6 @@ class MultiStepRolloutWorker(Worker):
         input_channel: Channel,
         output_channel: Channel,
     ):
-        self._reset_gpu_feature_capacity_probe()
         self._begin_borrowed_feature_lease()
         if self.enable_offload:
             self.reload_model()
@@ -1202,8 +1015,6 @@ class MultiStepRolloutWorker(Worker):
 
         if self.enable_offload:
             self.offload_model()
-        if self._gpu_feature_capacity_probe_enabled:
-            self._capacity_probe_memory("rollout_complete_model_offloaded")
 
     async def evaluate(self, input_channel: Channel, output_channel: Channel):
         if self.enable_offload:
