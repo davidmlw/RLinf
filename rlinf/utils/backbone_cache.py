@@ -25,7 +25,7 @@ ROLLOUT_BACKBONE_TRANSPORT_KEY = "rollout_backbone_feature_transport"
 ROLLOUT_BACKBONE_BORROWED_IPC_PINNED = "borrowed_ipc_pinned"
 
 
-def is_rollout_backbone_ipc_transport(transport: str) -> bool:
+def is_rollout_backbone_ipc_transport(transport: str | None) -> bool:
     return transport == ROLLOUT_BACKBONE_BORROWED_IPC_PINNED
 
 

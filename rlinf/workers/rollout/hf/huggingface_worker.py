@@ -228,6 +228,15 @@ class MultiStepRolloutWorker(Worker):
             * self.cfg.env.train.total_num_envs
             // self._world_size
         )
+        if (
+            self._pinned_stream_expected_blocks <= 0
+            or self._pinned_stream_expected_samples <= 0
+        ):
+            self._abort_pinned_feature_stream()
+            raise ValueError("pinned feature stream requires positive block counts")
+        if self._pinned_stream_expected_samples >= ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE:
+            self._abort_pinned_feature_stream()
+            raise ValueError("rollout sample count exceeds its feature ID namespace")
         self._pinned_stream_expected_batches = (
             self._pinned_stream_expected_blocks
             + self._pinned_feature_ipc_batch_blocks

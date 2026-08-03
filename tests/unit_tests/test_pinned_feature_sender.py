@@ -144,6 +144,30 @@ def test_sender_aborts_lease_when_actor_nacks_batch():
     assert sender.torch_platform.collects == 1
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schema", 2),
+        ("lease_id", "other-lease"),
+        ("batch_index", 1),
+        ("completed_blocks", 0),
+    ],
+)
+def test_sender_aborts_lease_on_malformed_ack(field, value):
+    ack = _ok_ack()
+    ack[field] = value
+    sender = _FakeSender(ack)
+
+    with pytest.raises(RuntimeError, match="ACK mismatch"):
+        _flush(sender)
+
+    assert sender._pinned_feature_tensors == []
+    assert sender._pinned_feature_block_sizes == []
+    assert sender._pinned_feature_active_lease is None
+    assert sender._pinned_feature_consumer_rank is None
+    assert sender.torch_platform.collects == 1
+
+
 def test_sender_times_out_and_aborts_lease_when_actor_does_not_ack():
     sender = _FakeSender(None)
 
