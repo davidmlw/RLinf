@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from rlinf.data.schema.embodied_types import PolicyOutput
+from rlinf.data.embodied_io_struct import RolloutResult
 from rlinf.utils.backbone_cache import (
     ROLLOUT_BACKBONE_FEATURE_KEY,
     ROLLOUT_BACKBONE_MASK_KEY,
@@ -106,24 +106,34 @@ class _FakeSender:
         self.logs.append(message)
 
 
-class _FakePolicyOutputBuilder:
-    _build_policy_output = MultiStepRolloutWorker._build_policy_output
-    _build_policy_output_with_transport = (
-        MultiStepRolloutWorker._build_policy_output_with_transport
+class _FakeRolloutResultBuilder:
+    _build_rollout_result_with_transport = (
+        MultiStepRolloutWorker._build_rollout_result_with_transport
     )
 
     def __init__(self, *, pinned_feature_ipc_enabled: bool) -> None:
         self.collect_prev_infos = True
-        self.enable_dagger = False
+        self.model_cfg = SimpleNamespace(num_action_chunks=16)
         self.version = 3
         self._pinned_feature_ipc_enabled = pinned_feature_ipc_enabled
         self.retained_forward_inputs = None
+        self.transport_events = []
+
+    def _build_rollout_result(self, actions, result, *, final_obs=None):
+        self.transport_events.append("build")
+        return MultiStepRolloutWorker._build_rollout_result(
+            self,
+            actions,
+            result,
+            final_obs=final_obs,
+        )
 
     @staticmethod
     def get_bootstrap_values(_final_obs):
         return None
 
     async def _retain_pinned_feature_block(self, forward_inputs) -> None:
+        self.transport_events.append("retain")
         self.retained_forward_inputs = forward_inputs
 
 
@@ -152,27 +162,30 @@ def _policy_result():
     }
 
 
-def test_policy_output_builder_preserves_synchronous_api():
-    builder = _FakePolicyOutputBuilder(pinned_feature_ipc_enabled=False)
+def test_rollout_result_builder_preserves_synchronous_api():
+    builder = _FakeRolloutResultBuilder(pinned_feature_ipc_enabled=False)
 
-    output = builder._build_policy_output(torch.zeros(2, 1), _policy_result())
+    output = builder._build_rollout_result(torch.zeros(2, 1), _policy_result())
 
-    assert isinstance(output, PolicyOutput)
+    assert isinstance(output, RolloutResult)
     assert output.versions.tolist() == [[3.0], [3.0]]
 
 
-def test_policy_output_transport_wrapper_awaits_pinned_retention():
-    builder = _FakePolicyOutputBuilder(pinned_feature_ipc_enabled=True)
+def test_rollout_result_transport_wrapper_retains_before_cpu_transfer():
+    builder = _FakeRolloutResultBuilder(pinned_feature_ipc_enabled=True)
+    result = _policy_result()
+    producer_forward_inputs = result["forward_inputs"]
 
     output = asyncio.run(
-        builder._build_policy_output_with_transport(
+        builder._build_rollout_result_with_transport(
             torch.zeros(2, 1),
-            _policy_result(),
+            result,
         )
     )
 
-    assert isinstance(output, PolicyOutput)
-    assert builder.retained_forward_inputs is output.forward_inputs
+    assert isinstance(output, RolloutResult)
+    assert builder.retained_forward_inputs is producer_forward_inputs
+    assert builder.transport_events == ["retain", "build"]
 
 
 def test_async_rollout_rejects_pinned_feature_transport(monkeypatch):

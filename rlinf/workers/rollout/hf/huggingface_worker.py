@@ -903,12 +903,9 @@ class MultiStepRolloutWorker(Worker):
         *,
         final_obs: dict[str, Any] | None = None,
     ) -> RolloutResult:
-        rollout_result = self._build_rollout_result(
-            actions,
-            result,
-            final_obs=final_obs,
-        )
-        forward_inputs = rollout_result.forward_inputs
+        # Retain producer CUDA tensors before RolloutResult.__post_init__ moves
+        # its generic trajectory payload to CPU.
+        forward_inputs = result.get("forward_inputs")
         if forward_inputs is not None:
             if self._pinned_feature_ipc_enabled:
                 await self._retain_pinned_feature_block(forward_inputs)
@@ -917,7 +914,7 @@ class MultiStepRolloutWorker(Worker):
                     forward_inputs,
                     reuse_enabled=False,
                 )
-        return rollout_result
+        return self._build_rollout_result(actions, result, final_obs=final_obs)
 
     def get_bootstrap_values(
         self, final_obs: dict[str, Any] | None
