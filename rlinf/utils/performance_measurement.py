@@ -14,6 +14,7 @@
 
 """Low-overhead absolute event recording for performance qualification runs."""
 
+import atexit
 import json
 import os
 import platform
@@ -30,6 +31,8 @@ _OUTPUT_ENV = "RLINF_PERF_MEASUREMENT_DIR"
 _RUN_ID_ENV = "RLINF_PERF_RUN_ID"
 _BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 _writer_lock = threading.Lock()
+_writer = None
+_writer_path: Path | None = None
 
 
 @lru_cache(maxsize=1)
@@ -48,9 +51,31 @@ def measurement_enabled() -> bool:
 
 def _event_path(owner: str, rank: int) -> Path:
     output_dir = Path(os.environ[_OUTPUT_ENV])
-    output_dir.mkdir(parents=True, exist_ok=True)
     safe_owner = owner.replace("/", "_")
     return output_dir / f"events-{safe_owner}-rank{rank}-pid{os.getpid()}.jsonl"
+
+
+def _close_writer() -> None:
+    global _writer, _writer_path
+    with _writer_lock:
+        if _writer is not None:
+            _writer.close()
+        _writer = None
+        _writer_path = None
+
+
+def _write_line(path: Path, line: str) -> None:
+    global _writer, _writer_path
+    if _writer is None or _writer_path != path:
+        if _writer is not None:
+            _writer.close()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _writer = path.open("a", encoding="utf-8", buffering=1)
+        _writer_path = path
+    _writer.write(line + "\n")
+
+
+atexit.register(_close_writer)
 
 
 def record_event(
@@ -94,8 +119,7 @@ def record_event(
         record["metadata"] = metadata
     line = json.dumps(record, sort_keys=True, separators=(",", ":"))
     with _writer_lock:
-        with _event_path(owner, rank).open("a", encoding="utf-8") as output:
-            output.write(line + "\n")
+        _write_line(_event_path(owner, rank), line)
 
 
 @contextmanager
