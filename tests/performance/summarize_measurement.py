@@ -12,6 +12,9 @@ from pathlib import Path
 PHYSICAL_ACTIONS = 65_536
 POLICY_DECISIONS = 4_096
 DEFAULT_MEASURED_STEPS = (1, 2, 3, 4)
+WORKER_RANKS = tuple(range(8))
+ROLLOUT_REQUESTS_PER_RANK = 72
+ENV_REQUESTS_PER_RANK = 64
 
 
 def load_events(path: Path) -> list[dict]:
@@ -118,6 +121,26 @@ def rank_distribution(intervals: list[tuple[int, int, int]]) -> dict:
     }
 
 
+def validate_rank_counts(
+    pairs: dict[tuple, tuple[int, int]],
+    *,
+    step: int,
+    stage: str,
+    ranks: tuple[int, ...],
+    intervals_per_rank: int,
+) -> None:
+    actual = defaultdict(int)
+    for key in pairs:
+        if key[0] == step:
+            actual[key[1]] += 1
+    expected = {rank: intervals_per_rank for rank in ranks}
+    if dict(actual) != expected:
+        raise ValueError(
+            f"step {step}: wrong {stage} rank counts: "
+            f"actual={dict(sorted(actual.items()))}, expected={expected}"
+        )
+
+
 def summarize_steps(events: list[dict]) -> dict[int, dict]:
     outer = pair_stage(events, "step.resident_outer", include_request=False)
     publication = pair_stage(events, "revision.publication", include_request=False)
@@ -132,6 +155,45 @@ def summarize_steps(events: list[dict]) -> dict[int, dict]:
     steps = sorted(step for step, rank in outer if rank == 0)
     result = {}
     for step in steps:
+        for stage, pairs, ranks, intervals_per_rank in (
+            ("step.resident_outer", outer, (0,), 1),
+            ("revision.publication", publication, (0,), 1),
+            ("rollout_env.region", region, (0,), 1),
+            ("advantage.compute", advantage, WORKER_RANKS, 1),
+            ("trainer.update", trainer, WORKER_RANKS, 1),
+            (
+                "rollout.service",
+                rollout_service,
+                WORKER_RANKS,
+                ROLLOUT_REQUESTS_PER_RANK,
+            ),
+            (
+                "rollout.request_wait",
+                request_wait,
+                WORKER_RANKS,
+                ROLLOUT_REQUESTS_PER_RANK,
+            ),
+            (
+                "environment.policy_wait",
+                policy_wait,
+                WORKER_RANKS,
+                ROLLOUT_REQUESTS_PER_RANK,
+            ),
+            (
+                "environment.service",
+                env_service,
+                WORKER_RANKS,
+                ENV_REQUESTS_PER_RANK,
+            ),
+        ):
+            validate_rank_counts(
+                pairs,
+                step=step,
+                stage=stage,
+                ranks=ranks,
+                intervals_per_rank=intervals_per_rank,
+            )
+
         outer_start, outer_end = outer[(step, 0)]
         region_start, region_end = region[(step, 0)]
         rollout_intervals = [
