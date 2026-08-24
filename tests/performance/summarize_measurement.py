@@ -11,7 +11,7 @@ from pathlib import Path
 
 PHYSICAL_ACTIONS = 65_536
 POLICY_DECISIONS = 4_096
-MEASURED_STEPS = (1, 2, 3, 4)
+DEFAULT_MEASURED_STEPS = (1, 2, 3, 4)
 
 
 def load_events(path: Path) -> list[dict]:
@@ -186,10 +186,14 @@ def summarize_steps(events: list[dict]) -> dict[int, dict]:
     return result
 
 
-def repetition_statistics(steps: dict[int, dict]) -> dict:
-    missing = sorted(set(MEASURED_STEPS) - set(steps))
+def repetition_statistics(
+    steps: dict[int, dict], measured_steps: tuple[int, ...]
+) -> dict:
+    missing = sorted(set(measured_steps) - set(steps))
     if missing:
         raise ValueError(f"missing measured steps: {missing}")
+    if len(measured_steps) < 2:
+        raise ValueError("at least two measured steps are required")
     fields = (
         "resident_outer_ns",
         "physical_actions_per_second",
@@ -204,7 +208,7 @@ def repetition_statistics(steps: dict[int, dict]) -> dict:
     )
     result = {}
     for field in fields:
-        values = [steps[step][field] for step in MEASURED_STEPS]
+        values = [steps[step][field] for step in measured_steps]
         mean = statistics.fmean(values)
         result[field] = {
             "values": values,
@@ -219,7 +223,22 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("event_dir", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument(
+        "--measured-steps",
+        default=",".join(str(step) for step in DEFAULT_MEASURED_STEPS),
+        help="comma-separated zero-based outer steps included in statistics",
+    )
+    parser.add_argument(
+        "--warmup-step",
+        type=int,
+        default=0,
+        help="zero-based warmup step, or -1 when a smoke has no excluded warmup",
+    )
     args = parser.parse_args()
+
+    measured_steps = tuple(int(step) for step in args.measured_steps.split(","))
+    if not measured_steps or len(set(measured_steps)) != len(measured_steps):
+        raise ValueError("measured steps must be a non-empty unique sequence")
 
     events = load_events(args.event_dir)
     steps = summarize_steps(events)
@@ -228,14 +247,14 @@ def main() -> None:
         "run_id": events[0]["run_id"],
         "hostname": events[0]["hostname"],
         "boot_id": events[0]["boot_id"],
-        "warmup_step": 0,
-        "measured_steps": list(MEASURED_STEPS),
+        "warmup_step": args.warmup_step if args.warmup_step >= 0 else None,
+        "measured_steps": list(measured_steps),
         "counts": {
             "physical_actions_per_outer_step": PHYSICAL_ACTIONS,
             "policy_decisions_per_outer_step": POLICY_DECISIONS,
         },
         "steps": steps,
-        "statistics": repetition_statistics(steps),
+        "statistics": repetition_statistics(steps, measured_steps),
         "unavailable": {
             "rollout_env.causal_critical_path": "dependency edges not recorded",
             "policy.inference_device": "no complete device-boundary event pair",
