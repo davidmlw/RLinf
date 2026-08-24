@@ -14,6 +14,7 @@
 
 import asyncio
 import gc
+import time
 from collections import defaultdict
 from typing import Any
 
@@ -55,6 +56,7 @@ from rlinf.utils.nested_dict_process import (
     split_dict_to_chunk,
     update_nested_cfg,
 )
+from rlinf.utils.performance_measurement import record_event
 from rlinf.utils.placement import HybridComponentPlacement
 from rlinf.utils.utils import (
     flatten_embodied_batch,
@@ -948,6 +950,71 @@ class EnvWorker(Worker):
             data["intervene_flags"] = env_batch.get("intervene_flags", None)
         return data
 
+    def _record_policy_received(
+        self, stage_id: int, *, starts_environment_service: bool = True
+    ) -> None:
+        request_id = self._measurement_request_id
+        received_ns = time.monotonic_ns()
+        metadata = {"pipeline_stage": stage_id}
+        record_event(
+            owner="env",
+            rank=self._rank,
+            outer_step=self._measurement_outer_step,
+            stage="rollout.service",
+            event="end",
+            timestamp_ns=received_ns,
+            request_id=request_id,
+            metadata=metadata,
+        )
+        record_event(
+            owner="env",
+            rank=self._rank,
+            outer_step=self._measurement_outer_step,
+            stage="environment.policy_wait",
+            event="end",
+            timestamp_ns=received_ns,
+            request_id=request_id,
+            metadata=metadata,
+        )
+        if starts_environment_service:
+            record_event(
+                owner="env",
+                rank=self._rank,
+                outer_step=self._measurement_outer_step,
+                stage="environment.service",
+                event="start",
+                timestamp_ns=received_ns,
+                request_id=request_id,
+                metadata=metadata,
+            )
+
+    def _record_observation_committed(self, stage_id: int) -> None:
+        request_id = self._measurement_request_id
+        committed_ns = time.monotonic_ns()
+        metadata = {"pipeline_stage": stage_id}
+        record_event(
+            owner="env",
+            rank=self._rank,
+            outer_step=self._measurement_outer_step,
+            stage="environment.service",
+            event="end",
+            timestamp_ns=committed_ns,
+            request_id=request_id,
+            metadata=metadata,
+        )
+        next_request_id = request_id + 1
+        record_event(
+            owner="env",
+            rank=self._rank,
+            outer_step=self._measurement_outer_step,
+            stage="environment.policy_wait",
+            event="start",
+            timestamp_ns=committed_ns,
+            request_id=next_request_id,
+            metadata=metadata,
+        )
+        self._measurement_request_id = next_request_id
+
     def _send_train_bootstrap(
         self, rollout_channel: Channel, env_outputs: list[EnvOutput]
     ) -> None:
@@ -962,6 +1029,15 @@ class EnvWorker(Worker):
                 tag="rollout_results",
                 route_key=stage_id if not self.env_decoupled_mode else None,
                 decoupled_mode=self.env_decoupled_mode,
+            )
+            record_event(
+                owner="env",
+                rank=self._rank,
+                outer_step=self._measurement_outer_step,
+                stage="environment.policy_wait",
+                event="start",
+                request_id=self._measurement_request_id,
+                metadata={"pipeline_stage": stage_id},
             )
 
     def _bootstrap_and_send_train(self, rollout_channel: Channel) -> list[EnvOutput]:
@@ -1101,6 +1177,7 @@ class EnvWorker(Worker):
                         infer_batch_size_fn=self._infer_rollout_batch_size,
                         decoupled_mode=self.env_decoupled_mode,
                     )
+                    self._record_policy_received(stage_id)
                     rewards = self.compute_bootstrap_rewards(
                         env_output, policy_output.bootstrap_values, reward_model_output
                     )
@@ -1167,6 +1244,7 @@ class EnvWorker(Worker):
                         route_key=stage_id if not self.env_decoupled_mode else None,
                         decoupled_mode=self.env_decoupled_mode,
                     )
+                    self._record_observation_committed(stage_id)
                     if self.collect_transitions and not self.enable_rlt:
                         next_obs = (
                             env_output.final_obs
@@ -1218,6 +1296,9 @@ class EnvWorker(Worker):
                     infer_batch_size_fn=self._infer_rollout_batch_size,
                     decoupled_mode=self.env_decoupled_mode,
                 )
+                self._record_policy_received(
+                    stage_id, starts_environment_service=False
+                )
                 rewards = self.compute_bootstrap_rewards(
                     env_output, policy_output.bootstrap_values, reward_model_output
                 )
@@ -1261,6 +1342,9 @@ class EnvWorker(Worker):
                         cache_current=False,
                     )
 
+                if epoch + 1 < self.rollout_epoch:
+                    self._measurement_request_id += 1
+
             if self.use_training_pipeline and actor_channel is not None:
                 await self.send_rollout_trajectories_pipeline(
                     self.trajectory_builders, actor_channel
@@ -1296,19 +1380,24 @@ class EnvWorker(Worker):
         reward_channel: Channel | None,
         actor_channel: Channel | None = None,
     ):
-        env_metrics = await self._run_interact_once(
-            input_channel,
-            rollout_channel,
-            reward_channel,
-            actor_channel,
-            cooperative_yield=False,
-        )
+        self._measurement_outer_step = getattr(self, "_measurement_outer_step", 0)
+        self._measurement_request_id = 0
+        try:
+            env_metrics = await self._run_interact_once(
+                input_channel,
+                rollout_channel,
+                reward_channel,
+                actor_channel,
+                cooperative_yield=False,
+            )
 
-        for env in self.env_list:
-            if self.train_enable_offload:
-                get_env_attr(env, "offload")()
+            for env in self.env_list:
+                if self.train_enable_offload:
+                    get_env_attr(env, "offload")()
 
-        return env_metrics
+            return env_metrics
+        finally:
+            self._measurement_outer_step += 1
 
     @Worker.timer("evaluate")
     def evaluate(self, input_channel: Channel, rollout_channel: Channel):
