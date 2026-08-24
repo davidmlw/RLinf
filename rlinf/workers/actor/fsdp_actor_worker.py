@@ -88,6 +88,7 @@ from rlinf.utils.pinned_feature_stream import (
     compute_rollout_backbone_stream_counts,
     receive_pinned_rollout_backbone_stream,
 )
+from rlinf.utils.performance_measurement import record_span
 from rlinf.utils.pinned_rollout_cache import PinnedRolloutBackboneCache
 from rlinf.utils.placement import (
     HybridComponentPlacement,
@@ -1411,7 +1412,13 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             "loss_mask_sum": self.rollout_batch.get("loss_mask_sum", None),
         }
 
-        advantages_and_returns = calculate_adv_and_returns(**kwargs)
+        with record_span(
+            owner="actor",
+            rank=self._rank,
+            outer_step=self.version,
+            stage="advantage.compute",
+        ):
+            advantages_and_returns = calculate_adv_and_returns(**kwargs)
 
         self.rollout_batch.update(advantages_and_returns)
         if kwargs["loss_mask"] is not None:
@@ -1535,11 +1542,17 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             forward_inputs.pop(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None)
 
     def run_training(self) -> None:
-        try:
-            return self._run_training_impl()
-        except Exception:
-            self._clear_pinned_rollout_backbone_cache()
-            raise
+        with record_span(
+            owner="actor",
+            rank=self._rank,
+            outer_step=self.version,
+            stage="trainer.update",
+        ):
+            try:
+                return self._run_training_impl()
+            except Exception:
+                self._clear_pinned_rollout_backbone_cache()
+                raise
 
     @Worker.timer("run_training")
     def _run_training_impl(self) -> None:

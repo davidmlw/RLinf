@@ -32,6 +32,7 @@ from rlinf.utils.distributed import ScopedTimer
 from rlinf.utils.logging import get_logger
 from rlinf.utils.metric_logger import MetricLogger
 from rlinf.utils.metric_utils import compute_evaluate_metrics, print_metrics_table
+from rlinf.utils.performance_measurement import record_span
 from rlinf.utils.runner_utils import check_progress
 from rlinf.utils.timers import Timer
 
@@ -492,91 +493,114 @@ class EmbodiedRunner:
         start_step = self.global_step
         start_time = time.time()
         for _step in range(start_step, self.max_steps):
-            # set global step
-            self.actor.set_global_step(self.global_step)
-            self.rollout.set_global_step(self.global_step)
+            with record_span(
+                owner="runner",
+                rank=0,
+                outer_step=_step,
+                stage="step.resident_outer",
+            ):
+                # Revision publication starts before workers adopt this step.
+                with record_span(
+                    owner="runner",
+                    rank=0,
+                    outer_step=_step,
+                    stage="revision.publication",
+                ):
+                    self.actor.set_global_step(self.global_step)
+                    self.rollout.set_global_step(self.global_step)
 
-            profiled_step = (
-                self.global_step
-                if self._should_profile_step(self.global_step)
-                else None
-            )
-            if profiled_step is not None:
-                self._open_profiling_window(profiled_step)
+                    profiled_step = (
+                        self.global_step
+                        if self._should_profile_step(self.global_step)
+                        else None
+                    )
+                    if profiled_step is not None:
+                        self._open_profiling_window(profiled_step)
 
-            with self.timer("step"):
-                with self.timer("sync_weights"):
-                    if _step % self.weight_sync_interval == 0:
-                        self.update_rollout_weights()
-                with self.timer("generate_rollouts"):
-                    feature_stream_recv_handle: Handle | None = None
-                    if self.pinned_feature_ipc:
-                        feature_stream_recv_handle = (
-                            self.actor.recv_rollout_backbone_feature_stream()
-                        )
-                    env_handle: Handle = self.env.interact(
-                        input_channel=self.env_channel,
-                        rollout_channel=self.rollout_channel,
-                        reward_channel=self.reward_channel,
-                        actor_channel=self.actor_channel,
-                    )
-                    rollout_handle: Handle = self.rollout.generate(
-                        input_channel=self.rollout_channel,
-                        output_channel=self.env_channel,
-                    )
-                    reward_handle = None
-                    if self.reward is not None:
-                        reward_handle: Handle = self.reward.compute_rewards(
-                            input_channel=self.reward_channel,
-                            output_channel=self.env_channel,
-                        )
-                    self.actor.recv_rollout_trajectories(
-                        input_channel=self.actor_channel
-                    ).wait()
-                    rollout_handle.wait()
-                    if self.pinned_feature_ipc:
-                        if feature_stream_recv_handle is None:
-                            raise RuntimeError(
-                                "pinned feature receiver was not started"
+                    with self.timer("sync_weights"):
+                        if _step % self.weight_sync_interval == 0:
+                            self.update_rollout_weights()
+
+                with self.timer("step", trace_args={"step_idx": _step}):
+                    with self.timer("generate_rollouts"):
+                        with record_span(
+                            owner="runner",
+                            rank=0,
+                            outer_step=_step,
+                            stage="rollout_env.region",
+                        ):
+                            feature_stream_recv_handle: Handle | None = None
+                            if self.pinned_feature_ipc:
+                                feature_stream_recv_handle = (
+                                    self.actor.recv_rollout_backbone_feature_stream()
+                                )
+                            env_handle: Handle = self.env.interact(
+                                input_channel=self.env_channel,
+                                rollout_channel=self.rollout_channel,
+                                reward_channel=self.reward_channel,
+                                actor_channel=self.actor_channel,
                             )
-                        feature_stream_recv_handle.wait()
-                        self.rollout.finish_rollout_backbone_feature_stream().wait()
-                    if self.reward is not None:
-                        reward_handle.wait()
-                    if self.pinned_feature_ipc:
-                        source_ranks = [
-                            int(rank)
-                            for rank in self.actor.get_rollout_backbone_feature_source_rank().wait()
-                        ]
-                        logger.info(
-                            "Pinned backbone Actor-to-Rollout route: %s",
-                            source_ranks,
+                            rollout_handle: Handle = self.rollout.generate(
+                                input_channel=self.rollout_channel,
+                                output_channel=self.env_channel,
+                            )
+                            reward_handle = None
+                            if self.reward is not None:
+                                reward_handle: Handle = self.reward.compute_rewards(
+                                    input_channel=self.reward_channel,
+                                    output_channel=self.env_channel,
+                                )
+                            self.actor.recv_rollout_trajectories(
+                                input_channel=self.actor_channel
+                            ).wait()
+                            rollout_handle.wait()
+                            if self.pinned_feature_ipc:
+                                if feature_stream_recv_handle is None:
+                                    raise RuntimeError(
+                                        "pinned feature receiver was not started"
+                                    )
+                                feature_stream_recv_handle.wait()
+                                self.rollout.finish_rollout_backbone_feature_stream().wait()
+                            if self.reward is not None:
+                                reward_handle.wait()
+                            if self.pinned_feature_ipc:
+                                source_ranks = [
+                                    int(rank)
+                                    for rank in self.actor.get_rollout_backbone_feature_source_rank().wait()
+                                ]
+                                logger.info(
+                                    "Pinned backbone Actor-to-Rollout route: %s",
+                                    source_ranks,
+                                )
+                                feature_recv_handle: Handle = (
+                                    self.actor.recv_rollout_backbone_features(source_ranks)
+                                )
+                                feature_recv_handle.wait()
+
+                    # compute advantages and returns.
+                    with self.timer("cal_adv_and_returns"):
+                        actor_rollout_metrics = (
+                            self.actor.compute_advantages_and_returns().wait()
                         )
-                        feature_recv_handle: Handle = (
-                            self.actor.recv_rollout_backbone_features(source_ranks)
-                        )
-                        feature_recv_handle.wait()
 
-                # compute advantages and returns.
-                with self.timer("cal_adv_and_returns"):
-                    actor_rollout_metrics = (
-                        self.actor.compute_advantages_and_returns().wait()
-                    )
+                    # actor training.
+                    with self.timer("actor_training"):
+                        actor_training_handle: Handle = self.actor.run_training()
+                        env_bootstrap_handle: Handle | None = None
+                        if self.overlap_env_bootstrap and _step + 1 < self.max_steps:
+                            env_bootstrap_handle = self.env.prefetch_train_bootstrap(
+                                rollout_channel=self.rollout_channel
+                            )
 
-                # actor training.
-                actor_training_handle: Handle = self.actor.run_training()
-                env_bootstrap_handle: Handle | None = None
-                if self.overlap_env_bootstrap and _step + 1 < self.max_steps:
-                    env_bootstrap_handle = self.env.prefetch_train_bootstrap(
-                        rollout_channel=self.rollout_channel
-                    )
+                        actor_training_metrics = actor_training_handle.wait()
+                        if env_bootstrap_handle is not None:
+                            env_bootstrap_handle.wait()
 
-                actor_training_metrics = actor_training_handle.wait()
-                if env_bootstrap_handle is not None:
-                    env_bootstrap_handle.wait()
+                    # Recurring Env finalization/offload remains resident work.
+                    env_handle.wait()
+                    self.global_step += 1
 
-                self.global_step += 1
-                eval_metrics = self._maybe_eval_and_checkpoint(_step)
+            eval_metrics = self._maybe_eval_and_checkpoint(_step)
 
             if profiled_step is not None:
                 self._close_profiling_window(profiled_step)
