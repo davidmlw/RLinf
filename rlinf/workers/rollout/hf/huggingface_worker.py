@@ -48,6 +48,7 @@ from rlinf.utils.backbone_cache import (
 from rlinf.utils.pinned_feature_stream import (
     compute_rollout_backbone_stream_counts,
 )
+from rlinf.utils.performance_measurement import record_event
 from rlinf.utils.placement import HybridComponentPlacement
 
 
@@ -1022,6 +1023,28 @@ class MultiStepRolloutWorker(Worker):
                     merge_fn=self._merge_obs_batches,
                     infer_batch_size_fn=self._infer_env_batch_size,
                 ).async_wait()
+                request_id = self._measurement_request_id
+                received_ns = time.monotonic_ns()
+                record_event(
+                    owner="rollout",
+                    rank=self._rank,
+                    outer_step=self._measurement_outer_step,
+                    stage="rollout.request_wait",
+                    event="end",
+                    timestamp_ns=received_ns,
+                    request_id=request_id,
+                    metadata={"pipeline_stage": stage_id},
+                )
+                record_event(
+                    owner="rollout",
+                    rank=self._rank,
+                    outer_step=self._measurement_outer_step,
+                    stage="rollout.service",
+                    event="start",
+                    timestamp_ns=received_ns,
+                    request_id=request_id,
+                    metadata={"pipeline_stage": stage_id},
+                )
                 actions, result = self._predict_rollout_actions(
                     env_output["obs"],
                     final_obs=env_output.get("final_obs", None),
@@ -1044,6 +1067,16 @@ class MultiStepRolloutWorker(Worker):
                     batch_size=self.train_batch_size,
                     split_fn=self._split_rollout_result,
                 )
+                self._measurement_request_id += 1
+                record_event(
+                    owner="rollout",
+                    rank=self._rank,
+                    outer_step=self._measurement_outer_step,
+                    stage="rollout.request_wait",
+                    event="start",
+                    request_id=self._measurement_request_id,
+                    metadata={"pipeline_stage": stage_id},
+                )
         for stage_id in range(self.num_pipeline_stages):
             env_output = await self.recv_from(
                 group_name=self.cfg.env.group_name,
@@ -1055,6 +1088,28 @@ class MultiStepRolloutWorker(Worker):
                 merge_fn=self._merge_obs_batches,
                 infer_batch_size_fn=self._infer_env_batch_size,
             ).async_wait()
+            request_id = self._measurement_request_id
+            received_ns = time.monotonic_ns()
+            record_event(
+                owner="rollout",
+                rank=self._rank,
+                outer_step=self._measurement_outer_step,
+                stage="rollout.request_wait",
+                event="end",
+                timestamp_ns=received_ns,
+                request_id=request_id,
+                metadata={"pipeline_stage": stage_id},
+            )
+            record_event(
+                owner="rollout",
+                rank=self._rank,
+                outer_step=self._measurement_outer_step,
+                stage="rollout.service",
+                event="start",
+                timestamp_ns=received_ns,
+                request_id=request_id,
+                metadata={"pipeline_stage": stage_id},
+            )
             actions, result = self._predict_rollout_actions(
                 env_output["obs"],
                 final_obs=env_output.get("final_obs", None),
@@ -1084,6 +1139,17 @@ class MultiStepRolloutWorker(Worker):
                 batch_size=self.train_batch_size,
                 split_fn=self._split_rollout_result,
             )
+            self._measurement_request_id += 1
+            if self._measurement_epoch + 1 < self.rollout_epoch:
+                record_event(
+                    owner="rollout",
+                    rank=self._rank,
+                    outer_step=self._measurement_outer_step,
+                    stage="rollout.request_wait",
+                    event="start",
+                    request_id=self._measurement_request_id,
+                    metadata={"pipeline_stage": stage_id},
+                )
 
     @Worker.timer("rollout/generate")
     async def generate(
@@ -1095,11 +1161,23 @@ class MultiStepRolloutWorker(Worker):
         if self.enable_offload:
             self.reload_model()
 
-        for _ in tqdm(
+        self._measurement_request_id = 0
+        record_event(
+            owner="rollout",
+            rank=self._rank,
+            outer_step=self._measurement_outer_step,
+            stage="rollout.request_wait",
+            event="start",
+            request_id=0,
+            metadata={"pipeline_stage": 0},
+        )
+
+        for epoch in tqdm(
             range(self.rollout_epoch),
             desc="Generating Rollout Epochs",
             disable=(self._rank != 0),
         ):
+            self._measurement_epoch = epoch
             await self.generate_one_epoch(input_channel, output_channel)
 
         if self.enable_offload:
@@ -1328,5 +1406,6 @@ class MultiStepRolloutWorker(Worker):
         from rlinf.utils.convergence_seed import seed_rollout_step
 
         seed_rollout_step(self, global_step)
+        self._measurement_outer_step = global_step
         if hasattr(self.hf_model, "set_global_step"):
             self.hf_model.set_global_step(global_step)
