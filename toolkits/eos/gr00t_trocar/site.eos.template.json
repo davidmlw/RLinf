@@ -52,17 +52,24 @@
         "name": "sanitized-trocar-tray-usd",
         "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/usd/SurgicalTray001-w68-newton.usd",
         "sha256": "3c4f15feadbf35244e56a964aeef638241f33b46ad71c079c5a44f287a0008ab"
+      },
+      {
+        "name": "flash-attn-h100-wheel",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl",
+        "sha256": "79e0732cb5d988a96777af7ec63a5af91b557ce8fd1593d6d851f4dd9c42411e"
       }
     ]
   },
   "runtime": {
-    "python": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v1/bin/python",
-    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v1",
+    "python": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v2/bin/python",
+    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v2",
     "runtime_spec": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/runtime-spec.json",
     "runtime_spec_sha256": "AUTO",
     "prepare_script": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/prepare_runtime.sh",
     "prepare_script_sha256": "AUTO",
     "uv_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/cache/uv",
+    "flash_attn_wheel": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl",
+    "flash_attn_wheel_sha256": "79e0732cb5d988a96777af7ec63a5af91b557ce8fd1593d6d851f4dd9c42411e",
     "isaaclab_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/IsaacLab",
     "gr00t_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T",
     "model_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/models/Assemble_Trocar",

@@ -18,7 +18,7 @@ under the RLinf-owned GitLab reference
 CUDA compatibility libraries, system dependencies and `uv`, but no experiment
 Python environment. `prepare_runtime.sh` materializes the RLinf-owned shared
 environment once at
-`rlinf-workspace/envs/gr00t-newton-py312-cu128-v1/`. The committed runtime spec,
+`rlinf-workspace/envs/gr00t-newton-py312-cu128-v2/`. The committed runtime spec,
 exact source revisions, package freeze and generated manifest identify it;
 later tickets can reuse it without rebuilding an image or reinstalling Python
 packages. `uv` also keeps its managed Python distribution, including matching
@@ -51,10 +51,14 @@ prepare-script hash and the Git blob inventory for `pyproject.toml` plus
 `requirements/`; tickets with unchanged dependency inputs can share the venv,
 while interrupted installation cannot leave the training checkout modified.
 
-IsaacLab installs its own qualified Torch while installing extensions. The
-runtime preparation therefore disables RLinf installer's intermediate
-FlashAttention build, restores the committed Torch/torchvision/torchaudio
-cu128 versions, and then builds FlashAttention once against that final ABI.
+IsaacLab installs its own qualified Torch, Hydra and NumPy versions while
+installing extensions. Runtime preparation therefore disables RLinf's
+intermediate FlashAttention build, restores the committed Torch cu128 trio,
+pins `hydra-core==1.3.2` and `numpy==1.26.0`, and installs an immutable
+FlashAttention 2.8.3 CPython 3.12 wheel built for H100 SM90 against the final
+Torch 2.11/cu128 ABI. The wheel path and SHA-256 are part of both site and
+runtime manifests. This removes the roughly 41-minute source compile from a
+fresh allocation while retaining a fail-closed binary provenance check.
 
 ## Commands
 

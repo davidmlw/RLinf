@@ -9,6 +9,8 @@ required=(
   W73_RUNTIME_SPEC
   W73_RUNTIME_SPEC_SHA256
   W73_UV_CACHE
+  W73_FLASH_ATTN_WHEEL
+  W73_FLASH_ATTN_WHEEL_SHA256
 )
 for name in "${required[@]}"; do
   if [[ -z "${!name:-}" ]]; then
@@ -42,6 +44,24 @@ PY
 
 if [[ "$(spec_value schema)" != "rlinf.eos.python-runtime.v1" ]]; then
   printf 'unsupported runtime spec schema\n' >&2
+  exit 2
+fi
+if [[ ! -f "$W73_FLASH_ATTN_WHEEL" ]]; then
+  printf 'FlashAttention wheel is missing: %s\n' "$W73_FLASH_ATTN_WHEEL" >&2
+  exit 2
+fi
+actual_wheel_sha=$(sha256sum "$W73_FLASH_ATTN_WHEEL" | awk '{print $1}')
+if [[ "$actual_wheel_sha" != "$W73_FLASH_ATTN_WHEEL_SHA256" ]]; then
+  printf 'FlashAttention wheel SHA-256 mismatch: expected %s, found %s\n' \
+    "$W73_FLASH_ATTN_WHEEL_SHA256" "$actual_wheel_sha" >&2
+  exit 2
+fi
+if [[ "$(basename "$W73_FLASH_ATTN_WHEEL")" != "$(spec_value flash_attn_wheel_filename)" ]]; then
+  printf 'FlashAttention wheel filename does not match runtime spec\n' >&2
+  exit 2
+fi
+if [[ "$W73_FLASH_ATTN_WHEEL_SHA256" != "$(spec_value flash_attn_wheel_sha256)" ]]; then
+  printf 'FlashAttention wheel hash does not match runtime spec\n' >&2
   exit 2
 fi
 if [[ "$(spec_value isaaclab_revision)" != "$(git -C "$W73_ISAACLAB_ROOT" rev-parse HEAD)" ]]; then
@@ -81,7 +101,8 @@ if [[ -f "$manifest" ]]; then
     "$(git -C "$W73_ISAACLAB_ROOT" rev-parse HEAD)" \
     "$(git -C "$W73_GROOT_ROOT" rev-parse HEAD)" \
     "$prepare_script_sha" \
-    "$dependency_inputs_sha" <<'PY'
+    "$dependency_inputs_sha" \
+    "$W73_FLASH_ATTN_WHEEL_SHA256" <<'PY'
 import hashlib
 import json
 import sys
@@ -106,17 +127,23 @@ if manifest.get("prepare_script_sha256") != sys.argv[6]:
     raise SystemExit("runtime prepare-script hash mismatch")
 if manifest.get("rlinf_dependency_inputs_sha256") != sys.argv[7]:
     raise SystemExit("runtime RLinf dependency-input hash mismatch")
+if manifest.get("flash_attn_wheel_sha256") != sys.argv[8]:
+    raise SystemExit("runtime FlashAttention wheel hash mismatch")
 PY
   PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
     "$(spec_value torch_version)" \
     "$(spec_value torchvision_version)" \
     "$(spec_value torchaudio_version)" \
     "$(spec_value torch_backend)" \
-    "$(spec_value flash_attn_version)" <<'PY'
+    "$(spec_value flash_attn_version)" \
+    "$(spec_value hydra_core_version)" \
+    "$(spec_value numpy_version)" <<'PY'
+import importlib.metadata
 import sys
 
 import flash_attn
 import isaaclab_newton
+import numpy
 import ray
 import torch
 import torchaudio
@@ -128,6 +155,8 @@ import torchvision
     expected_torchaudio,
     expected_backend,
     expected_flash_attn,
+    expected_hydra_core,
+    expected_numpy,
 ) = sys.argv[1:]
 expected_build = f"{expected_torch}+{expected_backend}"
 if not torch.__version__.startswith(expected_build):
@@ -150,6 +179,16 @@ if not torchaudio.__version__.startswith(f"{expected_torchaudio}+{expected_backe
         "runtime torchaudio mismatch: "
         f"expected {expected_torchaudio}+{expected_backend}, "
         f"found {torchaudio.__version__}"
+    )
+if importlib.metadata.version("hydra-core") != expected_hydra_core:
+    raise SystemExit(
+        "runtime hydra-core mismatch: "
+        f"expected {expected_hydra_core}, "
+        f"found {importlib.metadata.version('hydra-core')}"
+    )
+if numpy.__version__ != expected_numpy:
+    raise SystemExit(
+        f"runtime NumPy mismatch: expected {expected_numpy}, found {numpy.__version__}"
     )
 PY
   printf 'reusing verified RLinf runtime: %s\n' "$W73_RUNTIME_ROOT"
@@ -216,8 +255,7 @@ if [[ -n "$(git -C "$W73_SOURCE_ROOT" status --short)" ]]; then
 fi
 
 # IsaacLab pins its qualified Torch release during installation. Restore the
-# runtime contract before compiling FlashAttention so its extension ABI is
-# built exactly once against the final Torch version.
+# complete runtime contract before installing the prebuilt H100 extension.
 export PATH="$W73_RUNTIME_ROOT/bin:$PATH"
 torch_index="https://download.pytorch.org/whl/$(spec_value torch_backend)"
 uv pip install \
@@ -227,11 +265,16 @@ uv pip install \
   "torch==$(spec_value torch_version)" \
   "torchvision==$(spec_value torchvision_version)" \
   "torchaudio==$(spec_value torchaudio_version)"
-uv pip uninstall --python "$W73_RUNTIME_ROOT/bin/python" flash-attn || true
-UV_NO_CACHE=1 uv pip install \
+uv pip install \
   --python "$W73_RUNTIME_ROOT/bin/python" \
-  "flash-attn==$(spec_value flash_attn_version)" \
-  --no-build-isolation
+  "hydra-core==$(spec_value hydra_core_version)" \
+  "numpy==$(spec_value numpy_version)"
+uv pip uninstall --python "$W73_RUNTIME_ROOT/bin/python" flash-attn || true
+uv pip install \
+  --python "$W73_RUNTIME_ROOT/bin/python" \
+  --reinstall \
+  --no-deps \
+  "$W73_FLASH_ATTN_WHEEL"
 
 uv pip freeze --python "$W73_RUNTIME_ROOT/bin/python" \
   >"$W73_RUNTIME_ROOT/requirements.freeze.txt"
@@ -248,7 +291,10 @@ PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
   "$(spec_value torchvision_version)" \
   "$(spec_value torchaudio_version)" \
   "$(spec_value torch_backend)" \
-  "$(spec_value flash_attn_version)" <<'PY'
+  "$(spec_value flash_attn_version)" \
+  "$(spec_value hydra_core_version)" \
+  "$(spec_value numpy_version)" \
+  "$W73_FLASH_ATTN_WHEEL_SHA256" <<'PY'
 import importlib.metadata
 import json
 import os
@@ -258,6 +304,7 @@ from pathlib import Path
 
 import flash_attn
 import isaaclab_newton
+import numpy
 import ray
 import torch
 import torchaudio
@@ -275,6 +322,9 @@ expected_torchvision = sys.argv[9]
 expected_torchaudio = sys.argv[10]
 expected_backend = sys.argv[11]
 expected_flash_attn = sys.argv[12]
+expected_hydra_core = sys.argv[13]
+expected_numpy = sys.argv[14]
+flash_attn_wheel_sha256 = sys.argv[15]
 
 expected_build = f"{expected_torch}+{expected_backend}"
 if not torch.__version__.startswith(expected_build):
@@ -285,6 +335,12 @@ if not torchvision.__version__.startswith(f"{expected_torchvision}+{expected_bac
     raise SystemExit(f"unexpected torchvision build: {torchvision.__version__}")
 if not torchaudio.__version__.startswith(f"{expected_torchaudio}+{expected_backend}"):
     raise SystemExit(f"unexpected torchaudio build: {torchaudio.__version__}")
+if importlib.metadata.version("hydra-core") != expected_hydra_core:
+    raise SystemExit(
+        f"unexpected hydra-core build: {importlib.metadata.version('hydra-core')}"
+    )
+if numpy.__version__ != expected_numpy:
+    raise SystemExit(f"unexpected NumPy build: {numpy.__version__}")
 
 value = {
     "schema": "rlinf.eos.python-runtime-manifest.v1",
@@ -298,6 +354,9 @@ value = {
     "torchaudio": torchaudio.__version__,
     "torch_cuda": torch.version.cuda,
     "flash_attn": flash_attn.__version__,
+    "flash_attn_wheel_sha256": flash_attn_wheel_sha256,
+    "hydra_core": importlib.metadata.version("hydra-core"),
+    "numpy": numpy.__version__,
     "ray": ray.__version__,
     "isaaclab": importlib.metadata.version("isaaclab"),
     "isaaclab_newton": importlib.metadata.version("isaaclab-newton"),

@@ -510,6 +510,8 @@ def _load_site(
             "prepare_script",
             "prepare_script_sha256",
             "uv_cache",
+            "flash_attn_wheel",
+            "flash_attn_wheel_sha256",
             "isaaclab_root",
             "gr00t_root",
             "model_root",
@@ -537,6 +539,14 @@ def _load_site(
         runtime["prepare_script_sha256"],
         "runtime.prepare_script",
     )
+    flash_attn_wheel = _absolute_file(
+        runtime["flash_attn_wheel"], "runtime.flash_attn_wheel"
+    )
+    _verify_sha256(
+        flash_attn_wheel,
+        runtime["flash_attn_wheel_sha256"],
+        "runtime.flash_attn_wheel",
+    )
     try:
         runtime_spec_value = json.loads(runtime_spec.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
@@ -552,6 +562,10 @@ def _load_site(
             "torchaudio_version",
             "torch_backend",
             "flash_attn_version",
+            "flash_attn_wheel_filename",
+            "flash_attn_wheel_sha256",
+            "hydra_core_version",
+            "numpy_version",
             "isaaclab_revision",
             "gr00t_revision",
             "installer",
@@ -581,9 +595,20 @@ def _load_site(
         "torchaudio_version",
         "torch_backend",
         "flash_attn_version",
+        "flash_attn_wheel_filename",
+        "flash_attn_wheel_sha256",
+        "hydra_core_version",
+        "numpy_version",
         "installer",
     ):
         _string(runtime_spec_value[key], f"runtime spec.{key}")
+    if flash_attn_wheel.name != runtime_spec_value["flash_attn_wheel_filename"]:
+        raise WorkflowError("runtime spec and FlashAttention wheel filename disagree")
+    if (
+        runtime["flash_attn_wheel_sha256"]
+        != runtime_spec_value["flash_attn_wheel_sha256"]
+    ):
+        raise WorkflowError("runtime spec and FlashAttention wheel hash disagree")
     if runtime_spec_value["installer"] != "requirements/install.sh":
         raise WorkflowError("runtime spec uses an unsupported installer")
     expected_installer_arguments = [
@@ -1059,6 +1084,9 @@ def _run_agent(args: argparse.Namespace) -> int:
         raise WorkflowError("run-agent received an expired deadline")
     runtime = site["runtime"]
     experiment = site["experiment"]
+    runtime_spec_value = json.loads(
+        Path(runtime["runtime_spec"]).read_text(encoding="utf-8")
+    )
     gpus = _gpu_inventory()
     _write_new_json(
         attempt / "preflight.json",
@@ -1083,6 +1111,8 @@ def _run_agent(args: argparse.Namespace) -> int:
             "W73_RUNTIME_SPEC": runtime["runtime_spec"],
             "W73_RUNTIME_SPEC_SHA256": runtime["runtime_spec_sha256"],
             "W73_UV_CACHE": runtime["uv_cache"],
+            "W73_FLASH_ATTN_WHEEL": runtime["flash_attn_wheel"],
+            "W73_FLASH_ATTN_WHEEL_SHA256": runtime["flash_attn_wheel_sha256"],
         }
     )
     remaining = max(1, deadline - int(time.time()))
@@ -1121,6 +1151,9 @@ def _run_agent(args: argparse.Namespace) -> int:
             "torchaudio",
             "torch_cuda",
             "flash_attn",
+            "flash_attn_wheel_sha256",
+            "hydra_core",
+            "numpy",
             "ray",
             "isaaclab",
             "isaaclab_newton",
@@ -1160,6 +1193,19 @@ def _run_agent(args: argparse.Namespace) -> int:
     for key, expected in expected_revisions.items():
         if runtime_manifest_value[key] != expected:
             raise WorkflowError(f"RLinf runtime manifest {key} mismatch")
+    if (
+        runtime_manifest_value["flash_attn_wheel_sha256"]
+        != runtime["flash_attn_wheel_sha256"]
+    ):
+        raise WorkflowError("RLinf runtime manifest FlashAttention wheel hash mismatch")
+    expected_packages = {
+        "flash_attn": runtime_spec_value["flash_attn_version"],
+        "hydra_core": runtime_spec_value["hydra_core_version"],
+        "numpy": runtime_spec_value["numpy_version"],
+    }
+    for key, expected in expected_packages.items():
+        if runtime_manifest_value[key] != expected:
+            raise WorkflowError(f"RLinf runtime manifest {key} mismatch")
     _write_new_json(
         attempt / "runtime-provenance.json",
         {
@@ -1177,13 +1223,15 @@ def _run_agent(args: argparse.Namespace) -> int:
             python,
             "-c",
             (
-                "import flash_attn, importlib.metadata, json, ray, torch; "
+                "import flash_attn, hydra, importlib.metadata, json, numpy, ray, torch; "
                 "assert torch.cuda.is_available(), "
                 "'PyTorch cannot access an allocation GPU'; "
                 "probe = torch.ones(1, device='cuda'); "
                 "print(json.dumps({'python': __import__('sys').version, "
                 "'ray': ray.__version__, 'torch': torch.__version__, "
                 "'flash_attn': flash_attn.__version__, "
+                "'hydra_core': importlib.metadata.version('hydra-core'), "
+                "'numpy': numpy.__version__, "
                 "'isaaclab': importlib.metadata.version('isaaclab'), "
                 "'cuda': torch.version.cuda, "
                 "'cuda_available': torch.cuda.is_available(), "
