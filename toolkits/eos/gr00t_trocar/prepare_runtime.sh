@@ -96,6 +96,8 @@ if manifest.get("gr00t_revision") != sys.argv[5]:
 PY
   PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
     "$(spec_value torch_version)" \
+    "$(spec_value torchvision_version)" \
+    "$(spec_value torchaudio_version)" \
     "$(spec_value torch_backend)" \
     "$(spec_value flash_attn_version)" <<'PY'
 import sys
@@ -104,8 +106,16 @@ import flash_attn
 import isaaclab_newton
 import ray
 import torch
+import torchaudio
+import torchvision
 
-expected_torch, expected_backend, expected_flash_attn = sys.argv[1:]
+(
+    expected_torch,
+    expected_torchvision,
+    expected_torchaudio,
+    expected_backend,
+    expected_flash_attn,
+) = sys.argv[1:]
 expected_build = f"{expected_torch}+{expected_backend}"
 if not torch.__version__.startswith(expected_build):
     raise SystemExit(
@@ -115,6 +125,18 @@ if flash_attn.__version__ != expected_flash_attn:
     raise SystemExit(
         "runtime FlashAttention mismatch: "
         f"expected {expected_flash_attn}, found {flash_attn.__version__}"
+    )
+if not torchvision.__version__.startswith(f"{expected_torchvision}+{expected_backend}"):
+    raise SystemExit(
+        "runtime torchvision mismatch: "
+        f"expected {expected_torchvision}+{expected_backend}, "
+        f"found {torchvision.__version__}"
+    )
+if not torchaudio.__version__.startswith(f"{expected_torchaudio}+{expected_backend}"):
+    raise SystemExit(
+        "runtime torchaudio mismatch: "
+        f"expected {expected_torchaudio}+{expected_backend}, "
+        f"found {torchaudio.__version__}"
     )
 PY
   printf 'reusing verified RLinf runtime: %s\n' "$W73_RUNTIME_ROOT"
@@ -158,6 +180,7 @@ bash requirements/install.sh \
   --python "$python_version" \
   --torch "$torch_version" \
   --venv "$W73_RUNTIME_ROOT" \
+  --no-flash-attn \
   embodied --model gr00t --env isaaclab
 
 if ! git ls-files --error-unmatch uv.lock >/dev/null 2>&1; then
@@ -169,6 +192,24 @@ if [[ -n "$(git status --short)" ]]; then
   exit 2
 fi
 
+# IsaacLab pins its qualified Torch release during installation. Restore the
+# runtime contract before compiling FlashAttention so its extension ABI is
+# built exactly once against the final Torch version.
+export PATH="$W73_RUNTIME_ROOT/bin:$PATH"
+torch_index="https://download.pytorch.org/whl/$(spec_value torch_backend)"
+uv pip install \
+  --python "$W73_RUNTIME_ROOT/bin/python" \
+  --index-url "$torch_index" \
+  --upgrade \
+  "torch==$(spec_value torch_version)" \
+  "torchvision==$(spec_value torchvision_version)" \
+  "torchaudio==$(spec_value torchaudio_version)"
+uv pip uninstall --python "$W73_RUNTIME_ROOT/bin/python" flash-attn || true
+UV_NO_CACHE=1 uv pip install \
+  --python "$W73_RUNTIME_ROOT/bin/python" \
+  "flash-attn==$(spec_value flash_attn_version)" \
+  --no-build-isolation
+
 uv pip freeze --python "$W73_RUNTIME_ROOT/bin/python" \
   >"$W73_RUNTIME_ROOT/requirements.freeze.txt"
 freeze_sha=$(sha256sum "$W73_RUNTIME_ROOT/requirements.freeze.txt" | awk '{print $1}')
@@ -179,6 +220,8 @@ PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
   "$(git -C "$W73_ISAACLAB_ROOT" rev-parse HEAD)" \
   "$(git -C "$W73_GROOT_ROOT" rev-parse HEAD)" \
   "$(spec_value torch_version)" \
+  "$(spec_value torchvision_version)" \
+  "$(spec_value torchaudio_version)" \
   "$(spec_value torch_backend)" \
   "$(spec_value flash_attn_version)" <<'PY'
 import importlib.metadata
@@ -192,6 +235,8 @@ import flash_attn
 import isaaclab_newton
 import ray
 import torch
+import torchaudio
+import torchvision
 
 manifest_path = Path(sys.argv[1])
 spec_sha = sys.argv[2]
@@ -199,14 +244,20 @@ freeze_sha = sys.argv[3]
 isaaclab_revision = sys.argv[4]
 gr00t_revision = sys.argv[5]
 expected_torch = sys.argv[6]
-expected_backend = sys.argv[7]
-expected_flash_attn = sys.argv[8]
+expected_torchvision = sys.argv[7]
+expected_torchaudio = sys.argv[8]
+expected_backend = sys.argv[9]
+expected_flash_attn = sys.argv[10]
 
 expected_build = f"{expected_torch}+{expected_backend}"
 if not torch.__version__.startswith(expected_build):
     raise SystemExit(f"unexpected Torch build: {torch.__version__}")
 if flash_attn.__version__ != expected_flash_attn:
     raise SystemExit(f"unexpected FlashAttention build: {flash_attn.__version__}")
+if not torchvision.__version__.startswith(f"{expected_torchvision}+{expected_backend}"):
+    raise SystemExit(f"unexpected torchvision build: {torchvision.__version__}")
+if not torchaudio.__version__.startswith(f"{expected_torchaudio}+{expected_backend}"):
+    raise SystemExit(f"unexpected torchaudio build: {torchaudio.__version__}")
 
 value = {
     "schema": "rlinf.eos.python-runtime-manifest.v1",
@@ -214,6 +265,8 @@ value = {
     "requirements_freeze_sha256": freeze_sha,
     "python": sys.version,
     "torch": torch.__version__,
+    "torchvision": torchvision.__version__,
+    "torchaudio": torchaudio.__version__,
     "torch_cuda": torch.version.cuda,
     "flash_attn": flash_attn.__version__,
     "ray": ray.__version__,
