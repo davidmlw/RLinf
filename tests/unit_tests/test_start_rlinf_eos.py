@@ -398,6 +398,115 @@ def test_prepare_runtime_requires_uv_managed_python() -> None:
     assert "UV_PYTHON_PREFERENCE=only-managed" in script
 
 
+def test_prepare_runtime_build_isolated_from_canonical_source(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    isaaclab = tmp_path / "isaaclab"
+    gr00t = tmp_path / "gr00t"
+    revisions: dict[str, str] = {}
+    for name, root in (("source", source), ("isaaclab", isaaclab), ("gr00t", gr00t)):
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.name", "W73 Test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.email", "w73@example.test"],
+            check=True,
+        )
+        if name == "source":
+            (root / "requirements").mkdir()
+            installer = root / "requirements" / "install.sh"
+            installer.write_text(
+                "#!/bin/sh\n"
+                "while [ $# -gt 0 ]; do\n"
+                '  if [ "$1" = --venv ]; then runtime=$2; shift 2; else shift; fi\n'
+                "done\n"
+                'mkdir -p "$runtime/bin"\n'
+                'cp "$FAKE_RUNTIME_PYTHON" "$runtime/bin/python"\n'
+                'chmod +x "$runtime/bin/python"\n',
+                encoding="utf-8",
+            )
+            installer.chmod(0o755)
+            (root / "pyproject.toml").write_text("[project]\nname='fixture'\n")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "-q", "--allow-empty", "-m", name],
+            check=True,
+        )
+        revisions[name] = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+
+    spec = json.loads(
+        (ROOT / "toolkits/eos/gr00t_trocar/runtime-spec.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    spec["isaaclab_revision"] = revisions["isaaclab"]
+    spec["gr00t_revision"] = revisions["gr00t"]
+    spec_path = tmp_path / "runtime-spec.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        "#!/bin/sh\nif [ \"$1 $2\" = 'pip freeze' ]; then echo fixture==1; fi\n",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text(
+        "#!/bin/sh\n"
+        "cat >/dev/null\n"
+        'case "${2:-}" in\n'
+        '  *.json) printf \'%s\\n\' "{\\"schema\\":\\"rlinf.eos.python-runtime-manifest.v1\\",\\"runtime_spec_sha256\\":\\"$3\\"}" > "$2" ;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+
+    runtime = tmp_path / "envs" / "runtime"
+    env = dict(os.environ)
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "FAKE_RUNTIME_PYTHON": str(fake_python),
+            "W73_SOURCE_ROOT": str(source),
+            "W73_ISAACLAB_ROOT": str(isaaclab),
+            "W73_GROOT_ROOT": str(gr00t),
+            "W73_RUNTIME_ROOT": str(runtime),
+            "W73_RUNTIME_SPEC": str(spec_path),
+            "W73_RUNTIME_SPEC_SHA256": _sha256(spec_path),
+            "W73_UV_CACHE": str(tmp_path / "uv-cache"),
+        }
+    )
+    script = ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh"
+    prepared = subprocess.run(
+        ["bash", str(script)], check=False, capture_output=True, text=True, env=env
+    )
+
+    assert prepared.returncode == 0, prepared.stderr
+    assert (runtime / "rlinf-runtime-manifest.json").is_file()
+    assert not (runtime.parent / ".runtime.source").exists()
+    assert (
+        subprocess.check_output(
+            ["git", "-C", str(source), "status", "--porcelain"], text=True
+        )
+        == ""
+    )
+    assert (
+        len(
+            subprocess.check_output(
+                ["git", "-C", str(source), "worktree", "list", "--porcelain"],
+                text=True,
+            ).split("worktree ")
+        )
+        == 2
+    )
+
+
 def test_dry_run_does_not_call_sbatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

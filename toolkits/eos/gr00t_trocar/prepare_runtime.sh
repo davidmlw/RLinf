@@ -206,6 +206,7 @@ bash requirements/install.sh \
   --no-flash-attn \
   embodied --model gr00t --env isaaclab
 
+cd "$W73_SOURCE_ROOT"
 git -C "$W73_SOURCE_ROOT" worktree remove --force "$build_source"
 git -C "$W73_SOURCE_ROOT" worktree prune
 if [[ -n "$(git -C "$W73_SOURCE_ROOT" status --short)" ]]; then
