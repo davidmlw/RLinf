@@ -21,6 +21,12 @@ Python files, sanitized USD and task overlay. Large immutable inputs live below
 the persistent EOS workspace `inputs/`; experiment outputs live below
 `runs/W73/`.
 
+The image is intentionally system-only. At allocation start the launcher runs
+the image-owned `poiesis-w63-prepare` against the pinned Poiesis lock files and
+stores its environment receipts under `build/poiesis-w71/`. Preparation is
+serialized and reusable; Ray is never started until the prepared interpreter
+exists and is executable.
+
 ## Commands
 
 Run these commands on the EOS login node from the persistent RLinf checkout.

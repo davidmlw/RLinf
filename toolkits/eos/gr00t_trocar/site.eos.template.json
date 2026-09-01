@@ -26,7 +26,7 @@
     "require_clean": true
   },
   "runtime": {
-    "python": "/lustre/fsw/coreai_devtech_all/liweim/kiln-workspace/poiesis/runtime/isaaclab-star/.venv/bin/python",
+    "python": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/poiesis-w71/runtime/isaaclab-star/.venv/bin/python",
     "poiesis_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/poiesis-w71",
     "gr00t_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T",
     "model_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/models/Assemble_Trocar",
@@ -35,6 +35,15 @@
     "sanitized_tray_usd": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/usd/SurgicalTray001-w68-newton.usd",
     "python_deps": [
       "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/python-deps"
+    ],
+    "prepare_command": [
+      "/usr/local/bin/poiesis-w63-prepare",
+      "--repo-root",
+      "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/poiesis-w71",
+      "--state-root",
+      "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/build/poiesis-w71",
+      "--receipt-dir",
+      "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/build/poiesis-w71/receipts"
     ]
   },
   "experiment": {

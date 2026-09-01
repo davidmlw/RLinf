@@ -148,11 +148,11 @@ def _verify_sha256(path: Path, expected: object, label: str) -> str:
     return actual
 
 
-def _baseline_contract(config: Path, python: Path) -> dict[str, int | str]:
+def _baseline_contract(config: Path) -> dict[str, int | str]:
     """Parse and validate the canonical feature-free chunk16 workload."""
     probe = subprocess.run(
         [
-            str(python),
+            sys.executable,
             "-c",
             (
                 "import json,sys,yaml; "
@@ -235,7 +235,12 @@ def _baseline_contract(config: Path, python: Path) -> dict[str, int | str]:
     return {**actual, **semantic}
 
 
-def _load_site(path: Path, *, verify_image: bool = True) -> dict[str, Any]:
+def _load_site(
+    path: Path,
+    *,
+    verify_image: bool = True,
+    validate_contract: bool = True,
+) -> dict[str, Any]:
     resolved = path.resolve(strict=True)
     try:
         value = json.loads(resolved.read_text(encoding="utf-8"))
@@ -343,12 +348,13 @@ def _load_site(path: Path, *, verify_image: bool = True) -> dict[str, Any]:
             "task_overlay_root",
             "sanitized_tray_usd",
             "python_deps",
+            "prepare_command",
         },
         "runtime",
     )
-    python = _absolute_file(runtime["python"], "runtime.python")
-    if not os.access(python, os.X_OK):
-        raise WorkflowError("runtime.python is not executable")
+    python = Path(_string(runtime["python"], "runtime.python"))
+    if not python.is_absolute():
+        raise WorkflowError("runtime.python must be absolute")
     for key in (
         "poiesis_root",
         "gr00t_root",
@@ -365,6 +371,13 @@ def _load_site(path: Path, *, verify_image: bool = True) -> dict[str, Any]:
         raise WorkflowError("runtime.python_deps must be a directory array")
     for index, item in enumerate(python_deps):
         _absolute_directory(item, f"runtime.python_deps[{index}]")
+    prepare_command = runtime["prepare_command"]
+    if (
+        not isinstance(prepare_command, list)
+        or not prepare_command
+        or any(not isinstance(item, str) or not item for item in prepare_command)
+    ):
+        raise WorkflowError("runtime.prepare_command must be a nonempty string array")
 
     experiment = _exact_dict(
         site["experiment"],
@@ -389,7 +402,7 @@ def _load_site(path: Path, *, verify_image: bool = True) -> dict[str, Any]:
     runner = _absolute_file(experiment["runner"], "experiment.runner")
     _verify_sha256(config, experiment["config_sha256"], "experiment.config")
     _verify_sha256(runner, experiment["runner_sha256"], "experiment.runner")
-    contract = _baseline_contract(config, python)
+    contract = _baseline_contract(config) if validate_contract else {"status": "deferred"}
     output_root = _absolute_directory(experiment["output_root"], "experiment.output_root")
     _positive_int(experiment["max_steps"], "experiment.max_steps")
     _positive_int(experiment["save_interval"], "experiment.save_interval")
@@ -724,7 +737,9 @@ def _ray_stop(python: str, attempt: Path, label: str) -> int:
 
 
 def _run_agent(args: argparse.Namespace) -> int:
-    site = _load_site(Path(args.site), verify_image=False)
+    site = _load_site(
+        Path(args.site), verify_image=False, validate_contract=False
+    )
     attempt = Path(args.attempt_root).resolve(strict=True)
     expected_parent = Path(site["_resolved"]["output_root"]).resolve(strict=True)
     if attempt.parent != expected_parent or attempt.is_symlink():
@@ -739,7 +754,6 @@ def _run_agent(args: argparse.Namespace) -> int:
         raise WorkflowError("run-agent received an expired deadline")
     runtime = site["runtime"]
     experiment = site["experiment"]
-    python = runtime["python"]
     gpus = _gpu_inventory()
     _write_new_json(
         attempt / "preflight.json",
@@ -754,6 +768,29 @@ def _run_agent(args: argparse.Namespace) -> int:
             "timestamp_unix_s": time.time(),
         },
     )
+    prepare_out = attempt / "logs" / "runtime-prepare.out"
+    prepare_err = attempt / "logs" / "runtime-prepare.err"
+    remaining = max(1, deadline - int(time.time()))
+    with prepare_out.open("w", encoding="utf-8") as stdout, prepare_err.open(
+        "w", encoding="utf-8"
+    ) as stderr:
+        try:
+            prepared = subprocess.run(
+                runtime["prepare_command"],
+                check=False,
+                stdout=stdout,
+                stderr=stderr,
+                text=True,
+                timeout=remaining,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise WorkflowError("runtime preparation exceeded the workload deadline") from error
+    if prepared.returncode != 0:
+        raise WorkflowError("runtime preparation failed")
+    python_path = _absolute_file(runtime["python"], "runtime.python")
+    if not os.access(python_path, os.X_OK):
+        raise WorkflowError("runtime.python is not executable after preparation")
+    python = str(python_path)
     _ray_stop(python, attempt, "prestop")
     node_ip = socket.gethostbyname(hostname)
     ray_start = _run_command(

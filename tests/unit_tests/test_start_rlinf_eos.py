@@ -75,6 +75,7 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
             "task_overlay_root": str(tmp_path / "overlay"),
             "sanitized_tray_usd": str(tray),
             "python_deps": [str(tmp_path / "python-deps")],
+            "prepare_command": ["/usr/local/bin/poiesis-w63-prepare"],
         },
         "experiment": {
             "name": "W73-test",
