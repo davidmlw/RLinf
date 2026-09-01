@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2025 The RLinf Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Submit and own a single-node RLinf experiment on EOS.
 
 The public entrypoint runs on an EOS login node. It validates immutable inputs,
@@ -24,7 +38,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-SITE_SCHEMA = "rlinf.eos.site.v2"
+SITE_SCHEMA = "rlinf.eos.site.v3"
 SUBMISSION_SCHEMA = "rlinf.eos.submission.v1"
 ATTEMPT_SCHEMA = "rlinf.eos.attempt.v1"
 RESULT_SCHEMA = "rlinf.eos.result.v1"
@@ -195,9 +209,7 @@ def _validate_provenance(value: object) -> dict[str, object]:
             "--untracked-files=no",
             "--ignore-submodules=untracked",
         ):
-            raise WorkflowError(
-                f"provenance Git tracked content is not clean: {root}"
-            )
+            raise WorkflowError(f"provenance Git tracked content is not clean: {root}")
         git_names.add(name)
         git_roots.add(root)
         resolved_git.append(
@@ -224,9 +236,7 @@ def _validate_provenance(value: object) -> dict[str, object]:
         digest = _verify_sha256(path, artifact["sha256"], label)
         file_names.add(name)
         file_paths.add(path)
-        resolved_files.append(
-            {"name": name, "path": str(path), "sha256": digest}
-        )
+        resolved_files.append({"name": name, "path": str(path), "sha256": digest})
 
     return {"git_checkouts": resolved_git, "files": resolved_files}
 
@@ -248,7 +258,9 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
         text=True,
     )
     if probe.returncode != 0:
-        raise WorkflowError(f"runtime Python cannot parse config: {probe.stderr.strip()}")
+        raise WorkflowError(
+            f"runtime Python cannot parse config: {probe.stderr.strip()}"
+        )
     try:
         cfg = json.loads(probe.stdout)
     except json.JSONDecodeError as error:
@@ -263,8 +275,10 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
         eval_env = cfg["env"]["eval"]
         chunks = int(actor_model["num_action_chunks"])
         envs = int(env["total_num_envs"])
-        physical = envs * int(env["max_steps_per_rollout_epoch"]) * int(
-            algorithm["rollout_epoch"]
+        physical = (
+            envs
+            * int(env["max_steps_per_rollout_epoch"])
+            * int(algorithm["rollout_epoch"])
         )
         decisions = physical // chunks
         global_batch = int(actor["global_batch_size"])
@@ -294,7 +308,9 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
         "optimizer_updates": optimizer_updates,
     }
     if actual != expected:
-        raise WorkflowError(f"config workload mismatch: expected {expected}, found {actual}")
+        raise WorkflowError(
+            f"config workload mismatch: expected {expected}, found {actual}"
+        )
     semantic = {
         "reward_type": algorithm.get("reward_type"),
         "logprob_type": algorithm.get("logprob_type"),
@@ -324,7 +340,9 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
     }
     present = forbidden.intersection(actor_model) | forbidden.intersection(rollout)
     if present:
-        raise WorkflowError(f"feature-reuse fields are forbidden in baseline: {sorted(present)}")
+        raise WorkflowError(
+            f"feature-reuse fields are forbidden in baseline: {sorted(present)}"
+        )
     return {**actual, **semantic}
 
 
@@ -401,9 +419,7 @@ def _load_site(
         "container",
     )
     _string(container["oci_reference"], "container.oci_reference")
-    registry_digest = _string(
-        container["registry_digest"], "container.registry_digest"
-    )
+    registry_digest = _string(container["registry_digest"], "container.registry_digest")
     if re.fullmatch(r"sha256:[0-9a-f]{64}", registry_digest) is None:
         raise WorkflowError("container.registry_digest must be a sha256 OCI digest")
     image = _absolute_file(container["image"], "container.image")
@@ -431,7 +447,10 @@ def _load_site(
     source_root = _absolute_directory(source["root"], "source.root")
     revision = _string(source["revision"], "source.revision")
     base_revision = _string(source["base_revision"], "source.base_revision")
-    if GIT_OID_RE.fullmatch(revision) is None or GIT_OID_RE.fullmatch(base_revision) is None:
+    if (
+        GIT_OID_RE.fullmatch(revision) is None
+        or GIT_OID_RE.fullmatch(base_revision) is None
+    ):
         raise WorkflowError("source revisions must be full lowercase Git OIDs")
     if base_revision != BASE_REVISION:
         raise WorkflowError(f"source.base_revision must be {BASE_REVISION}")
@@ -441,7 +460,15 @@ def _load_site(
             f"source revision mismatch: expected {revision}, found {actual_revision}"
         )
     ancestor = subprocess.run(
-        ["git", "-C", str(source_root), "merge-base", "--is-ancestor", base_revision, revision],
+        [
+            "git",
+            "-C",
+            str(source_root),
+            "merge-base",
+            "--is-ancestor",
+            base_revision,
+            revision,
+        ],
         check=False,
     )
     if ancestor.returncode != 0:
@@ -457,22 +484,104 @@ def _load_site(
         site["runtime"],
         {
             "python",
-            "poiesis_root",
+            "env_root",
+            "runtime_spec",
+            "runtime_spec_sha256",
+            "prepare_script",
+            "prepare_script_sha256",
+            "uv_cache",
+            "isaaclab_root",
             "gr00t_root",
             "model_root",
             "hf_cache",
             "task_overlay_root",
             "sanitized_tray_usd",
             "python_deps",
-            "prepare_command",
         },
         "runtime",
     )
     python = Path(_string(runtime["python"], "runtime.python"))
     if not python.is_absolute():
         raise WorkflowError("runtime.python must be absolute")
+    env_root = Path(_string(runtime["env_root"], "runtime.env_root"))
+    uv_cache = Path(_string(runtime["uv_cache"], "runtime.uv_cache"))
+    if not env_root.is_absolute() or not uv_cache.is_absolute():
+        raise WorkflowError("runtime env_root and uv_cache must be absolute")
+    if python != env_root / "bin" / "python":
+        raise WorkflowError("runtime.python must be env_root/bin/python")
+    runtime_spec = _absolute_file(runtime["runtime_spec"], "runtime.runtime_spec")
+    prepare_script = _absolute_file(runtime["prepare_script"], "runtime.prepare_script")
+    _verify_sha256(runtime_spec, runtime["runtime_spec_sha256"], "runtime.runtime_spec")
+    _verify_sha256(
+        prepare_script,
+        runtime["prepare_script_sha256"],
+        "runtime.prepare_script",
+    )
+    try:
+        runtime_spec_value = json.loads(runtime_spec.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise WorkflowError("runtime spec is not valid JSON") from error
+    runtime_spec_value = _exact_dict(
+        runtime_spec_value,
+        {
+            "schema",
+            "system_image_registry_digest",
+            "python_version",
+            "torch_version",
+            "torch_backend",
+            "flash_attn_version",
+            "isaaclab_revision",
+            "gr00t_revision",
+            "installer",
+            "installer_arguments",
+        },
+        "runtime spec",
+    )
+    if runtime_spec_value.get("schema") != "rlinf.eos.python-runtime.v1":
+        raise WorkflowError("runtime spec schema mismatch")
+    if runtime_spec_value.get("system_image_registry_digest") != registry_digest:
+        raise WorkflowError("runtime spec and system image digest disagree")
+    provenance_revisions = {
+        item["name"]: item["revision"] for item in provenance["git_checkouts"]
+    }
+    if runtime_spec_value.get("isaaclab_revision") != provenance_revisions.get(
+        "isaaclab"
+    ):
+        raise WorkflowError("runtime spec and IsaacLab provenance disagree")
+    if runtime_spec_value.get("gr00t_revision") != provenance_revisions.get(
+        "isaac-gr00t"
+    ):
+        raise WorkflowError("runtime spec and GR00T provenance disagree")
     for key in (
-        "poiesis_root",
+        "python_version",
+        "torch_version",
+        "torch_backend",
+        "flash_attn_version",
+        "installer",
+    ):
+        _string(runtime_spec_value[key], f"runtime spec.{key}")
+    if runtime_spec_value["installer"] != "requirements/install.sh":
+        raise WorkflowError("runtime spec uses an unsupported installer")
+    expected_installer_arguments = [
+        "--no-root",
+        "--platform",
+        "nvidia",
+        "--python",
+        runtime_spec_value["python_version"],
+        "--torch",
+        runtime_spec_value["torch_version"],
+        "embodied",
+        "--model",
+        "gr00t",
+        "--env",
+        "isaaclab",
+    ]
+    if runtime_spec_value["installer_arguments"] != expected_installer_arguments:
+        raise WorkflowError(
+            "runtime spec installer arguments disagree with the launcher"
+        )
+    for key in (
+        "isaaclab_root",
         "gr00t_root",
         "model_root",
         "hf_cache",
@@ -487,13 +596,6 @@ def _load_site(
         raise WorkflowError("runtime.python_deps must be a directory array")
     for index, item in enumerate(python_deps):
         _absolute_directory(item, f"runtime.python_deps[{index}]")
-    prepare_command = runtime["prepare_command"]
-    if (
-        not isinstance(prepare_command, list)
-        or not prepare_command
-        or any(not isinstance(item, str) or not item for item in prepare_command)
-    ):
-        raise WorkflowError("runtime.prepare_command must be a nonempty string array")
 
     experiment = _exact_dict(
         site["experiment"],
@@ -518,8 +620,12 @@ def _load_site(
     runner = _absolute_file(experiment["runner"], "experiment.runner")
     _verify_sha256(config, experiment["config_sha256"], "experiment.config")
     _verify_sha256(runner, experiment["runner_sha256"], "experiment.runner")
-    contract = _baseline_contract(config) if validate_contract else {"status": "deferred"}
-    output_root = _absolute_directory(experiment["output_root"], "experiment.output_root")
+    contract = (
+        _baseline_contract(config) if validate_contract else {"status": "deferred"}
+    )
+    output_root = _absolute_directory(
+        experiment["output_root"], "experiment.output_root"
+    )
     _positive_int(experiment["max_steps"], "experiment.max_steps")
     _positive_int(experiment["save_interval"], "experiment.save_interval")
     workload_seconds = _positive_int(
@@ -712,6 +818,21 @@ def _materialize(args: argparse.Namespace) -> int:
     runner = _absolute_file(experiment["runner"], "experiment.runner")
     experiment["config_sha256"] = _sha256_file(config)
     experiment["runner_sha256"] = _sha256_file(runner)
+    runtime = site["runtime"]
+    runtime_spec = _absolute_file(runtime["runtime_spec"], "runtime.runtime_spec")
+    prepare_script = _absolute_file(runtime["prepare_script"], "runtime.prepare_script")
+    if runtime["runtime_spec_sha256"] not in {
+        "AUTO",
+        _sha256_file(runtime_spec),
+    }:
+        raise WorkflowError("template runtime spec hash is neither AUTO nor current")
+    if runtime["prepare_script_sha256"] not in {
+        "AUTO",
+        _sha256_file(prepare_script),
+    }:
+        raise WorkflowError("template prepare script hash is neither AUTO nor current")
+    runtime["runtime_spec_sha256"] = _sha256_file(runtime_spec)
+    runtime["prepare_script_sha256"] = _sha256_file(prepare_script)
     if args.smoke:
         experiment.update(
             {
@@ -812,9 +933,10 @@ def _allocation_run(args: argparse.Namespace) -> int:
         str(deadline),
     ]
     _write_new_json(attempt / "srun-command.json", argv)
-    with (attempt / "logs" / "srun.out").open("w", encoding="utf-8") as stdout, (
-        attempt / "logs" / "srun.err"
-    ).open("w", encoding="utf-8") as stderr:
+    with (
+        (attempt / "logs" / "srun.out").open("w", encoding="utf-8") as stdout,
+        (attempt / "logs" / "srun.err").open("w", encoding="utf-8") as stderr,
+    ):
         process = subprocess.Popen(argv, stdout=stdout, stderr=stderr, text=True)
 
         def terminate(_signum: int, _frame: object) -> None:
@@ -844,14 +966,36 @@ def _run_command(
     output: Path,
     error: Path,
     env: Mapping[str, str] | None = None,
+    timeout: int | None = None,
 ) -> int:
-    with output.open("w", encoding="utf-8") as stdout, error.open(
-        "w", encoding="utf-8"
-    ) as stderr:
-        completed = subprocess.run(
-            list(argv), check=False, stdout=stdout, stderr=stderr, text=True, env=env
+    with (
+        output.open("w", encoding="utf-8") as stdout,
+        error.open("w", encoding="utf-8") as stderr,
+    ):
+        process = subprocess.Popen(
+            list(argv),
+            stdout=stdout,
+            stderr=stderr,
+            text=True,
+            env=env,
+            start_new_session=timeout is not None,
         )
-    return completed.returncode
+        try:
+            return process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+            raise
 
 
 def _gpu_inventory() -> list[str]:
@@ -875,9 +1019,7 @@ def _ray_stop(python: str, attempt: Path, label: str) -> int:
 
 
 def _run_agent(args: argparse.Namespace) -> int:
-    site = _load_site(
-        Path(args.site), verify_image=False, validate_contract=False
-    )
+    site = _load_site(Path(args.site), verify_image=False, validate_contract=False)
     attempt = Path(args.attempt_root).resolve(strict=True)
     expected_parent = Path(site["_resolved"]["output_root"]).resolve(strict=True)
     if attempt.parent != expected_parent or attempt.is_symlink():
@@ -906,27 +1048,114 @@ def _run_agent(args: argparse.Namespace) -> int:
             "timestamp_unix_s": time.time(),
         },
     )
-    prepare_out = attempt / "logs" / "runtime-prepare.out"
-    prepare_err = attempt / "logs" / "runtime-prepare.err"
+    prepare_env = dict(os.environ)
+    prepare_env.update(
+        {
+            "W73_SOURCE_ROOT": site["source"]["root"],
+            "W73_ISAACLAB_ROOT": runtime["isaaclab_root"],
+            "W73_GROOT_ROOT": runtime["gr00t_root"],
+            "W73_RUNTIME_ROOT": runtime["env_root"],
+            "W73_RUNTIME_SPEC": runtime["runtime_spec"],
+            "W73_RUNTIME_SPEC_SHA256": runtime["runtime_spec_sha256"],
+            "W73_UV_CACHE": runtime["uv_cache"],
+        }
+    )
     remaining = max(1, deadline - int(time.time()))
-    with prepare_out.open("w", encoding="utf-8") as stdout, prepare_err.open(
-        "w", encoding="utf-8"
-    ) as stderr:
-        try:
-            prepared = subprocess.run(
-                runtime["prepare_command"],
-                check=False,
-                stdout=stdout,
-                stderr=stderr,
-                text=True,
-                timeout=remaining,
-            )
-        except subprocess.TimeoutExpired as error:
-            raise WorkflowError("runtime preparation exceeded the workload deadline") from error
-    if prepared.returncode != 0:
-        raise WorkflowError("runtime preparation failed")
+    try:
+        prepare_code = _run_command(
+            ["bash", runtime["prepare_script"]],
+            output=attempt / "logs" / "runtime-prepare.out",
+            error=attempt / "logs" / "runtime-prepare.err",
+            env=prepare_env,
+            timeout=remaining,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise WorkflowError(
+            "RLinf runtime preparation exceeded the workload deadline"
+        ) from error
+    if prepare_code != 0:
+        raise WorkflowError("RLinf shared runtime preparation failed")
+    runtime_manifest = Path(runtime["env_root"]) / "rlinf-runtime-manifest.json"
+    try:
+        runtime_manifest_value = json.loads(
+            runtime_manifest.read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as error:
+        raise WorkflowError("RLinf runtime manifest is missing or invalid") from error
+    runtime_manifest_value = _exact_dict(
+        runtime_manifest_value,
+        {
+            "schema",
+            "runtime_spec_sha256",
+            "requirements_freeze_sha256",
+            "python",
+            "torch",
+            "torch_cuda",
+            "flash_attn",
+            "ray",
+            "isaaclab",
+            "isaaclab_newton",
+            "gr00t",
+            "isaaclab_revision",
+            "gr00t_revision",
+        },
+        "runtime manifest",
+    )
+    if runtime_manifest_value["schema"] != "rlinf.eos.python-runtime-manifest.v1":
+        raise WorkflowError("RLinf runtime manifest schema mismatch")
+    if runtime_manifest_value["runtime_spec_sha256"] != runtime["runtime_spec_sha256"]:
+        raise WorkflowError("RLinf runtime manifest spec hash mismatch")
+    freeze = Path(runtime["env_root"]) / "requirements.freeze.txt"
+    if (
+        not freeze.is_file()
+        or _sha256_file(freeze) != runtime_manifest_value["requirements_freeze_sha256"]
+    ):
+        raise WorkflowError("RLinf runtime package freeze hash mismatch")
+    expected_revisions = {
+        "isaaclab_revision": _git_output(
+            Path(runtime["isaaclab_root"]), "rev-parse", "HEAD"
+        ),
+        "gr00t_revision": _git_output(Path(runtime["gr00t_root"]), "rev-parse", "HEAD"),
+    }
+    for key, expected in expected_revisions.items():
+        if runtime_manifest_value[key] != expected:
+            raise WorkflowError(f"RLinf runtime manifest {key} mismatch")
+    _write_new_json(
+        attempt / "runtime-provenance.json",
+        {
+            "schema": ATTEMPT_SCHEMA,
+            "runtime_spec_sha256": runtime["runtime_spec_sha256"],
+            "prepare_script_sha256": runtime["prepare_script_sha256"],
+            "runtime_manifest": runtime_manifest_value,
+            "timestamp_unix_s": time.time(),
+        },
+    )
     python_path = _absolute_executable(runtime["python"], "runtime.python")
     python = str(python_path)
+    runtime_probe = _run_command(
+        [
+            python,
+            "-c",
+            (
+                "import flash_attn, importlib.metadata, json, ray, torch; "
+                "assert torch.cuda.is_available(), "
+                "'PyTorch cannot access an allocation GPU'; "
+                "probe = torch.ones(1, device='cuda'); "
+                "print(json.dumps({'python': __import__('sys').version, "
+                "'ray': ray.__version__, 'torch': torch.__version__, "
+                "'flash_attn': flash_attn.__version__, "
+                "'isaaclab': importlib.metadata.version('isaaclab'), "
+                "'cuda': torch.version.cuda, "
+                "'cuda_available': torch.cuda.is_available(), "
+                "'cuda_device': torch.cuda.get_device_name(), "
+                "'cuda_probe': probe.item()}))"
+            ),
+        ],
+        output=attempt / "logs" / "runtime-probe.out",
+        error=attempt / "logs" / "runtime-probe.err",
+    )
+    if runtime_probe != 0:
+        raise WorkflowError("RLinf runtime dependency probe failed")
     seed_test = _run_command(
         [
             python,
@@ -977,7 +1206,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             "W73_SOURCE_ROOT": site["source"]["root"],
             "W73_CONFIG": experiment["config"],
             "W73_RUNTIME_PYTHON": python,
-            "W73_POIESIS_ROOT": runtime["poiesis_root"],
+            "W73_ISAACLAB_ROOT": runtime["isaaclab_root"],
             "W73_GROOT_ROOT": runtime["gr00t_root"],
             "W73_MODEL_ROOT": runtime["model_root"],
             "W73_HF_CACHE": runtime["hf_cache"],

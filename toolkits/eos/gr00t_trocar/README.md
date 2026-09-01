@@ -1,40 +1,47 @@
 # EOS GR00T Trocar Baseline
 
-This directory owns the reproducible W71-before control on EOS H100. It uses
+This directory owns the reproducible RLinf control represented by the
+W71-before arm on EOS H100. It uses
 RLinf base `0f9ea98c`, GR00T N1.5, the Newton/MJWarp Trocar task, and the
 production action-chunk-16 PPO configuration. Rollout backbone feature reuse
 and the other local performance features are absent.
 
 ## Runtime
 
-The frozen OCI input is:
+RLinf source is never built into the runtime image or installed into the
+shared Python environment. The EOS checkout at the exact site-manifest
+revision is placed first on `PYTHONPATH` and executed directly.
 
-```text
-gitlab-master.nvidia.com:5005/liweim/image/poiesis:be095dc
-registry digest: sha256:aab301569e09f60e143ddcb7749b2610fe522503edcdc8538efbb4a446b1a53f
-squashfs sha256: 64bbd7bda0f8d65d298073377a3e2331e91a75c49d459893ae5b3096410b022c
-```
+The system image is the proven CUDA 12.8 compatibility substrate, republished
+under the RLinf-owned GitLab reference
+`liweim/image/rlinf-eos-system:cuda128-ubuntu2404-be095dc`. It supplies Ubuntu,
+CUDA compatibility libraries, system dependencies and `uv`, but no experiment
+Python environment. `prepare_runtime.sh` materializes the RLinf-owned shared
+environment once at
+`rlinf-workspace/envs/gr00t-newton-py312-cu128-v1/`. The committed runtime spec,
+exact source revisions, package freeze and generated manifest identify it;
+later tickets can reuse it without rebuilding an image or reinstalling Python
+packages.
 
 EOS exposes H100 nodes as an exclusive node constraint, not a Slurm GRES.
 Submission therefore uses `--constraint=h100 --exclusive` without
 `--gpus-per-node`; the in-container preflight fails closed unless exactly eight
 GPUs are visible.
 
-The image alone is not the complete runtime. The v2 site manifest pins the OCI
-reference and registry digest, local squashfs hash, RLinf/Poiesis/Isaac-GR00T/
-IsaacLab revisions, model and Python-dependency manifests, sanitized USD and
-task overlay. Git inputs must have clean tracked content and submodules at their
-exact revisions; untracked environments and submodule build products produced
-from the pinned lock files are allowed. File inputs must match their SHA-256
-before submission. Large
+The v3 site manifest pins the OCI reference and registry digest, local squashfs
+hash, RLinf/Isaac-GR00T/IsaacLab revisions, runtime spec and prepare-script
+hashes, model manifest, sanitized USD and task overlay. No Poiesis-owned
+checkout, lock file, Python environment or prepare command is part of the
+RLinf runtime contract. Git inputs must have clean tracked content and submodules at their
+exact revisions. File inputs must match their SHA-256 before submission. Large
 immutable inputs live below the persistent EOS workspace `inputs/`; experiment
 outputs live below `runs/W73/`.
 
-The image is intentionally system-only. At allocation start the launcher runs
-the image-owned `poiesis-w63-prepare` against the pinned Poiesis lock files and
-stores its environment receipts under `build/poiesis-w71/`. Preparation is
-serialized and reusable; Ray is never started until the prepared interpreter
-exists, is executable, and passes the deterministic-seed focused test.
+At allocation start the launcher creates or verifies the shared runtime before
+probing its interpreter, Torch, CUDA, FlashAttention, IsaacLab and Ray. Ray is
+never started until those checks and the deterministic-seed focused test pass.
+The first smoke may spend time materializing the environment; subsequent jobs
+reuse it and report the same manifest.
 
 ## Commands
 

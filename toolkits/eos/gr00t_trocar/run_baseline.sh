@@ -6,13 +6,12 @@ required=(
   W73_SOURCE_ROOT
   W73_CONFIG
   W73_RUNTIME_PYTHON
-  W73_POIESIS_ROOT
+  W73_ISAACLAB_ROOT
   W73_GROOT_ROOT
   W73_MODEL_ROOT
   W73_HF_CACHE
   W73_TASK_OVERLAY_ROOT
   W73_SANITIZED_TRAY_USD
-  W73_PYTHON_DEPS
   W73_MAX_STEPS
   W73_SAVE_INTERVAL
   W73_DEADLINE_UNIX_S
@@ -27,7 +26,7 @@ done
 test -x "$W73_RUNTIME_PYTHON"
 test -d "$W73_SOURCE_ROOT/.git" || test -f "$W73_SOURCE_ROOT/.git"
 test -f "$W73_CONFIG"
-test -d "$W73_POIESIS_ROOT"
+test -d "$W73_ISAACLAB_ROOT"
 test -d "$W73_GROOT_ROOT"
 test -d "$W73_MODEL_ROOT"
 test -d "$W73_TASK_OVERLAY_ROOT"
@@ -56,7 +55,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-export PYTHONPATH="${W73_PYTHON_DEPS}:$W73_GROOT_ROOT:$W73_SOURCE_ROOT:$W73_TASK_OVERLAY_ROOT:$W73_POIESIS_ROOT/python"
+python_paths=(
+  "$W73_GROOT_ROOT"
+  "$W73_SOURCE_ROOT"
+  "$W73_TASK_OVERLAY_ROOT"
+  "$W73_ISAACLAB_ROOT/source"
+)
+if [[ -n "${W73_PYTHON_DEPS:-}" ]]; then
+  python_paths=("$W73_PYTHON_DEPS" "${python_paths[@]}")
+fi
+export PYTHONPATH="$(IFS=:; printf '%s' "${python_paths[*]}")"
 export TMPDIR="$short_tmp"
 export HF_HOME="$W73_HF_CACHE"
 export HF_HUB_OFFLINE=1
@@ -70,7 +78,7 @@ export RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
 export RLINF_CODE_WORKING_DIR=0
 export RLINF_EXT_MODULE=w68_rlinf_extension
 export RLINF_CONFIG_FILE="$W73_CONFIG"
-export W68_ISAACLAB_SOURCE_ROOT="$W73_POIESIS_ROOT/third_party/isaaclab/source"
+export W68_ISAACLAB_SOURCE_ROOT="$W73_ISAACLAB_ROOT/source"
 export W68_OVERLAY_ROOT="$W73_TASK_OVERLAY_ROOT"
 export W68_SANITIZED_TRAY_USD="$W73_SANITIZED_TRAY_USD"
 export OMNI_KIT_ACCEPT_EULA=YES

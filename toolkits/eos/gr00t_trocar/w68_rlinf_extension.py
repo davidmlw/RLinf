@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 import yaml
+
 from rlinf.models.embodiment.gr00t import embodiment_tags
 
 if TYPE_CHECKING:
@@ -62,6 +63,28 @@ _registered = False
 
 # Cache for YAML config (loaded once per process)
 _full_cfg_cache: dict | None = None
+
+
+def _prepend_isaaclab_sources(source_root: Path) -> tuple[Path, ...]:
+    """Put every revisioned Isaac Lab extension project first on sys.path."""
+
+    source_root = source_root.resolve()
+    if not source_root.is_dir():
+        raise FileNotFoundError(f"Isaac Lab source root does not exist: {source_root}")
+    projects = tuple(
+        path.resolve()
+        for path in sorted(source_root.iterdir())
+        if path.is_dir() and (path / "pyproject.toml").is_file()
+    )
+    if not projects:
+        raise RuntimeError(
+            f"Isaac Lab source root contains no extension projects: {source_root}"
+        )
+    project_strings = [str(path) for path in projects]
+    sys.path[:] = project_strings + [
+        path for path in sys.path if path not in project_strings
+    ]
+    return projects
 
 
 def register() -> None:
@@ -531,9 +554,8 @@ def _create_generic_env_wrapper(task_id: str) -> type:
 
                 source_root = Path(os.environ["W68_ISAACLAB_SOURCE_ROOT"])
                 overlay_root = Path(os.environ["W68_OVERLAY_ROOT"])
-                from poiesis_rollout.isaaclab_bootstrap import prepend_isaaclab_sources
 
-                prepend_isaaclab_sources(source_root)
+                _prepend_isaaclab_sources(source_root)
                 sys.path.insert(0, str(overlay_root))
 
                 from isaaclab_tasks.utils import launch_simulation, resolve_task_config

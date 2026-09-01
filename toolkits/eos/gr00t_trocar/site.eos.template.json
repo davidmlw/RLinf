@@ -1,5 +1,5 @@
 {
-  "schema": "rlinf.eos.site.v2",
+  "schema": "rlinf.eos.site.v3",
   "slurm": {
     "account": "coreai_devtech_all",
     "partition": "batch",
@@ -12,9 +12,9 @@
     "signal_seconds": 600
   },
   "container": {
-    "oci_reference": "gitlab-master.nvidia.com:5005/liweim/image/poiesis:be095dc",
+    "oci_reference": "gitlab-master.nvidia.com:5005/liweim/image/rlinf-eos-system:cuda128-ubuntu2404-be095dc",
     "registry_digest": "sha256:aab301569e09f60e143ddcb7749b2610fe522503edcdc8538efbb4a446b1a53f",
-    "image": "/lustre/fsw/coreai_devtech_all/liweim/kiln-workspace/images/poiesis-be095dc.sqsh",
+    "image": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/images/rlinf-eos-system-cuda128-ubuntu2404-be095dc.sqsh",
     "image_sha256": "64bbd7bda0f8d65d298073377a3e2331e91a75c49d459893ae5b3096410b022c",
     "mounts": [
       "/lustre:/lustre"
@@ -30,14 +30,8 @@
   "provenance": {
     "git_checkouts": [
       {
-        "name": "poiesis-runtime",
-        "root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/poiesis-w71",
-        "revision": "dbe53bd0aeb33c0716d918774475e51038ef6c1a",
-        "require_clean": true
-      },
-      {
         "name": "isaaclab",
-        "root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/poiesis-w71/third_party/isaaclab",
+        "root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/IsaacLab",
         "revision": "2e44ddb2e19536579140496023b5ccb060bc4152",
         "require_clean": true
       },
@@ -55,11 +49,6 @@
         "sha256": "0ac04c0773e3dc7835da136eda22d6641e0dfe38d2e025385d061744c076f2b8"
       },
       {
-        "name": "flash-attn-files-manifest",
-        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/manifests/flash-attn-files.sha256",
-        "sha256": "92042a9ab93e4fb44ff1c2b818cff5fad86ae114ea91a3b9970d6ac5c5e757e7"
-      },
-      {
         "name": "sanitized-trocar-tray-usd",
         "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/usd/SurgicalTray001-w68-newton.usd",
         "sha256": "3c4f15feadbf35244e56a964aeef638241f33b46ad71c079c5a44f287a0008ab"
@@ -67,25 +56,20 @@
     ]
   },
   "runtime": {
-    "python": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/poiesis-w71/runtime/isaaclab-star/.venv/bin/python",
-    "poiesis_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/poiesis-w71",
+    "python": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v1/bin/python",
+    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v1",
+    "runtime_spec": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/runtime-spec.json",
+    "runtime_spec_sha256": "AUTO",
+    "prepare_script": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/prepare_runtime.sh",
+    "prepare_script_sha256": "AUTO",
+    "uv_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/cache/uv",
+    "isaaclab_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/IsaacLab",
     "gr00t_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T",
     "model_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/models/Assemble_Trocar",
     "hf_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/cache/huggingface",
     "task_overlay_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar",
     "sanitized_tray_usd": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/usd/SurgicalTray001-w68-newton.usd",
-    "python_deps": [
-      "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/python-deps"
-    ],
-    "prepare_command": [
-      "/usr/local/bin/poiesis-w63-prepare",
-      "--repo-root",
-      "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/poiesis-w71",
-      "--state-root",
-      "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/build/poiesis-w71",
-      "--receipt-dir",
-      "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/build/poiesis-w71/receipts"
-    ]
+    "python_deps": []
   },
   "experiment": {
     "name": "W73-before",

@@ -1,7 +1,22 @@
+# Copyright 2025 The RLinf Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -23,10 +38,12 @@ def _sha256(path: Path) -> str:
 def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
     image = tmp_path / "image.sqsh"
     image.write_bytes(b"image")
-    runtime_python = Path(sys.executable).resolve(strict=True)
+    runtime_python_target = Path(sys.executable).resolve(strict=True)
     for name in (
-        "poiesis",
+        "isaaclab",
         "gr00t",
+        "runtime-env",
+        "uv-cache",
         "model",
         "hf-cache",
         "overlay",
@@ -34,6 +51,46 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
         "output",
     ):
         (tmp_path / name).mkdir()
+    (tmp_path / "runtime-env" / "bin").mkdir()
+    runtime_python = tmp_path / "runtime-env" / "bin" / "python"
+    runtime_python.symlink_to(runtime_python_target)
+    dependency_revisions = {}
+    for name in ("isaaclab", "gr00t"):
+        root = tmp_path / name
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.name", "W73 Test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.email", "w73@example.test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "-q", "--allow-empty", "-m", name],
+            check=True,
+        )
+        dependency_revisions[name] = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+    registry_digest = f"sha256:{'1' * 64}"
+    runtime_spec = tmp_path / "runtime-spec.json"
+    runtime_spec_value = json.loads(
+        (ROOT / "toolkits/eos/gr00t_trocar/runtime-spec.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    runtime_spec_value.update(
+        {
+            "system_image_registry_digest": registry_digest,
+            "isaaclab_revision": dependency_revisions["isaaclab"],
+            "gr00t_revision": dependency_revisions["gr00t"],
+        }
+    )
+    runtime_spec.write_text(
+        json.dumps(runtime_spec_value),
+        encoding="utf-8",
+    )
     tray = tmp_path / "tray.usd"
     tray.write_text("usd", encoding="utf-8")
     model_manifest = tmp_path / "model-manifest.json"
@@ -60,7 +117,7 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
         },
         "container": {
             "oci_reference": "registry.example/rlinf:test",
-            "registry_digest": f"sha256:{'1' * 64}",
+            "registry_digest": registry_digest,
             "image": str(image),
             "image_sha256": _sha256(image),
             "mounts": [f"{tmp_path}:{tmp_path}"],
@@ -79,7 +136,19 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
                     "root": str(ROOT),
                     "revision": revision,
                     "require_clean": False,
-                }
+                },
+                {
+                    "name": "isaaclab",
+                    "root": str(tmp_path / "isaaclab"),
+                    "revision": dependency_revisions["isaaclab"],
+                    "require_clean": True,
+                },
+                {
+                    "name": "isaac-gr00t",
+                    "root": str(tmp_path / "gr00t"),
+                    "revision": dependency_revisions["gr00t"],
+                    "require_clean": True,
+                },
             ],
             "files": [
                 {
@@ -101,14 +170,23 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
         },
         "runtime": {
             "python": str(runtime_python),
-            "poiesis_root": str(tmp_path / "poiesis"),
+            "env_root": str(tmp_path / "runtime-env"),
+            "runtime_spec": str(runtime_spec),
+            "runtime_spec_sha256": _sha256(runtime_spec),
+            "prepare_script": str(
+                ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh"
+            ),
+            "prepare_script_sha256": _sha256(
+                ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh"
+            ),
+            "uv_cache": str(tmp_path / "uv-cache"),
+            "isaaclab_root": str(tmp_path / "isaaclab"),
             "gr00t_root": str(tmp_path / "gr00t"),
             "model_root": str(tmp_path / "model"),
             "hf_cache": str(tmp_path / "hf-cache"),
             "task_overlay_root": str(tmp_path / "overlay"),
             "sanitized_tray_usd": str(tray),
             "python_deps": [str(tmp_path / "python-deps")],
-            "prepare_command": ["/usr/local/bin/poiesis-w63-prepare"],
         },
         "experiment": {
             "name": "W73-test",
@@ -214,6 +292,83 @@ def test_receipts_are_create_only(tmp_path: Path) -> None:
         MODULE._write_new_json(path, {"value": 2})
 
 
+def test_prepare_runtime_reuses_only_matching_package_freeze(tmp_path: Path) -> None:
+    revisions: dict[str, str] = {}
+    for name in ("source", "isaaclab", "gr00t"):
+        root = tmp_path / name
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.name", "W73 Test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.email", "w73@example.test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "-q", "--allow-empty", "-m", name],
+            check=True,
+        )
+        revisions[name] = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+
+    spec = json.loads(
+        (ROOT / "toolkits/eos/gr00t_trocar/runtime-spec.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    spec["isaaclab_revision"] = revisions["isaaclab"]
+    spec["gr00t_revision"] = revisions["gr00t"]
+    spec_path = tmp_path / "runtime-spec.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    runtime = tmp_path / "envs" / "runtime"
+    (runtime / "bin").mkdir(parents=True)
+    fake_python = runtime / "bin" / "python"
+    fake_python.write_text("#!/bin/sh\ncat >/dev/null\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    freeze = runtime / "requirements.freeze.txt"
+    freeze.write_text("torch==fixture\n", encoding="utf-8")
+    manifest = {
+        "schema": "rlinf.eos.python-runtime-manifest.v1",
+        "runtime_spec_sha256": _sha256(spec_path),
+        "requirements_freeze_sha256": _sha256(freeze),
+        "isaaclab_revision": revisions["isaaclab"],
+        "gr00t_revision": revisions["gr00t"],
+    }
+    (runtime / "rlinf-runtime-manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    env = dict(os.environ)
+    env.update(
+        {
+            "W73_SOURCE_ROOT": str(tmp_path / "source"),
+            "W73_ISAACLAB_ROOT": str(tmp_path / "isaaclab"),
+            "W73_GROOT_ROOT": str(tmp_path / "gr00t"),
+            "W73_RUNTIME_ROOT": str(runtime),
+            "W73_RUNTIME_SPEC": str(spec_path),
+            "W73_RUNTIME_SPEC_SHA256": _sha256(spec_path),
+            "W73_UV_CACHE": str(tmp_path / "uv-cache"),
+        }
+    )
+    script = ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh"
+
+    reused = subprocess.run(
+        ["bash", str(script)], check=False, capture_output=True, text=True, env=env
+    )
+    assert reused.returncode == 0
+    assert "reusing verified RLinf runtime" in reused.stdout
+
+    freeze.write_text("torch==tampered\n", encoding="utf-8")
+    rejected = subprocess.run(
+        ["bash", str(script)], check=False, capture_output=True, text=True, env=env
+    )
+    assert rejected.returncode != 0
+    assert "runtime package freeze hash mismatch" in rejected.stderr
+
+
 def test_dry_run_does_not_call_sbatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -238,6 +393,8 @@ def test_materialize_smoke_has_bounded_workload(
     template = tmp_path / "template.json"
     value = json.loads(site_path.read_text(encoding="utf-8"))
     value["source"]["revision"] = "AUTO"
+    value["runtime"]["runtime_spec_sha256"] = "AUTO"
+    value["runtime"]["prepare_script_sha256"] = "AUTO"
     value["experiment"]["config_sha256"] = "AUTO"
     value["experiment"]["runner_sha256"] = "AUTO"
     template.write_text(json.dumps(value), encoding="utf-8")
@@ -255,3 +412,9 @@ def test_materialize_smoke_has_bounded_workload(
     assert smoke["experiment"]["max_steps"] == 1
     assert smoke["experiment"]["save_interval"] == 1
     assert smoke["experiment"]["workload_seconds"] == 5_400
+    assert smoke["runtime"]["runtime_spec_sha256"] == _sha256(
+        Path(smoke["runtime"]["runtime_spec"])
+    )
+    assert smoke["runtime"]["prepare_script_sha256"] == _sha256(
+        ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh"
+    )
