@@ -16,6 +16,7 @@ required=(
   W73_MAX_STEPS
   W73_VAL_CHECK_INTERVAL
   W73_SAVE_INTERVAL
+  W73_DEBUG_NONFINITE
   W73_DEADLINE_UNIX_S
 )
 for name in "${required[@]}"; do
@@ -24,6 +25,10 @@ for name in "${required[@]}"; do
     exit 2
   fi
 done
+if [[ -z "${W73_RESUME_DIR+x}" ]]; then
+  printf 'missing required environment variable: W73_RESUME_DIR\n' >&2
+  exit 2
+fi
 
 test -x "$W73_RUNTIME_PYTHON"
 test -d "$W73_SOURCE_ROOT/.git" || test -f "$W73_SOURCE_ROOT/.git"
@@ -109,15 +114,22 @@ sampler_pid=$!
 
 config_dir=$(dirname "$W73_CONFIG")
 config_name=$(basename "$W73_CONFIG" .yaml)
+overrides=(
+  runner.max_epochs="$W73_MAX_STEPS"
+  runner.val_check_interval="$W73_VAL_CHECK_INTERVAL"
+  runner.save_interval="$W73_SAVE_INTERVAL"
+  runner.logger.log_path="$W73_ATTEMPT_ROOT/output"
+  runner.debug_nonfinite="$W73_DEBUG_NONFINITE"
+  env.train.video_cfg.video_base_dir="$W73_ATTEMPT_ROOT/output/video/train"
+  env.eval.video_cfg.video_base_dir="$W73_ATTEMPT_ROOT/output/video/eval"
+  rollout.model.model_path="$W73_MODEL_ROOT"
+  actor.model.model_path="$W73_MODEL_ROOT"
+)
+if [[ -n "$W73_RESUME_DIR" ]]; then
+  overrides+=(runner.resume_dir="$W73_RESUME_DIR")
+fi
 cd "$W73_SOURCE_ROOT"
 "$W73_RUNTIME_PYTHON" examples/embodiment/train_embodied_agent.py \
   --config-path "$config_dir" \
   --config-name "$config_name" \
-  runner.max_epochs="$W73_MAX_STEPS" \
-  runner.val_check_interval="$W73_VAL_CHECK_INTERVAL" \
-  runner.save_interval="$W73_SAVE_INTERVAL" \
-  runner.logger.log_path="$W73_ATTEMPT_ROOT/output" \
-  env.train.video_cfg.video_base_dir="$W73_ATTEMPT_ROOT/output/video/train" \
-  env.eval.video_cfg.video_base_dir="$W73_ATTEMPT_ROOT/output/video/eval" \
-  rollout.model.model_path="$W73_MODEL_ROOT" \
-  actor.model.model_path="$W73_MODEL_ROOT"
+  "${overrides[@]}"

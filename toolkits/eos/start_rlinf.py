@@ -701,6 +701,8 @@ def _load_site(
             "max_steps",
             "val_check_interval",
             "save_interval",
+            "resume_dir",
+            "debug_nonfinite",
             "workload_seconds",
             "shutdown_grace_seconds",
         },
@@ -719,6 +721,24 @@ def _load_site(
     output_root = _absolute_directory(
         experiment["output_root"], "experiment.output_root"
     )
+    resume_dir_value = experiment["resume_dir"]
+    if resume_dir_value is not None:
+        resume_dir = _absolute_directory(resume_dir_value, "experiment.resume_dir")
+        try:
+            resume_dir.relative_to(output_root)
+        except ValueError as error:
+            raise WorkflowError(
+                "experiment.resume_dir must be under experiment.output_root"
+            ) from error
+        if not re.fullmatch(r"global_step_[1-9][0-9]*", resume_dir.name):
+            raise WorkflowError(
+                "experiment.resume_dir must name a global_step_N checkpoint"
+            )
+        if not (resume_dir / "actor").is_dir():
+            raise WorkflowError("experiment.resume_dir is missing the actor directory")
+        experiment["resume_dir"] = str(resume_dir)
+    if not isinstance(experiment["debug_nonfinite"], bool):
+        raise WorkflowError("experiment.debug_nonfinite must be a boolean")
     _positive_int(experiment["max_steps"], "experiment.max_steps")
     val_check_interval = _positive_int(
         experiment["val_check_interval"], "experiment.val_check_interval"
@@ -914,6 +934,8 @@ def _materialize(args: argparse.Namespace) -> int:
             "max_steps",
             "val_check_interval",
             "save_interval",
+            "resume_dir",
+            "debug_nonfinite",
             "workload_seconds",
             "shutdown_grace_seconds",
         },
@@ -948,6 +970,14 @@ def _materialize(args: argparse.Namespace) -> int:
                 "workload_seconds": 5_400,
             }
         )
+    max_steps = getattr(args, "max_steps", None)
+    resume_dir = getattr(args, "resume_dir", None)
+    if max_steps is not None:
+        experiment["max_steps"] = max_steps
+    if resume_dir is not None:
+        experiment["resume_dir"] = resume_dir
+    if getattr(args, "debug_nonfinite", False):
+        experiment["debug_nonfinite"] = True
     output = Path(args.output)
     if not output.is_absolute():
         raise WorkflowError("materialized site output must be absolute")
@@ -1442,6 +1472,8 @@ def _run_agent(args: argparse.Namespace) -> int:
             "W73_MAX_STEPS": str(experiment["max_steps"]),
             "W73_VAL_CHECK_INTERVAL": str(experiment["val_check_interval"]),
             "W73_SAVE_INTERVAL": str(experiment["save_interval"]),
+            "W73_RESUME_DIR": experiment["resume_dir"] or "",
+            "W73_DEBUG_NONFINITE": str(experiment["debug_nonfinite"]).lower(),
             "W73_DEADLINE_UNIX_S": str(deadline),
         }
     )
@@ -1513,6 +1545,9 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="limit the materialized attempt to one step and 90 minutes",
     )
+    materialize.add_argument("--max-steps", type=int)
+    materialize.add_argument("--resume-dir")
+    materialize.add_argument("--debug-nonfinite", action="store_true")
     materialize.set_defaults(handler=_materialize)
 
     submit = commands.add_parser("submit")

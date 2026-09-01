@@ -117,6 +117,8 @@
     "max_steps": 100000,
     "val_check_interval": 5,
     "save_interval": 5,
+    "resume_dir": null,
+    "debug_nonfinite": false,
     "workload_seconds": 13200,
     "shutdown_grace_seconds": 600
   }

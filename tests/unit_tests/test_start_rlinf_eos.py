@@ -230,6 +230,8 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
             "max_steps": 100000,
             "val_check_interval": 5,
             "save_interval": 5,
+            "resume_dir": None,
+            "debug_nonfinite": False,
             "workload_seconds": 13200,
             "shutdown_grace_seconds": 600,
         },
@@ -309,6 +311,33 @@ def test_site_rejects_incompatible_save_and_evaluation_intervals(
     site_path.write_text(json.dumps(value), encoding="utf-8")
 
     with pytest.raises(MODULE.WorkflowError, match="must be divisible"):
+        MODULE._load_site(site_path)
+
+
+def test_site_accepts_owned_resume_checkpoint(tmp_path: Path) -> None:
+    site_path = _site(tmp_path)
+    value = json.loads(site_path.read_text(encoding="utf-8"))
+    checkpoint = tmp_path / "output" / "prior" / "global_step_5"
+    (checkpoint / "actor").mkdir(parents=True)
+    value["experiment"]["resume_dir"] = str(checkpoint)
+    value["experiment"]["debug_nonfinite"] = True
+    site_path.write_text(json.dumps(value), encoding="utf-8")
+
+    site = MODULE._load_site(site_path)
+
+    assert site["experiment"]["resume_dir"] == str(checkpoint)
+    assert site["experiment"]["debug_nonfinite"] is True
+
+
+def test_site_rejects_resume_checkpoint_outside_output_root(tmp_path: Path) -> None:
+    site_path = _site(tmp_path)
+    value = json.loads(site_path.read_text(encoding="utf-8"))
+    checkpoint = tmp_path / "external" / "global_step_5"
+    (checkpoint / "actor").mkdir(parents=True)
+    value["experiment"]["resume_dir"] = str(checkpoint)
+    site_path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(MODULE.WorkflowError, match="under experiment.output_root"):
         MODULE._load_site(site_path)
 
 
@@ -567,6 +596,8 @@ def test_runner_localizes_train_and_eval_videos() -> None:
         'env.eval.video_cfg.video_base_dir="$W73_ATTEMPT_ROOT/output/video/eval"'
         in runner
     )
+    assert 'runner.resume_dir="$W73_RESUME_DIR"' in runner
+    assert 'runner.debug_nonfinite="$W73_DEBUG_NONFINITE"' in runner
 
 
 def test_prepare_runtime_build_isolated_from_canonical_source(tmp_path: Path) -> None:

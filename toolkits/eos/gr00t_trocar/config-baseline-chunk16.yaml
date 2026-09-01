@@ -21,6 +21,7 @@ runner:
   seq_length: 4096
   max_prompt_length: 30
   resume_dir: null
+  debug_nonfinite: false
   per_worker_log: false
   per_worker_log_path: null
   weight_sync_interval: 1

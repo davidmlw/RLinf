@@ -65,6 +65,92 @@ _registered = False
 _full_cfg_cache: dict | None = None
 
 
+def _assert_finite(value: object, *, stage: str) -> None:
+    """Fail with a narrow diagnostic when a floating tensor becomes non-finite."""
+    if not isinstance(value, torch.Tensor) or not value.is_floating_point():
+        return
+    finite = torch.isfinite(value)
+    if bool(finite.all().item()):
+        return
+    nonfinite = int((~finite).sum().item())
+    finite_values = value[finite]
+    value_min = float(finite_values.min().item()) if finite_values.numel() else None
+    value_max = float(finite_values.max().item()) if finite_values.numel() else None
+    raise RuntimeError(
+        "RLINF_NONFINITE "
+        f"stage={stage} shape={tuple(value.shape)} dtype={value.dtype} "
+        f"nonfinite={nonfinite} finite_min={value_min} finite_max={value_max}"
+    )
+
+
+def _assert_nested_finite(value: object, *, stage: str) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _assert_nested_finite(child, stage=f"{stage}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            _assert_nested_finite(child, stage=f"{stage}[{index}]")
+    else:
+        _assert_finite(value, stage=stage)
+
+
+def _install_nonfinite_diagnostics() -> None:
+    """Instrument the rollout/value boundary for the W73 resume diagnostic."""
+    try:
+        from rlinf.models.embodiment.gr00t.gr00t_n1d5.gr00t_action_model import (
+            FlowMatchingActionHeadForRLActionPrediction,
+        )
+    except ModuleNotFoundError:
+        from rlinf.models.embodiment.gr00t.gr00t_action_model import (
+            FlowMatchingActionHeadForRLActionPrediction,
+        )
+    from rlinf.workers.rollout.hf.huggingface_worker import MultiStepRolloutWorker
+
+    if getattr(
+        FlowMatchingActionHeadForRLActionPrediction.get_value,
+        "_rlinf_nonfinite_diagnostic",
+        False,
+    ):
+        return
+
+    original_get_value = FlowMatchingActionHeadForRLActionPrediction.get_value
+
+    def checked_get_value(self, vl_embs, state_features):
+        _assert_finite(vl_embs, stage="value.backbone_features")
+        _assert_finite(state_features, stage="value.state_features")
+        values = original_get_value(self, vl_embs, state_features)
+        _assert_finite(values, stage="value.output")
+        return values
+
+    checked_get_value._rlinf_nonfinite_diagnostic = True
+    FlowMatchingActionHeadForRLActionPrediction.get_value = checked_get_value
+
+    original_predict = MultiStepRolloutWorker._predict_rollout_actions
+
+    def checked_predict(self, env_obs, *args, **kwargs):
+        _assert_nested_finite(env_obs, stage="rollout.observation")
+        actions, result = original_predict(self, env_obs, *args, **kwargs)
+        _assert_finite(actions, stage="rollout.actions")
+        for key in ("prev_logprobs", "prev_values"):
+            _assert_finite(result.get(key), stage=f"rollout.{key}")
+        return actions, result
+
+    original_sync = MultiStepRolloutWorker.sync_model_from_actor
+
+    async def checked_sync(self):
+        await original_sync(self)
+        action_head = getattr(self.hf_model, "action_head", None)
+        value_head = getattr(action_head, "value_head", None)
+        if value_head is None:
+            raise RuntimeError("RLINF_NONFINITE diagnostic could not find value_head")
+        for name, parameter in value_head.named_parameters():
+            _assert_finite(parameter, stage=f"rollout.post_sync.value_head.{name}")
+
+    MultiStepRolloutWorker._predict_rollout_actions = checked_predict
+    MultiStepRolloutWorker.sync_model_from_actor = checked_sync
+    logger.warning("Enabled W73 non-finite rollout/value diagnostics")
+
+
 def _prepend_isaaclab_sources(source_root: Path) -> tuple[Path, ...]:
     """Put every revisioned Isaac Lab extension project first on sys.path."""
 
@@ -112,6 +198,8 @@ def register() -> None:
     _register_gr00t_converters(cfg)
     _patch_gr00t_get_model(cfg)
     _register_isaaclab_envs()
+    if _load_full_cfg().get("runner", {}).get("debug_nonfinite", False):
+        _install_nonfinite_diagnostics()
 
     logger.info("isaaclab_contrib.rl.rlinf.extension: Registration complete.")
 
