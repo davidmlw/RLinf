@@ -211,9 +211,7 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
             "torchcodec_wheel": str(torchcodec_wheel),
             "torchcodec_wheel_sha256": _sha256(torchcodec_wheel),
             "healthcare_assets_archive": str(healthcare_assets_archive),
-            "healthcare_assets_archive_sha256": _sha256(
-                healthcare_assets_archive
-            ),
+            "healthcare_assets_archive_sha256": _sha256(healthcare_assets_archive),
             "isaaclab_root": str(tmp_path / "isaaclab"),
             "gr00t_root": str(tmp_path / "gr00t"),
             "model_root": str(tmp_path / "model"),
@@ -546,14 +544,29 @@ def test_eos_template_pins_newton_tray_textures() -> None:
 
 
 def test_runner_stages_healthcare_assets_before_training() -> None:
-    runner = (
-        ROOT / "toolkits/eos/gr00t_trocar/run_baseline.sh"
-    ).read_text(encoding="utf-8")
+    runner = (ROOT / "toolkits/eos/gr00t_trocar/run_baseline.sh").read_text(
+        encoding="utf-8"
+    )
 
     extract = 'tar -xf "$W73_HEALTHCARE_ASSETS_ARCHIVE" -C "$short_tmp"'
     launch = '"$W73_RUNTIME_PYTHON" examples/embodiment/train_embodied_agent.py'
     assert extract in runner
     assert runner.index(extract) < runner.index(launch)
+
+
+def test_runner_localizes_train_and_eval_videos() -> None:
+    runner = (ROOT / "toolkits/eos/gr00t_trocar/run_baseline.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        'env.train.video_cfg.video_base_dir="$W73_ATTEMPT_ROOT/output/video/train"'
+        in runner
+    )
+    assert (
+        'env.eval.video_cfg.video_base_dir="$W73_ATTEMPT_ROOT/output/video/eval"'
+        in runner
+    )
 
 
 def test_prepare_runtime_build_isolated_from_canonical_source(tmp_path: Path) -> None:
@@ -721,9 +734,10 @@ def test_materialize_smoke_has_bounded_workload(
     assert smoke["experiment"]["val_check_interval"] == 1
     assert smoke["experiment"]["save_interval"] == 1
     assert smoke["experiment"]["workload_seconds"] == 5_400
-    assert MODULE._load_site(output)["_resolved"]["workload_contract"][
-        "eval_interval"
-    ] == 1
+    assert (
+        MODULE._load_site(output)["_resolved"]["workload_contract"]["eval_interval"]
+        == 1
+    )
     assert smoke["runtime"]["runtime_spec_sha256"] == _sha256(
         Path(smoke["runtime"]["runtime_spec"])
     )

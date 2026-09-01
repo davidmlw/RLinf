@@ -118,5 +118,6 @@ cd "$W73_SOURCE_ROOT"
   runner.save_interval="$W73_SAVE_INTERVAL" \
   runner.logger.log_path="$W73_ATTEMPT_ROOT/output" \
   env.train.video_cfg.video_base_dir="$W73_ATTEMPT_ROOT/output/video/train" \
+  env.eval.video_cfg.video_base_dir="$W73_ATTEMPT_ROOT/output/video/eval" \
   rollout.model.model_path="$W73_MODEL_ROOT" \
   actor.model.model_path="$W73_MODEL_ROOT"

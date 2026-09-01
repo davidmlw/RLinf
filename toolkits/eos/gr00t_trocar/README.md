@@ -122,7 +122,9 @@ validation rejects interval combinations that RLinf cannot schedule.
 
 The real submit command creates an immutable submission receipt. Slurm creates
 an attempt named `W73-before-<job-id>/`, and the allocation coordinator records
-the exact site, source, image, command, node, deadline and cleanup result.
+the exact site, source, image, command, node, deadline and cleanup result. Both
+training and evaluation video directories are overridden to attempt-owned
+paths; no run artifact is written below the source checkout.
 
 ## Deadline Policy
 
