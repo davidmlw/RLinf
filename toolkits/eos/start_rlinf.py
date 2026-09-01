@@ -566,6 +566,7 @@ def _load_site(
             "flash_attn_version",
             "flash_attn_wheel_filename",
             "flash_attn_wheel_sha256",
+            "torchcodec_version",
             "hydra_core_version",
             "numpy_version",
             "isaaclab_revision",
@@ -599,6 +600,7 @@ def _load_site(
         "flash_attn_version",
         "flash_attn_wheel_filename",
         "flash_attn_wheel_sha256",
+        "torchcodec_version",
         "hydra_core_version",
         "numpy_version",
         "installer",
@@ -1201,6 +1203,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             "torch_cuda",
             "flash_attn",
             "flash_attn_wheel_sha256",
+            "torchcodec",
             "hydra_core",
             "numpy",
             "ray",
@@ -1249,6 +1252,7 @@ def _run_agent(args: argparse.Namespace) -> int:
         raise WorkflowError("RLinf runtime manifest FlashAttention wheel hash mismatch")
     expected_packages = {
         "flash_attn": runtime_spec_value["flash_attn_version"],
+        "torchcodec": runtime_spec_value["torchcodec_version"],
         "hydra_core": runtime_spec_value["hydra_core_version"],
         "numpy": runtime_spec_value["numpy_version"],
     }
@@ -1272,13 +1276,15 @@ def _run_agent(args: argparse.Namespace) -> int:
             python,
             "-c",
             (
-                "import flash_attn, hydra, importlib.metadata, json, numpy, ray, torch; "
+                "import flash_attn, hydra, importlib.metadata, json, numpy, ray, torch, torchcodec; "
+                "from torchcodec.decoders import VideoDecoder; "
                 "assert torch.cuda.is_available(), "
                 "'PyTorch cannot access an allocation GPU'; "
                 "probe = torch.ones(1, device='cuda'); "
                 "print(json.dumps({'python': __import__('sys').version, "
                 "'ray': ray.__version__, 'torch': torch.__version__, "
                 "'flash_attn': flash_attn.__version__, "
+                "'torchcodec': torchcodec.__version__, "
                 "'hydra_core': importlib.metadata.version('hydra-core'), "
                 "'numpy': numpy.__version__, "
                 "'isaaclab': importlib.metadata.version('isaaclab'), "

@@ -448,6 +448,21 @@ def test_prepare_runtime_requires_uv_managed_python() -> None:
         'cd "$runtime_parent"\n'
         'git -C "$W73_SOURCE_ROOT" worktree remove --force "$build_source"' in script
     )
+    assert '"torchcodec==$(spec_value torchcodec_version)"' in script
+    assert "from torchcodec.decoders import VideoDecoder" in script
+
+
+def test_runtime_contract_pins_torchcodec_for_torch_211() -> None:
+    spec = json.loads(
+        (ROOT / "toolkits/eos/gr00t_trocar/runtime-spec.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+
+    assert spec["torch_version"] == "2.11.0"
+    assert spec["torchcodec_version"] == "0.11.1"
+    assert "from torchcodec.decoders import VideoDecoder" in launcher
 
 
 def test_prepare_runtime_build_isolated_from_canonical_source(tmp_path: Path) -> None:

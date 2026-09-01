@@ -136,6 +136,7 @@ PY
     "$(spec_value torchaudio_version)" \
     "$(spec_value torch_backend)" \
     "$(spec_value flash_attn_version)" \
+    "$(spec_value torchcodec_version)" \
     "$(spec_value hydra_core_version)" \
     "$(spec_value numpy_version)" <<'PY'
 import importlib.metadata
@@ -147,7 +148,9 @@ import numpy
 import ray
 import torch
 import torchaudio
+import torchcodec
 import torchvision
+from torchcodec.decoders import VideoDecoder
 
 (
     expected_torch,
@@ -155,6 +158,7 @@ import torchvision
     expected_torchaudio,
     expected_backend,
     expected_flash_attn,
+    expected_torchcodec,
     expected_hydra_core,
     expected_numpy,
 ) = sys.argv[1:]
@@ -168,6 +172,13 @@ if flash_attn.__version__ != expected_flash_attn:
         "runtime FlashAttention mismatch: "
         f"expected {expected_flash_attn}, found {flash_attn.__version__}"
     )
+if torchcodec.__version__ != expected_torchcodec:
+    raise SystemExit(
+        "runtime TorchCodec mismatch: "
+        f"expected {expected_torchcodec}, found {torchcodec.__version__}"
+    )
+if VideoDecoder is None:
+    raise SystemExit("runtime TorchCodec decoder import failed")
 if not torchvision.__version__.startswith(f"{expected_torchvision}+{expected_backend}"):
     raise SystemExit(
         "runtime torchvision mismatch: "
@@ -267,6 +278,7 @@ uv pip install \
   "torchaudio==$(spec_value torchaudio_version)"
 uv pip install \
   --python "$W73_RUNTIME_ROOT/bin/python" \
+  "torchcodec==$(spec_value torchcodec_version)" \
   "hydra-core==$(spec_value hydra_core_version)" \
   "numpy==$(spec_value numpy_version)"
 uv pip uninstall --python "$W73_RUNTIME_ROOT/bin/python" flash-attn || true
@@ -292,6 +304,7 @@ PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
   "$(spec_value torchaudio_version)" \
   "$(spec_value torch_backend)" \
   "$(spec_value flash_attn_version)" \
+  "$(spec_value torchcodec_version)" \
   "$(spec_value hydra_core_version)" \
   "$(spec_value numpy_version)" \
   "$W73_FLASH_ATTN_WHEEL_SHA256" <<'PY'
@@ -308,7 +321,9 @@ import numpy
 import ray
 import torch
 import torchaudio
+import torchcodec
 import torchvision
+from torchcodec.decoders import VideoDecoder
 
 manifest_path = Path(sys.argv[1])
 spec_sha = sys.argv[2]
@@ -322,15 +337,20 @@ expected_torchvision = sys.argv[9]
 expected_torchaudio = sys.argv[10]
 expected_backend = sys.argv[11]
 expected_flash_attn = sys.argv[12]
-expected_hydra_core = sys.argv[13]
-expected_numpy = sys.argv[14]
-flash_attn_wheel_sha256 = sys.argv[15]
+expected_torchcodec = sys.argv[13]
+expected_hydra_core = sys.argv[14]
+expected_numpy = sys.argv[15]
+flash_attn_wheel_sha256 = sys.argv[16]
 
 expected_build = f"{expected_torch}+{expected_backend}"
 if not torch.__version__.startswith(expected_build):
     raise SystemExit(f"unexpected Torch build: {torch.__version__}")
 if flash_attn.__version__ != expected_flash_attn:
     raise SystemExit(f"unexpected FlashAttention build: {flash_attn.__version__}")
+if torchcodec.__version__ != expected_torchcodec:
+    raise SystemExit(f"unexpected TorchCodec build: {torchcodec.__version__}")
+if VideoDecoder is None:
+    raise SystemExit("unexpected TorchCodec decoder import failure")
 if not torchvision.__version__.startswith(f"{expected_torchvision}+{expected_backend}"):
     raise SystemExit(f"unexpected torchvision build: {torchvision.__version__}")
 if not torchaudio.__version__.startswith(f"{expected_torchaudio}+{expected_backend}"):
@@ -355,6 +375,7 @@ value = {
     "torch_cuda": torch.version.cuda,
     "flash_attn": flash_attn.__version__,
     "flash_attn_wheel_sha256": flash_attn_wheel_sha256,
+    "torchcodec": torchcodec.__version__,
     "hydra_core": importlib.metadata.version("hydra-core"),
     "numpy": numpy.__version__,
     "ray": ray.__version__,

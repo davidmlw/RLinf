@@ -61,8 +61,8 @@
     ]
   },
   "runtime": {
-    "python": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v2/bin/python",
-    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v2",
+    "python": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v3/bin/python",
+    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v3",
     "runtime_spec": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/runtime-spec.json",
     "runtime_spec_sha256": "AUTO",
     "prepare_script": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/prepare_runtime.sh",
