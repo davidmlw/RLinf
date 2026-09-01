@@ -36,6 +36,10 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
         (tmp_path / name).mkdir()
     tray = tmp_path / "tray.usd"
     tray.write_text("usd", encoding="utf-8")
+    model_manifest = tmp_path / "model-manifest.json"
+    model_manifest.write_text("{}\n", encoding="utf-8")
+    deps_manifest = tmp_path / "python-deps.sha256"
+    deps_manifest.write_text("fixture\n", encoding="utf-8")
     config = config or ROOT / "toolkits/eos/gr00t_trocar/config-baseline-chunk16.yaml"
     runner = ROOT / "toolkits/eos/gr00t_trocar/run_baseline.sh"
     revision = subprocess.check_output(
@@ -55,6 +59,8 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
             "signal_seconds": 600,
         },
         "container": {
+            "oci_reference": "registry.example/rlinf:test",
+            "registry_digest": f"sha256:{'1' * 64}",
             "image": str(image),
             "image_sha256": _sha256(image),
             "mounts": [f"{tmp_path}:{tmp_path}"],
@@ -65,6 +71,33 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
             "revision": revision,
             "base_revision": MODULE.BASE_REVISION,
             "require_clean": False,
+        },
+        "provenance": {
+            "git_checkouts": [
+                {
+                    "name": "rlinf-fixture",
+                    "root": str(ROOT),
+                    "revision": revision,
+                    "require_clean": False,
+                }
+            ],
+            "files": [
+                {
+                    "name": "model-manifest",
+                    "path": str(model_manifest),
+                    "sha256": _sha256(model_manifest),
+                },
+                {
+                    "name": "python-deps-manifest",
+                    "path": str(deps_manifest),
+                    "sha256": _sha256(deps_manifest),
+                },
+                {
+                    "name": "tray-usd",
+                    "path": str(tray),
+                    "sha256": _sha256(tray),
+                },
+            ],
         },
         "runtime": {
             "python": str(runtime_python),
@@ -131,6 +164,16 @@ def test_site_rejects_feature_reuse_in_baseline(tmp_path: Path) -> None:
 
     with pytest.raises(MODULE.WorkflowError, match="feature-reuse fields"):
         MODULE._load_site(_site(tmp_path, config=config))
+
+
+def test_site_rejects_external_provenance_drift(tmp_path: Path) -> None:
+    site_path = _site(tmp_path)
+    value = json.loads(site_path.read_text(encoding="utf-8"))
+    value["provenance"]["files"][0]["sha256"] = "0" * 64
+    site_path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(MODULE.WorkflowError, match="SHA-256 mismatch"):
+        MODULE._load_site(site_path)
 
 
 def test_deadline_reserves_slurm_shutdown_window(

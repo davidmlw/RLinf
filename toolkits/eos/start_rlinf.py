@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-SITE_SCHEMA = "rlinf.eos.site.v1"
+SITE_SCHEMA = "rlinf.eos.site.v2"
 SUBMISSION_SCHEMA = "rlinf.eos.submission.v1"
 ATTEMPT_SCHEMA = "rlinf.eos.attempt.v1"
 RESULT_SCHEMA = "rlinf.eos.result.v1"
@@ -148,6 +148,75 @@ def _verify_sha256(path: Path, expected: object, label: str) -> str:
     return actual
 
 
+def _validate_provenance(value: object) -> dict[str, object]:
+    provenance = _exact_dict(value, {"git_checkouts", "files"}, "provenance")
+
+    git_checkouts = provenance["git_checkouts"]
+    if not isinstance(git_checkouts, list) or not git_checkouts:
+        raise WorkflowError("provenance.git_checkouts must be a nonempty array")
+    resolved_git: list[dict[str, str]] = []
+    git_names: set[str] = set()
+    git_roots: set[Path] = set()
+    for index, raw in enumerate(git_checkouts):
+        label = f"provenance.git_checkouts[{index}]"
+        checkout = _exact_dict(
+            raw, {"name", "root", "revision", "require_clean"}, label
+        )
+        name = _string(checkout["name"], f"{label}.name")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", name):
+            raise WorkflowError(f"{label}.name is unsafe")
+        if name in git_names:
+            raise WorkflowError(f"duplicate provenance Git name: {name}")
+        root = _absolute_directory(checkout["root"], f"{label}.root")
+        if root in git_roots:
+            raise WorkflowError(f"duplicate provenance Git root: {root}")
+        revision = _string(checkout["revision"], f"{label}.revision")
+        if GIT_OID_RE.fullmatch(revision) is None:
+            raise WorkflowError(f"{label}.revision must be a full lowercase Git OID")
+        actual_revision = _git_output(root, "rev-parse", "HEAD")
+        if actual_revision != revision:
+            raise WorkflowError(
+                f"{name} revision mismatch: expected {revision}, found {actual_revision}"
+            )
+        if not isinstance(checkout["require_clean"], bool):
+            raise WorkflowError(f"{label}.require_clean must be boolean")
+        if checkout["require_clean"] and _git_output(
+            root, "status", "--short", "--ignore-submodules=none"
+        ):
+            raise WorkflowError(f"provenance Git checkout is not clean: {root}")
+        git_names.add(name)
+        git_roots.add(root)
+        resolved_git.append(
+            {"name": name, "root": str(root), "revision": actual_revision}
+        )
+
+    files = provenance["files"]
+    if not isinstance(files, list) or not files:
+        raise WorkflowError("provenance.files must be a nonempty array")
+    resolved_files: list[dict[str, str]] = []
+    file_names: set[str] = set()
+    file_paths: set[Path] = set()
+    for index, raw in enumerate(files):
+        label = f"provenance.files[{index}]"
+        artifact = _exact_dict(raw, {"name", "path", "sha256"}, label)
+        name = _string(artifact["name"], f"{label}.name")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", name):
+            raise WorkflowError(f"{label}.name is unsafe")
+        if name in file_names:
+            raise WorkflowError(f"duplicate provenance file name: {name}")
+        path = _absolute_file(artifact["path"], f"{label}.path")
+        if path in file_paths:
+            raise WorkflowError(f"duplicate provenance file path: {path}")
+        digest = _verify_sha256(path, artifact["sha256"], label)
+        file_names.add(name)
+        file_paths.add(path)
+        resolved_files.append(
+            {"name": name, "path": str(path), "sha256": digest}
+        )
+
+    return {"git_checkouts": resolved_git, "files": resolved_files}
+
+
 def _baseline_contract(config: Path) -> dict[str, int | str]:
     """Parse and validate the canonical feature-free chunk16 workload."""
     probe = subprocess.run(
@@ -248,7 +317,15 @@ def _load_site(
         raise WorkflowError(f"site is not valid JSON: {resolved}") from error
     site = _exact_dict(
         value,
-        {"schema", "slurm", "container", "source", "runtime", "experiment"},
+        {
+            "schema",
+            "slurm",
+            "container",
+            "source",
+            "provenance",
+            "runtime",
+            "experiment",
+        },
         "site",
     )
     if site["schema"] != SITE_SCHEMA:
@@ -289,9 +366,22 @@ def _load_site(
 
     container = _exact_dict(
         site["container"],
-        {"image", "image_sha256", "mounts", "workdir"},
+        {
+            "oci_reference",
+            "registry_digest",
+            "image",
+            "image_sha256",
+            "mounts",
+            "workdir",
+        },
         "container",
     )
+    _string(container["oci_reference"], "container.oci_reference")
+    registry_digest = _string(
+        container["registry_digest"], "container.registry_digest"
+    )
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", registry_digest) is None:
+        raise WorkflowError("container.registry_digest must be a sha256 OCI digest")
     image = _absolute_file(container["image"], "container.image")
     image_sha256 = _string(container["image_sha256"], "container.image_sha256")
     if SHA256_RE.fullmatch(image_sha256) is None:
@@ -336,6 +426,8 @@ def _load_site(
         raise WorkflowError("source.require_clean must be boolean")
     if source["require_clean"] and _git_output(source_root, "status", "--short"):
         raise WorkflowError(f"source worktree is not clean: {source_root}")
+
+    provenance = _validate_provenance(site["provenance"])
 
     runtime = _exact_dict(
         site["runtime"],
@@ -426,9 +518,12 @@ def _load_site(
         "source_root": str(source_root),
         "source_revision": revision,
         "image": str(image),
+        "oci_reference": container["oci_reference"],
+        "registry_digest": registry_digest,
         "workdir": str(workdir),
         "output_root": str(output_root),
         "workload_contract": contract,
+        "provenance": provenance,
     }
     return site
 
@@ -547,7 +642,15 @@ def _materialize(args: argparse.Namespace) -> int:
         raise WorkflowError(f"site template is not valid JSON: {template}") from error
     site = _exact_dict(
         value,
-        {"schema", "slurm", "container", "source", "runtime", "experiment"},
+        {
+            "schema",
+            "slurm",
+            "container",
+            "source",
+            "provenance",
+            "runtime",
+            "experiment",
+        },
         "site template",
     )
     if site["schema"] != SITE_SCHEMA:
