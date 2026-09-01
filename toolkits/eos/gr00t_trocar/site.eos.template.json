@@ -124,6 +124,7 @@
     "max_steps": 100000,
     "val_check_interval": 5,
     "save_interval": 5,
+    "newton_num_substeps": 2,
     "resume_dir": null,
     "debug_nonfinite": false,
     "workload_seconds": 13200,

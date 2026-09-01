@@ -240,6 +240,7 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
             "max_steps": 100000,
             "val_check_interval": 5,
             "save_interval": 5,
+            "newton_num_substeps": 2,
             "resume_dir": None,
             "debug_nonfinite": False,
             "workload_seconds": 13200,
@@ -270,6 +271,7 @@ def test_site_freezes_canonical_chunk16_contract(tmp_path: Path) -> None:
         "eval_envs": 8,
         "eval_fixed_resets": True,
         "eval_video": True,
+        "newton_num_substeps": 2,
     }
     command = MODULE._submission_argv(site)
     assert "--time=04:00:00" in command
@@ -822,6 +824,7 @@ def test_materialize_overrides_checkpoint_and_evaluation_intervals(
         max_steps=120,
         val_check_interval=5,
         save_interval=20,
+        newton_num_substeps=4,
     )
 
     assert MODULE._materialize(args) == 0
@@ -829,5 +832,7 @@ def test_materialize_overrides_checkpoint_and_evaluation_intervals(
     assert materialized["experiment"]["max_steps"] == 120
     assert materialized["experiment"]["val_check_interval"] == 5
     assert materialized["experiment"]["save_interval"] == 20
+    assert materialized["experiment"]["newton_num_substeps"] == 4
     contract = MODULE._load_site(output)["_resolved"]["workload_contract"]
     assert contract["eval_interval"] == 5
+    assert contract["newton_num_substeps"] == 4

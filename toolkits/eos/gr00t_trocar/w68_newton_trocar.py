@@ -35,6 +35,17 @@ TIP_OFFSET_LOCAL = {
 }
 
 
+def _num_substeps() -> int:
+    raw = os.environ.get("W68_NEWTON_NUM_SUBSTEPS", "2")
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise RuntimeError("W68_NEWTON_NUM_SUBSTEPS must be an integer") from error
+    if value <= 0:
+        raise RuntimeError("W68_NEWTON_NUM_SUBSTEPS must be positive")
+    return value
+
+
 @configclass
 class W68PhysicsCfg(PresetCfg):
     """Backend choices with the proven Poiesis MJWarp settings."""
@@ -61,7 +72,7 @@ class W68PhysicsCfg(PresetCfg):
         ),
         collision_cfg=NewtonCollisionPipelineCfg(),
         default_shape_cfg=NewtonShapeCfg(),
-        num_substeps=2,
+        num_substeps=_num_substeps(),
         debug_mode=False,
     )
 
