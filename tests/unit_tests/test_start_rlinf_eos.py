@@ -598,6 +598,7 @@ def test_runner_localizes_train_and_eval_videos() -> None:
     )
     assert 'runner.resume_dir="$W73_RESUME_DIR"' in runner
     assert 'runner.debug_nonfinite="$W73_DEBUG_NONFINITE"' in runner
+    assert 'export RLINF_DEBUG_NONFINITE="$W73_DEBUG_NONFINITE"' in runner
 
 
 def test_prepare_runtime_build_isolated_from_canonical_source(tmp_path: Path) -> None:

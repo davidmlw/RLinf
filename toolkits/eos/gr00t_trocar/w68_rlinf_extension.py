@@ -198,7 +198,7 @@ def register() -> None:
     _register_gr00t_converters(cfg)
     _patch_gr00t_get_model(cfg)
     _register_isaaclab_envs()
-    if _load_full_cfg().get("runner", {}).get("debug_nonfinite", False):
+    if os.environ.get("RLINF_DEBUG_NONFINITE") == "true":
         _install_nonfinite_diagnostics()
 
     logger.info("isaaclab_contrib.rl.rlinf.extension: Registration complete.")
