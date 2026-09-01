@@ -582,6 +582,7 @@ def _load_site(
             "torchcodec_wheel_sha256",
             "hydra_core_version",
             "numpy_version",
+            "transformers_version",
             "isaaclab_revision",
             "gr00t_revision",
             "installer",
@@ -619,6 +620,7 @@ def _load_site(
         "torchcodec_wheel_sha256",
         "hydra_core_version",
         "numpy_version",
+        "transformers_version",
         "installer",
     ):
         _string(runtime_spec_value[key], f"runtime spec.{key}")
@@ -1236,6 +1238,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             "torchcodec_wheel_sha256",
             "hydra_core",
             "numpy",
+            "transformers",
             "ray",
             "isaaclab",
             "isaaclab_newton",
@@ -1290,6 +1293,7 @@ def _run_agent(args: argparse.Namespace) -> int:
         "torchcodec": runtime_spec_value["torchcodec_version"],
         "hydra_core": runtime_spec_value["hydra_core_version"],
         "numpy": runtime_spec_value["numpy_version"],
+        "transformers": runtime_spec_value["transformers_version"],
     }
     for key, expected in expected_packages.items():
         if runtime_manifest_value[key] != expected:
@@ -1313,6 +1317,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             (
                 "import flash_attn, hydra, importlib.metadata, json, numpy, ray, torch, torchcodec; "
                 "from torchcodec.decoders import VideoDecoder; "
+                "from transformers.image_utils import VideoInput; "
                 "assert torch.cuda.is_available(), "
                 "'PyTorch cannot access an allocation GPU'; "
                 "probe = torch.ones(1, device='cuda'); "
@@ -1322,6 +1327,7 @@ def _run_agent(args: argparse.Namespace) -> int:
                 "'torchcodec': torchcodec.__version__, "
                 "'hydra_core': importlib.metadata.version('hydra-core'), "
                 "'numpy': numpy.__version__, "
+                "'transformers': importlib.metadata.version('transformers'), "
                 "'isaaclab': importlib.metadata.version('isaaclab'), "
                 "'cuda': torch.version.cuda, "
                 "'cuda_available': torch.cuda.is_available(), "

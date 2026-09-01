@@ -127,7 +127,8 @@ if [[ -f "$manifest" ]]; then
     "$prepare_script_sha" \
     "$dependency_inputs_sha" \
     "$W73_FLASH_ATTN_WHEEL_SHA256" \
-    "$W73_TORCHCODEC_WHEEL_SHA256" <<'PY'
+    "$W73_TORCHCODEC_WHEEL_SHA256" \
+    "$(spec_value transformers_version)" <<'PY'
 import hashlib
 import json
 import sys
@@ -156,6 +157,8 @@ if manifest.get("flash_attn_wheel_sha256") != sys.argv[8]:
     raise SystemExit("runtime FlashAttention wheel hash mismatch")
 if manifest.get("torchcodec_wheel_sha256") != sys.argv[9]:
     raise SystemExit("runtime TorchCodec wheel hash mismatch")
+if manifest.get("transformers") != sys.argv[10]:
+    raise SystemExit("runtime Transformers version mismatch")
 PY
   PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
     "$(spec_value torch_version)" \
@@ -165,7 +168,8 @@ PY
     "$(spec_value flash_attn_version)" \
     "$(spec_value torchcodec_version)" \
     "$(spec_value hydra_core_version)" \
-    "$(spec_value numpy_version)" <<'PY'
+    "$(spec_value numpy_version)" \
+    "$(spec_value transformers_version)" <<'PY'
 import importlib.metadata
 import sys
 
@@ -178,6 +182,7 @@ import torchaudio
 import torchcodec
 import torchvision
 from torchcodec.decoders import VideoDecoder
+from transformers.image_utils import VideoInput
 
 (
     expected_torch,
@@ -188,6 +193,7 @@ from torchcodec.decoders import VideoDecoder
     expected_torchcodec,
     expected_hydra_core,
     expected_numpy,
+    expected_transformers,
 ) = sys.argv[1:]
 expected_build = f"{expected_torch}+{expected_backend}"
 if not torch.__version__.startswith(expected_build):
@@ -206,6 +212,8 @@ if torchcodec.__version__ != expected_torchcodec:
     )
 if VideoDecoder is None:
     raise SystemExit("runtime TorchCodec decoder import failed")
+if VideoInput is None:
+    raise SystemExit("runtime Transformers VideoInput import failed")
 if not torchvision.__version__.startswith(f"{expected_torchvision}+{expected_backend}"):
     raise SystemExit(
         "runtime torchvision mismatch: "
@@ -227,6 +235,12 @@ if importlib.metadata.version("hydra-core") != expected_hydra_core:
 if numpy.__version__ != expected_numpy:
     raise SystemExit(
         f"runtime NumPy mismatch: expected {expected_numpy}, found {numpy.__version__}"
+    )
+if importlib.metadata.version("transformers") != expected_transformers:
+    raise SystemExit(
+        "runtime Transformers mismatch: "
+        f"expected {expected_transformers}, "
+        f"found {importlib.metadata.version('transformers')}"
     )
 PY
   printf 'reusing verified RLinf runtime: %s\n' "$W73_RUNTIME_ROOT"
@@ -306,7 +320,8 @@ uv pip install \
 uv pip install \
   --python "$W73_RUNTIME_ROOT/bin/python" \
   "hydra-core==$(spec_value hydra_core_version)" \
-  "numpy==$(spec_value numpy_version)"
+  "numpy==$(spec_value numpy_version)" \
+  "transformers==$(spec_value transformers_version)"
 uv pip install \
   --python "$W73_RUNTIME_ROOT/bin/python" \
   --no-deps \
@@ -337,6 +352,7 @@ PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
   "$(spec_value torchcodec_version)" \
   "$(spec_value hydra_core_version)" \
   "$(spec_value numpy_version)" \
+  "$(spec_value transformers_version)" \
   "$W73_FLASH_ATTN_WHEEL_SHA256" \
   "$W73_TORCHCODEC_WHEEL_SHA256" <<'PY'
 import importlib.metadata
@@ -355,6 +371,7 @@ import torchaudio
 import torchcodec
 import torchvision
 from torchcodec.decoders import VideoDecoder
+from transformers.image_utils import VideoInput
 
 manifest_path = Path(sys.argv[1])
 spec_sha = sys.argv[2]
@@ -371,8 +388,9 @@ expected_flash_attn = sys.argv[12]
 expected_torchcodec = sys.argv[13]
 expected_hydra_core = sys.argv[14]
 expected_numpy = sys.argv[15]
-flash_attn_wheel_sha256 = sys.argv[16]
-torchcodec_wheel_sha256 = sys.argv[17]
+expected_transformers = sys.argv[16]
+flash_attn_wheel_sha256 = sys.argv[17]
+torchcodec_wheel_sha256 = sys.argv[18]
 
 expected_build = f"{expected_torch}+{expected_backend}"
 if not torch.__version__.startswith(expected_build):
@@ -383,6 +401,8 @@ if torchcodec.__version__ != expected_torchcodec:
     raise SystemExit(f"unexpected TorchCodec build: {torchcodec.__version__}")
 if VideoDecoder is None:
     raise SystemExit("unexpected TorchCodec decoder import failure")
+if VideoInput is None:
+    raise SystemExit("unexpected Transformers VideoInput import failure")
 if not torchvision.__version__.startswith(f"{expected_torchvision}+{expected_backend}"):
     raise SystemExit(f"unexpected torchvision build: {torchvision.__version__}")
 if not torchaudio.__version__.startswith(f"{expected_torchaudio}+{expected_backend}"):
@@ -393,6 +413,10 @@ if importlib.metadata.version("hydra-core") != expected_hydra_core:
     )
 if numpy.__version__ != expected_numpy:
     raise SystemExit(f"unexpected NumPy build: {numpy.__version__}")
+if importlib.metadata.version("transformers") != expected_transformers:
+    raise SystemExit(
+        f"unexpected Transformers build: {importlib.metadata.version('transformers')}"
+    )
 
 value = {
     "schema": "rlinf.eos.python-runtime-manifest.v1",
@@ -411,6 +435,7 @@ value = {
     "torchcodec_wheel_sha256": torchcodec_wheel_sha256,
     "hydra_core": importlib.metadata.version("hydra-core"),
     "numpy": numpy.__version__,
+    "transformers": importlib.metadata.version("transformers"),
     "ray": ray.__version__,
     "isaaclab": importlib.metadata.version("isaaclab"),
     "isaaclab_newton": importlib.metadata.version("isaaclab-newton"),

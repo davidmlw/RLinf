@@ -423,6 +423,7 @@ def test_prepare_runtime_reuses_only_matching_package_freeze(tmp_path: Path) -> 
         "gr00t_revision": revisions["gr00t"],
         "flash_attn_wheel_sha256": _sha256(flash_attn_wheel),
         "torchcodec_wheel_sha256": _sha256(torchcodec_wheel),
+        "transformers": spec["transformers_version"],
     }
     (runtime / "rlinf-runtime-manifest.json").write_text(
         json.dumps(manifest), encoding="utf-8"
@@ -470,7 +471,9 @@ def test_prepare_runtime_requires_uv_managed_python() -> None:
     )
     assert '"$W73_TORCHCODEC_WHEEL"' in script
     assert "--no-deps" in script
+    assert '"transformers==$(spec_value transformers_version)"' in script
     assert "from torchcodec.decoders import VideoDecoder" in script
+    assert "from transformers.image_utils import VideoInput" in script
 
 
 def test_runtime_contract_pins_torchcodec_for_torch_211() -> None:
@@ -484,6 +487,7 @@ def test_runtime_contract_pins_torchcodec_for_torch_211() -> None:
     assert spec["torch_version"] == "2.11.0"
     assert spec["torchcodec_version"] == "0.11.1+cpu"
     assert spec["torchcodec_backend"] == "cpu"
+    assert spec["transformers_version"] == "4.51.3"
     assert (
         spec["torchcodec_wheel_filename"]
         == "torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl"
@@ -492,6 +496,7 @@ def test_runtime_contract_pins_torchcodec_for_torch_211() -> None:
         "6c26e90e7aa982302644d0af8cb706318682bb390f48a80ecbfeab03499acd04"
     )
     assert "from torchcodec.decoders import VideoDecoder" in launcher
+    assert "from transformers.image_utils import VideoInput" in launcher
 
 
 def test_prepare_runtime_build_isolated_from_canonical_source(tmp_path: Path) -> None:
