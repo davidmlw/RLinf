@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -308,6 +309,21 @@ def test_ray_workers_inherit_source_and_task_environment(tmp_path: Path) -> None
     assert env["RLINF_EXT_MODULE"] == "w68_rlinf_extension"
     assert env["RLINF_CONFIG_FILE"] == site["experiment"]["config"]
     assert env["W68_SANITIZED_TRAY_USD"] == site["runtime"]["sanitized_tray_usd"]
+
+
+def test_ray_failure_logs_are_archived_before_cleanup(tmp_path: Path) -> None:
+    ray_temp = tmp_path / "ray"
+    logs = ray_temp / "session_latest" / "logs"
+    logs.mkdir(parents=True)
+    (logs / "worker-1.err").write_text("root cause\n", encoding="utf-8")
+    attempt = tmp_path / "attempt"
+
+    archive_path = MODULE._archive_ray_failure_logs(ray_temp, attempt)
+
+    assert archive_path == attempt / "runtime" / "ray-failure-logs.tar.gz"
+    assert archive_path.is_file()
+    with tarfile.open(archive_path, "r:gz") as archive:
+        assert archive.extractfile("logs/worker-1.err").read() == b"root cause\n"
 
 
 def test_receipts_are_create_only(tmp_path: Path) -> None:

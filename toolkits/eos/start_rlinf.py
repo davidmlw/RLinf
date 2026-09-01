@@ -29,10 +29,12 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from pathlib import Path
@@ -1104,6 +1106,17 @@ def _ray_worker_environment(site: Mapping[str, Any]) -> dict[str, str]:
     return env
 
 
+def _archive_ray_failure_logs(ray_temp: Path, attempt: Path) -> Path | None:
+    logs = ray_temp / "session_latest" / "logs"
+    if not logs.is_dir():
+        return None
+    destination = attempt / "runtime" / "ray-failure-logs.tar.gz"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(destination, "w:gz") as archive:
+        archive.add(logs, arcname="logs")
+    return destination
+
+
 def _run_agent(args: argparse.Namespace) -> int:
     site = _load_site(Path(args.site), verify_image=False, validate_contract=False)
     attempt = Path(args.attempt_root).resolve(strict=True)
@@ -1298,6 +1311,13 @@ def _run_agent(args: argparse.Namespace) -> int:
         raise WorkflowError("deterministic seed preflight failed")
     _ray_stop(python, attempt, "prestop")
     ray_env = _ray_worker_environment(site)
+    slurm_job_id = os.environ.get("SLURM_JOB_ID")
+    if not slurm_job_id or not slurm_job_id.isdecimal():
+        raise WorkflowError("run-agent requires a numeric SLURM_JOB_ID")
+    ray_temp = Path("/workspace") / f"w73-ray-{slurm_job_id}"
+    if ray_temp.exists():
+        raise WorkflowError(f"Ray temporary directory already exists: {ray_temp}")
+    ray_temp.mkdir(parents=True)
     node_ip = socket.gethostbyname(hostname)
     ray_start = _run_command(
         [
@@ -1309,12 +1329,14 @@ def _run_agent(args: argparse.Namespace) -> int:
             f"--node-ip-address={node_ip}",
             "--port=6379",
             "--num-gpus=8",
+            f"--temp-dir={ray_temp}",
         ],
         output=attempt / "logs" / "ray-start.out",
         error=attempt / "logs" / "ray-start.err",
         env=ray_env,
     )
     if ray_start != 0:
+        shutil.rmtree(ray_temp, ignore_errors=True)
         raise WorkflowError("Ray head failed to start")
     ray_status = _run_command(
         [python, "-m", "ray.scripts.scripts", "status"],
@@ -1324,6 +1346,8 @@ def _run_agent(args: argparse.Namespace) -> int:
     )
     if ray_status != 0:
         _ray_stop(python, attempt, "status-failure-stop")
+        _archive_ray_failure_logs(ray_temp, attempt)
+        shutil.rmtree(ray_temp, ignore_errors=True)
         raise WorkflowError("Ray status gate failed")
 
     run_env = dict(ray_env)
@@ -1377,6 +1401,9 @@ def _run_agent(args: argparse.Namespace) -> int:
         training_out.close()
         training_err.close()
         ray_stop = _ray_stop(python, attempt, "stop")
+        if timed_out or child_code != 0:
+            _archive_ray_failure_logs(ray_temp, attempt)
+        shutil.rmtree(ray_temp, ignore_errors=True)
     status = "deadline_reached" if timed_out else "completed"
     if not timed_out and child_code != 0:
         status = "failed"
