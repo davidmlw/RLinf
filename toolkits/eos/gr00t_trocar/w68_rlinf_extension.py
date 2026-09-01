@@ -102,6 +102,37 @@ def _assert_finite(value: object, *, stage: str) -> None:
     )
 
 
+def _assert_magnitude(value: object, *, stage: str, limit: float) -> None:
+    """Fail before a finite simulator value overflows during bf16 conversion."""
+    if isinstance(value, np.ndarray):
+        if not np.issubdtype(value.dtype, np.floating):
+            return
+        over_limit = np.abs(value) > limit
+        if not bool(over_limit.any()):
+            return
+        first_index = tuple(int(item) for item in np.argwhere(over_limit)[0])
+        raise RuntimeError(
+            "RLINF_OUT_OF_RANGE "
+            f"stage={stage} shape={value.shape} dtype={value.dtype} "
+            f"limit={limit} count={int(over_limit.sum())} "
+            f"first_index={first_index} first_value={float(value[first_index])} "
+            f"value_min={float(value.min())} value_max={float(value.max())}"
+        )
+    if not isinstance(value, torch.Tensor) or not value.is_floating_point():
+        return
+    over_limit = value.abs() > limit
+    if not bool(over_limit.any().item()):
+        return
+    first_index = tuple(int(item) for item in torch.nonzero(over_limit)[0].tolist())
+    raise RuntimeError(
+        "RLINF_OUT_OF_RANGE "
+        f"stage={stage} shape={tuple(value.shape)} dtype={value.dtype} "
+        f"limit={limit} count={int(over_limit.sum().item())} "
+        f"first_index={first_index} first_value={float(value[first_index].item())} "
+        f"value_min={float(value.min().item())} value_max={float(value.max().item())}"
+    )
+
+
 def _assert_nested_finite(value: object, *, stage: str) -> None:
     if isinstance(value, Mapping):
         for key, child in value.items():
@@ -123,6 +154,7 @@ def _install_nonfinite_diagnostics() -> None:
         from rlinf.models.embodiment.gr00t.gr00t_action_model import (
             FlowMatchingActionHeadForRLActionPrediction,
         )
+    from rlinf.envs.isaaclab.isaaclab_env import IsaaclabBaseEnv
     from rlinf.workers.actor.fsdp_actor_worker import EmbodiedFSDPActor
     from rlinf.workers.rollout.hf.huggingface_worker import MultiStepRolloutWorker
 
@@ -162,6 +194,11 @@ def _install_nonfinite_diagnostics() -> None:
 
     def checked_predict(self, env_obs, *args, **kwargs):
         _assert_nested_finite(env_obs, stage="rollout.observation")
+        _assert_magnitude(
+            env_obs.get("states"),
+            stage="rollout.observation.states",
+            limit=100.0,
+        )
         actions, result = original_predict(self, env_obs, *args, **kwargs)
         _assert_finite(actions, stage="rollout.actions")
         for key in ("prev_logprobs", "prev_values"):
@@ -204,6 +241,42 @@ def _install_nonfinite_diagnostics() -> None:
 
     EmbodiedFSDPActor.recv_rollout_trajectories = checked_recv
     EmbodiedFSDPActor.compute_advantages_and_returns = checked_compute_adv
+
+    original_env_reset = IsaaclabBaseEnv.reset
+    original_env_step = IsaaclabBaseEnv.step
+
+    def checked_env_reset(self, *args, **kwargs):
+        obs, infos = original_env_reset(self, *args, **kwargs)
+        self._rlinf_nonfinite_reset_count = (
+            getattr(self, "_rlinf_nonfinite_reset_count", 0) + 1
+        )
+        self._rlinf_nonfinite_physical_step = 0
+        stage = f"env.reset.{self._rlinf_nonfinite_reset_count}.states"
+        _assert_finite(obs.get("states"), stage=stage)
+        _assert_magnitude(obs.get("states"), stage=stage, limit=100.0)
+        return obs, infos
+
+    def checked_env_step(self, actions=None, *args, **kwargs):
+        reset_count = getattr(self, "_rlinf_nonfinite_reset_count", 0)
+        physical_step = getattr(self, "_rlinf_nonfinite_physical_step", 0) + 1
+        self._rlinf_nonfinite_physical_step = physical_step
+        action_stage = f"env.action.reset_{reset_count}.physical_{physical_step}"
+        _assert_finite(actions, stage=action_stage)
+        _assert_magnitude(actions, stage=action_stage, limit=100.0)
+        result = original_env_step(self, actions, *args, **kwargs)
+        obs, rewards, terminations, truncations, _infos = result
+        state_stage = (
+            f"env.step.output.reset_{reset_count}.physical_{physical_step}.states"
+        )
+        _assert_finite(obs.get("states"), stage=state_stage)
+        _assert_magnitude(obs.get("states"), stage=state_stage, limit=100.0)
+        _assert_finite(rewards, stage=f"{state_stage}.rewards")
+        _assert_finite(terminations, stage=f"{state_stage}.terminations")
+        _assert_finite(truncations, stage=f"{state_stage}.truncations")
+        return result
+
+    IsaaclabBaseEnv.reset = checked_env_reset
+    IsaaclabBaseEnv.step = checked_env_step
     logger.warning("Enabled W73 non-finite rollout/value diagnostics")
 
 
