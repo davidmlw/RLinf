@@ -799,3 +799,35 @@ def test_materialize_smoke_has_bounded_workload(
     assert smoke["runtime"]["prepare_script_sha256"] == _sha256(
         ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh"
     )
+
+
+def test_materialize_overrides_checkpoint_and_evaluation_intervals(
+    tmp_path: Path,
+) -> None:
+    site_path = _site(tmp_path)
+    template = tmp_path / "template.json"
+    value = json.loads(site_path.read_text(encoding="utf-8"))
+    value["source"]["revision"] = "AUTO"
+    value["runtime"]["runtime_spec_sha256"] = "AUTO"
+    value["runtime"]["prepare_script_sha256"] = "AUTO"
+    value["experiment"]["config_sha256"] = "AUTO"
+    value["experiment"]["runner_sha256"] = "AUTO"
+    template.write_text(json.dumps(value), encoding="utf-8")
+    output = tmp_path / "long-run.json"
+    args = argparse.Namespace(
+        template=str(template),
+        output=str(output),
+        skip_image_hash=False,
+        smoke=False,
+        max_steps=120,
+        val_check_interval=5,
+        save_interval=20,
+    )
+
+    assert MODULE._materialize(args) == 0
+    materialized = json.loads(output.read_text(encoding="utf-8"))
+    assert materialized["experiment"]["max_steps"] == 120
+    assert materialized["experiment"]["val_check_interval"] == 5
+    assert materialized["experiment"]["save_interval"] == 20
+    contract = MODULE._load_site(output)["_resolved"]["workload_contract"]
+    assert contract["eval_interval"] == 5

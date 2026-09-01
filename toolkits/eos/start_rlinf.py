@@ -993,9 +993,15 @@ def _materialize(args: argparse.Namespace) -> int:
             }
         )
     max_steps = getattr(args, "max_steps", None)
+    val_check_interval = getattr(args, "val_check_interval", None)
+    save_interval = getattr(args, "save_interval", None)
     resume_dir = getattr(args, "resume_dir", None)
     if max_steps is not None:
         experiment["max_steps"] = max_steps
+    if val_check_interval is not None:
+        experiment["val_check_interval"] = val_check_interval
+    if save_interval is not None:
+        experiment["save_interval"] = save_interval
     if resume_dir is not None:
         experiment["resume_dir"] = resume_dir
     if getattr(args, "debug_nonfinite", False):
@@ -1568,6 +1574,8 @@ def _parser() -> argparse.ArgumentParser:
         help="limit the materialized attempt to one step and 90 minutes",
     )
     materialize.add_argument("--max-steps", type=int)
+    materialize.add_argument("--val-check-interval", type=int)
+    materialize.add_argument("--save-interval", type=int)
     materialize.add_argument("--resume-dir")
     materialize.add_argument("--debug-nonfinite", action="store_true")
     materialize.set_defaults(handler=_materialize)
