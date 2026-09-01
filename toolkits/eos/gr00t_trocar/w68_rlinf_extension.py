@@ -44,6 +44,7 @@ import collections.abc
 import logging
 import os
 import sys
+from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -67,24 +68,42 @@ _full_cfg_cache: dict | None = None
 
 def _assert_finite(value: object, *, stage: str) -> None:
     """Fail with a narrow diagnostic when a floating tensor becomes non-finite."""
+    if isinstance(value, np.ndarray):
+        if not np.issubdtype(value.dtype, np.floating):
+            return
+        finite = np.isfinite(value)
+        if bool(finite.all()):
+            return
+        finite_values = value[finite]
+        first_index = tuple(int(item) for item in np.argwhere(~finite)[0])
+        value_min = float(finite_values.min()) if finite_values.size else None
+        value_max = float(finite_values.max()) if finite_values.size else None
+        raise RuntimeError(
+            "RLINF_NONFINITE "
+            f"stage={stage} shape={value.shape} dtype={value.dtype} "
+            f"nonfinite={int((~finite).sum())} first_index={first_index} "
+            f"finite_min={value_min} finite_max={value_max}"
+        )
     if not isinstance(value, torch.Tensor) or not value.is_floating_point():
         return
     finite = torch.isfinite(value)
     if bool(finite.all().item()):
         return
     nonfinite = int((~finite).sum().item())
+    first_index = tuple(int(item) for item in torch.nonzero(~finite)[0].tolist())
     finite_values = value[finite]
     value_min = float(finite_values.min().item()) if finite_values.numel() else None
     value_max = float(finite_values.max().item()) if finite_values.numel() else None
     raise RuntimeError(
         "RLINF_NONFINITE "
         f"stage={stage} shape={tuple(value.shape)} dtype={value.dtype} "
-        f"nonfinite={nonfinite} finite_min={value_min} finite_max={value_max}"
+        f"nonfinite={nonfinite} first_index={first_index} "
+        f"finite_min={value_min} finite_max={value_max}"
     )
 
 
 def _assert_nested_finite(value: object, *, stage: str) -> None:
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         for key, child in value.items():
             _assert_nested_finite(child, stage=f"{stage}.{key}")
     elif isinstance(value, (list, tuple)):
@@ -115,6 +134,18 @@ def _install_nonfinite_diagnostics() -> None:
         return
 
     original_get_value = FlowMatchingActionHeadForRLActionPrediction.get_value
+    original_get_rl_action = (
+        FlowMatchingActionHeadForRLActionPrediction.get_rl_action
+    )
+
+    def checked_get_rl_action(self, backbone_output, action_input, *args, **kwargs):
+        _assert_nested_finite(
+            backbone_output, stage="rollout.action_head.backbone_input"
+        )
+        _assert_nested_finite(action_input, stage="rollout.action_head.input")
+        return original_get_rl_action(
+            self, backbone_output, action_input, *args, **kwargs
+        )
 
     def checked_get_value(self, vl_embs, state_features):
         _assert_finite(vl_embs, stage="value.backbone_features")
@@ -124,6 +155,7 @@ def _install_nonfinite_diagnostics() -> None:
         return values
 
     checked_get_value._rlinf_nonfinite_diagnostic = True
+    FlowMatchingActionHeadForRLActionPrediction.get_rl_action = checked_get_rl_action
     FlowMatchingActionHeadForRLActionPrediction.get_value = checked_get_value
 
     original_predict = MultiStepRolloutWorker._predict_rollout_actions
