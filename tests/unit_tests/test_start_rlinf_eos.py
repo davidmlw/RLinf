@@ -396,6 +396,10 @@ def test_prepare_runtime_requires_uv_managed_python() -> None:
 
     assert 'UV_PYTHON_INSTALL_DIR="$runtime_parent/.uv-python"' in script
     assert "UV_PYTHON_PREFERENCE=only-managed" in script
+    assert (
+        'cd "$runtime_parent"\n'
+        'git -C "$W73_SOURCE_ROOT" worktree remove --force "$build_source"' in script
+    )
 
 
 def test_prepare_runtime_build_isolated_from_canonical_source(tmp_path: Path) -> None:
