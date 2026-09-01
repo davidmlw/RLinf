@@ -32,12 +32,19 @@ GPUs are visible.
 
 The v6 site manifest pins the OCI reference and registry digest, local squashfs
 hash, RLinf/Isaac-GR00T/IsaacLab revisions, runtime spec and prepare-script
-hashes, model manifest, sanitized USD and task overlay. No Poiesis-owned
+hashes, model manifest, sanitized USD, its three sibling textures and task
+overlay. No Poiesis-owned
 checkout, lock file, Python environment or prepare command is part of the
 RLinf runtime contract. Git inputs must have clean tracked content and submodules at their
 exact revisions. File inputs must match their SHA-256 before submission. Large
 immutable inputs live below the persistent EOS workspace `inputs/`; experiment
 outputs live below `runs/W73/`.
+
+The Newton renderer resolves the sanitized tray's material references relative
+to the USD. The three `T_Box001_{BC,N,ORM}001.png` files therefore live under
+`inputs/usd/texture/` exactly as in the qualified W68 input package. Their
+individual hashes are submission gates; omitting them changes neither the USD
+nor the task, but makes renderer initialization fail.
 
 At allocation start the launcher creates or verifies the shared runtime before
 probing its interpreter, Torch, CUDA, FlashAttention, IsaacLab and Ray. Ray is

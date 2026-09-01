@@ -54,6 +54,21 @@
         "sha256": "3c4f15feadbf35244e56a964aeef638241f33b46ad71c079c5a44f287a0008ab"
       },
       {
+        "name": "trocar-tray-box-base-color-texture",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/usd/texture/T_Box001_BC001.png",
+        "sha256": "43ee84268e161a10ece13fff539388e5fa807f6fffb3e0314366867336c7d092"
+      },
+      {
+        "name": "trocar-tray-box-normal-texture",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/usd/texture/T_Box001_N001.png",
+        "sha256": "742bc21bf7b4fcaec7a7670466a6aa91e6d2910cd2b2449fd1155b958249824e"
+      },
+      {
+        "name": "trocar-tray-box-orm-texture",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/usd/texture/T_Box001_ORM001.png",
+        "sha256": "688701d0450d5f913134f978793d0c3e4423cc7c81d0397aec295a19dfe18bd3"
+      },
+      {
         "name": "flash-attn-h100-wheel",
         "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl",
         "sha256": "79e0732cb5d988a96777af7ec63a5af91b557ce8fd1593d6d851f4dd9c42411e"

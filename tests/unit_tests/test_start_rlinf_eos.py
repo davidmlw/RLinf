@@ -499,6 +499,25 @@ def test_runtime_contract_pins_torchcodec_for_torch_211() -> None:
     assert "from transformers.image_utils import VideoInput" in launcher
 
 
+def test_eos_template_pins_newton_tray_textures() -> None:
+    template = json.loads(
+        (ROOT / "toolkits/eos/gr00t_trocar/site.eos.template.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    files = {item["name"]: item for item in template["provenance"]["files"]}
+
+    assert files["trocar-tray-box-base-color-texture"]["sha256"] == (
+        "43ee84268e161a10ece13fff539388e5fa807f6fffb3e0314366867336c7d092"
+    )
+    assert files["trocar-tray-box-normal-texture"]["sha256"] == (
+        "742bc21bf7b4fcaec7a7670466a6aa91e6d2910cd2b2449fd1155b958249824e"
+    )
+    assert files["trocar-tray-box-orm-texture"]["sha256"] == (
+        "688701d0450d5f913134f978793d0c3e4423cc7c81d0397aec295a19dfe18bd3"
+    )
+
+
 def test_prepare_runtime_build_isolated_from_canonical_source(tmp_path: Path) -> None:
     source = tmp_path / "source"
     isaaclab = tmp_path / "isaaclab"
