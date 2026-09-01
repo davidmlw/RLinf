@@ -1068,6 +1068,42 @@ def _ray_stop(python: str, attempt: Path, label: str) -> int:
     )
 
 
+def _ray_worker_environment(site: Mapping[str, Any]) -> dict[str, str]:
+    runtime = site["runtime"]
+    python_paths = [
+        *runtime["python_deps"],
+        runtime["gr00t_root"],
+        site["source"]["root"],
+        runtime["task_overlay_root"],
+        str(Path(runtime["isaaclab_root"]) / "source"),
+    ]
+    env = dict(os.environ)
+    env.update(
+        {
+            "PYTHONPATH": os.pathsep.join(python_paths),
+            "HF_HOME": runtime["hf_cache"],
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+            "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "RAY_DEDUP_LOGS": "0",
+            "RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO": "0",
+            "RLINF_CODE_WORKING_DIR": "0",
+            "RLINF_EXT_MODULE": "w68_rlinf_extension",
+            "RLINF_CONFIG_FILE": site["experiment"]["config"],
+            "W68_ISAACLAB_SOURCE_ROOT": str(Path(runtime["isaaclab_root"]) / "source"),
+            "W68_OVERLAY_ROOT": runtime["task_overlay_root"],
+            "W68_SANITIZED_TRAY_USD": runtime["sanitized_tray_usd"],
+            "OMNI_KIT_ACCEPT_EULA": "YES",
+            "ACCEPT_EULA": "Y",
+            "PRIVACY_CONSENT": "Y",
+        }
+    )
+    return env
+
+
 def _run_agent(args: argparse.Namespace) -> int:
     site = _load_site(Path(args.site), verify_image=False, validate_contract=False)
     attempt = Path(args.attempt_root).resolve(strict=True)
@@ -1261,6 +1297,7 @@ def _run_agent(args: argparse.Namespace) -> int:
     if seed_test != 0:
         raise WorkflowError("deterministic seed preflight failed")
     _ray_stop(python, attempt, "prestop")
+    ray_env = _ray_worker_environment(site)
     node_ip = socket.gethostbyname(hostname)
     ray_start = _run_command(
         [
@@ -1275,6 +1312,7 @@ def _run_agent(args: argparse.Namespace) -> int:
         ],
         output=attempt / "logs" / "ray-start.out",
         error=attempt / "logs" / "ray-start.err",
+        env=ray_env,
     )
     if ray_start != 0:
         raise WorkflowError("Ray head failed to start")
@@ -1282,12 +1320,13 @@ def _run_agent(args: argparse.Namespace) -> int:
         [python, "-m", "ray.scripts.scripts", "status"],
         output=attempt / "logs" / "ray-status.out",
         error=attempt / "logs" / "ray-status.err",
+        env=ray_env,
     )
     if ray_status != 0:
         _ray_stop(python, attempt, "status-failure-stop")
         raise WorkflowError("Ray status gate failed")
 
-    run_env = dict(os.environ)
+    run_env = dict(ray_env)
     run_env.update(
         {
             "W73_ATTEMPT_ROOT": str(attempt),

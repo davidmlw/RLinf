@@ -294,6 +294,22 @@ def test_deadline_reserves_slurm_shutdown_window(
     assert MODULE._allocation_deadline(site) == 1_004_400
 
 
+def test_ray_workers_inherit_source_and_task_environment(tmp_path: Path) -> None:
+    site = MODULE._load_site(_site(tmp_path))
+
+    env = MODULE._ray_worker_environment(site)
+    assert env["PYTHONPATH"].split(os.pathsep) == [
+        site["runtime"]["python_deps"][0],
+        site["runtime"]["gr00t_root"],
+        site["source"]["root"],
+        site["runtime"]["task_overlay_root"],
+        str(Path(site["runtime"]["isaaclab_root"]) / "source"),
+    ]
+    assert env["RLINF_EXT_MODULE"] == "w68_rlinf_extension"
+    assert env["RLINF_CONFIG_FILE"] == site["experiment"]["config"]
+    assert env["W68_SANITIZED_TRAY_USD"] == site["runtime"]["sanitized_tray_usd"]
+
+
 def test_receipts_are_create_only(tmp_path: Path) -> None:
     path = tmp_path / "receipt.json"
     MODULE._write_new_json(path, {"value": 1})
