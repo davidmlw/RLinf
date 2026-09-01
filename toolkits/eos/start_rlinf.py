@@ -109,6 +109,14 @@ def _absolute_directory(value: object, label: str) -> Path:
     return path.resolve(strict=True)
 
 
+def _absolute_executable(value: object, label: str) -> Path:
+    """Validate an executable while preserving a virtualenv's symlink path."""
+    path = Path(_string(value, label))
+    if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+        raise WorkflowError(f"{label} must be an absolute executable file")
+    return path
+
+
 def _time_limit_seconds(value: object) -> tuple[str, int]:
     text = _string(value, "slurm.time_limit")
     match = TIME_LIMIT_RE.fullmatch(text)
@@ -917,9 +925,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             raise WorkflowError("runtime preparation exceeded the workload deadline") from error
     if prepared.returncode != 0:
         raise WorkflowError("runtime preparation failed")
-    python_path = _absolute_file(runtime["python"], "runtime.python")
-    if not os.access(python_path, os.X_OK):
-        raise WorkflowError("runtime.python is not executable after preparation")
+    python_path = _absolute_executable(runtime["python"], "runtime.python")
     python = str(python_path)
     seed_test = _run_command(
         [

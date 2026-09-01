@@ -189,6 +189,13 @@ def test_site_rejects_external_provenance_drift(tmp_path: Path) -> None:
         MODULE._load_site(site_path)
 
 
+def test_virtualenv_python_symlink_is_preserved(tmp_path: Path) -> None:
+    python_link = tmp_path / "python"
+    python_link.symlink_to(Path(sys.executable).resolve(strict=True))
+
+    assert MODULE._absolute_executable(str(python_link), "python") == python_link
+
+
 def test_deadline_reserves_slurm_shutdown_window(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
