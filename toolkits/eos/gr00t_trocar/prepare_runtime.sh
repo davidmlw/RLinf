@@ -57,8 +57,15 @@ if [[ -n "$(git -C "$W73_SOURCE_ROOT" status --short)" ]]; then
   exit 2
 fi
 
+prepare_script_sha=$(sha256sum "${BASH_SOURCE[0]}" | awk '{print $1}')
+dependency_inputs_sha=$(
+  git -C "$W73_SOURCE_ROOT" ls-files -s -- pyproject.toml requirements \
+    | sha256sum | awk '{print $1}'
+)
+
 runtime_parent=$(dirname "$W73_RUNTIME_ROOT")
 runtime_name=$(basename "$W73_RUNTIME_ROOT")
+build_source="$runtime_parent/.${runtime_name}.source"
 mkdir -p "$runtime_parent" "$W73_UV_CACHE"
 exec 9>"$runtime_parent/.${runtime_name}.prepare.lock"
 flock 9
@@ -72,7 +79,9 @@ if [[ -f "$manifest" ]]; then
     "$W73_RUNTIME_SPEC_SHA256" \
     "$W73_RUNTIME_ROOT/requirements.freeze.txt" \
     "$(git -C "$W73_ISAACLAB_ROOT" rev-parse HEAD)" \
-    "$(git -C "$W73_GROOT_ROOT" rev-parse HEAD)" <<'PY'
+    "$(git -C "$W73_GROOT_ROOT" rev-parse HEAD)" \
+    "$prepare_script_sha" \
+    "$dependency_inputs_sha" <<'PY'
 import hashlib
 import json
 import sys
@@ -93,6 +102,10 @@ if manifest.get("isaaclab_revision") != sys.argv[4]:
     raise SystemExit("runtime IsaacLab revision mismatch")
 if manifest.get("gr00t_revision") != sys.argv[5]:
     raise SystemExit("runtime GR00T revision mismatch")
+if manifest.get("prepare_script_sha256") != sys.argv[6]:
+    raise SystemExit("runtime prepare-script hash mismatch")
+if manifest.get("rlinf_dependency_inputs_sha256") != sys.argv[7]:
+    raise SystemExit("runtime RLinf dependency-input hash mismatch")
 PY
   PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
     "$(spec_value torch_version)" \
@@ -150,9 +163,12 @@ umask 0002
 
 cleanup_partial() {
   rc=$?
-  if ! git -C "$W73_SOURCE_ROOT" ls-files --error-unmatch uv.lock >/dev/null 2>&1; then
-    rm -f "$W73_SOURCE_ROOT/uv.lock"
+  set +e
+  if [[ -e "$build_source" ]]; then
+    git -C "$W73_SOURCE_ROOT" worktree remove --force "$build_source" \
+      >/dev/null 2>&1 || rm -rf "$build_source"
   fi
+  git -C "$W73_SOURCE_ROOT" worktree prune >/dev/null 2>&1
   if [[ $rc -ne 0 ]]; then
     rm -rf "$W73_RUNTIME_ROOT"
   fi
@@ -173,7 +189,14 @@ export NVCC_THREADS=4
 
 python_version=$(spec_value python_version)
 torch_version=$(spec_value torch_version)
-cd "$W73_SOURCE_ROOT"
+if [[ -e "$build_source" ]]; then
+  git -C "$W73_SOURCE_ROOT" worktree remove --force "$build_source" \
+    >/dev/null 2>&1 || rm -rf "$build_source"
+fi
+git -C "$W73_SOURCE_ROOT" worktree prune
+git -C "$W73_SOURCE_ROOT" worktree add \
+  --detach "$build_source" "$(git -C "$W73_SOURCE_ROOT" rev-parse HEAD)"
+cd "$build_source"
 bash requirements/install.sh \
   --no-root \
   --platform nvidia \
@@ -183,12 +206,11 @@ bash requirements/install.sh \
   --no-flash-attn \
   embodied --model gr00t --env isaaclab
 
-if ! git ls-files --error-unmatch uv.lock >/dev/null 2>&1; then
-  rm -f uv.lock
-fi
-if [[ -n "$(git status --short)" ]]; then
-  printf 'runtime preparation changed the RLinf source checkout\n' >&2
-  git status --short >&2
+git -C "$W73_SOURCE_ROOT" worktree remove --force "$build_source"
+git -C "$W73_SOURCE_ROOT" worktree prune
+if [[ -n "$(git -C "$W73_SOURCE_ROOT" status --short)" ]]; then
+  printf 'runtime preparation changed the canonical RLinf source checkout\n' >&2
+  git -C "$W73_SOURCE_ROOT" status --short >&2
   exit 2
 fi
 
@@ -219,6 +241,8 @@ PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
   "$manifest" "$W73_RUNTIME_SPEC_SHA256" "$freeze_sha" \
   "$(git -C "$W73_ISAACLAB_ROOT" rev-parse HEAD)" \
   "$(git -C "$W73_GROOT_ROOT" rev-parse HEAD)" \
+  "$prepare_script_sha" \
+  "$dependency_inputs_sha" \
   "$(spec_value torch_version)" \
   "$(spec_value torchvision_version)" \
   "$(spec_value torchaudio_version)" \
@@ -243,11 +267,13 @@ spec_sha = sys.argv[2]
 freeze_sha = sys.argv[3]
 isaaclab_revision = sys.argv[4]
 gr00t_revision = sys.argv[5]
-expected_torch = sys.argv[6]
-expected_torchvision = sys.argv[7]
-expected_torchaudio = sys.argv[8]
-expected_backend = sys.argv[9]
-expected_flash_attn = sys.argv[10]
+prepare_script_sha = sys.argv[6]
+dependency_inputs_sha = sys.argv[7]
+expected_torch = sys.argv[8]
+expected_torchvision = sys.argv[9]
+expected_torchaudio = sys.argv[10]
+expected_backend = sys.argv[11]
+expected_flash_attn = sys.argv[12]
 
 expected_build = f"{expected_torch}+{expected_backend}"
 if not torch.__version__.startswith(expected_build):
@@ -262,6 +288,8 @@ if not torchaudio.__version__.startswith(f"{expected_torchaudio}+{expected_backe
 value = {
     "schema": "rlinf.eos.python-runtime-manifest.v1",
     "runtime_spec_sha256": spec_sha,
+    "prepare_script_sha256": prepare_script_sha,
+    "rlinf_dependency_inputs_sha256": dependency_inputs_sha,
     "requirements_freeze_sha256": freeze_sha,
     "python": sys.version,
     "torch": torch.__version__,

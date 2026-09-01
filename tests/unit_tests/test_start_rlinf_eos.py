@@ -306,6 +306,11 @@ def test_prepare_runtime_reuses_only_matching_package_freeze(tmp_path: Path) -> 
             ["git", "-C", str(root), "config", "user.email", "w73@example.test"],
             check=True,
         )
+        if name == "source":
+            (root / "requirements").mkdir()
+            (root / "pyproject.toml").write_text("[project]\nname='fixture'\n")
+            (root / "requirements" / "fixture.txt").write_text("fixture\n")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
         subprocess.run(
             ["git", "-C", str(root), "commit", "-q", "--allow-empty", "-m", name],
             check=True,
@@ -331,9 +336,26 @@ def test_prepare_runtime_reuses_only_matching_package_freeze(tmp_path: Path) -> 
     fake_python.chmod(0o755)
     freeze = runtime / "requirements.freeze.txt"
     freeze.write_text("torch==fixture\n", encoding="utf-8")
+    script = ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh"
+    dependency_listing = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(tmp_path / "source"),
+            "ls-files",
+            "-s",
+            "--",
+            "pyproject.toml",
+            "requirements",
+        ]
+    )
     manifest = {
         "schema": "rlinf.eos.python-runtime-manifest.v1",
         "runtime_spec_sha256": _sha256(spec_path),
+        "prepare_script_sha256": _sha256(script),
+        "rlinf_dependency_inputs_sha256": hashlib.sha256(
+            dependency_listing
+        ).hexdigest(),
         "requirements_freeze_sha256": _sha256(freeze),
         "isaaclab_revision": revisions["isaaclab"],
         "gr00t_revision": revisions["gr00t"],
@@ -353,8 +375,6 @@ def test_prepare_runtime_reuses_only_matching_package_freeze(tmp_path: Path) -> 
             "W73_UV_CACHE": str(tmp_path / "uv-cache"),
         }
     )
-    script = ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh"
-
     reused = subprocess.run(
         ["bash", str(script)], check=False, capture_output=True, text=True, env=env
     )

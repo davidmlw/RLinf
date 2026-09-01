@@ -158,6 +158,26 @@ def _git_output(root: Path, *args: str) -> str:
     return completed.stdout.strip()
 
 
+def _git_dependency_inputs_sha256(root: Path) -> str:
+    listing = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "ls-files",
+            "-s",
+            "--",
+            "pyproject.toml",
+            "requirements",
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if listing.returncode != 0 or not listing.stdout:
+        raise WorkflowError(f"cannot inventory RLinf dependency inputs in {root}")
+    return hashlib.sha256(listing.stdout).hexdigest()
+
+
 def _verify_sha256(path: Path, expected: object, label: str) -> str:
     digest = _string(expected, f"{label}.sha256")
     if SHA256_RE.fullmatch(digest) is None:
@@ -1092,6 +1112,8 @@ def _run_agent(args: argparse.Namespace) -> int:
         {
             "schema",
             "runtime_spec_sha256",
+            "prepare_script_sha256",
+            "rlinf_dependency_inputs_sha256",
             "requirements_freeze_sha256",
             "python",
             "torch",
@@ -1112,6 +1134,17 @@ def _run_agent(args: argparse.Namespace) -> int:
         raise WorkflowError("RLinf runtime manifest schema mismatch")
     if runtime_manifest_value["runtime_spec_sha256"] != runtime["runtime_spec_sha256"]:
         raise WorkflowError("RLinf runtime manifest spec hash mismatch")
+    if (
+        runtime_manifest_value["prepare_script_sha256"]
+        != runtime["prepare_script_sha256"]
+    ):
+        raise WorkflowError("RLinf runtime manifest prepare-script hash mismatch")
+    dependency_inputs_sha = _git_dependency_inputs_sha256(Path(site["source"]["root"]))
+    if (
+        runtime_manifest_value["rlinf_dependency_inputs_sha256"]
+        != dependency_inputs_sha
+    ):
+        raise WorkflowError("RLinf runtime manifest dependency-input hash mismatch")
     freeze = Path(runtime["env_root"]) / "requirements.freeze.txt"
     if (
         not freeze.is_file()

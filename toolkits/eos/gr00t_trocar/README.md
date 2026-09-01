@@ -45,6 +45,12 @@ never started until those checks and the deterministic-seed focused test pass.
 The first smoke may spend time materializing the environment; subsequent jobs
 reuse it and report the same manifest.
 
+Dependency installation runs in a disposable detached Git worktree, not in the
+canonical EOS checkout used for training. The shared-runtime manifest pins the
+prepare-script hash and the Git blob inventory for `pyproject.toml` plus
+`requirements/`; tickets with unchanged dependency inputs can share the venv,
+while interrupted installation cannot leave the training checkout modified.
+
 IsaacLab installs its own qualified Torch while installing extensions. The
 runtime preparation therefore disables RLinf installer's intermediate
 FlashAttention build, restores the committed Torch/torchvision/torchaudio
