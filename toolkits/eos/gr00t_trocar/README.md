@@ -21,7 +21,9 @@ environment once at
 `rlinf-workspace/envs/gr00t-newton-py312-cu128-v1/`. The committed runtime spec,
 exact source revisions, package freeze and generated manifest identify it;
 later tickets can reuse it without rebuilding an image or reinstalling Python
-packages.
+packages. `uv` also keeps its managed Python distribution, including matching
+development headers, in the shared `rlinf-workspace/envs/.uv-python/` directory
+instead of relying on the thin image's system Python.
 
 EOS exposes H100 nodes as an exclusive node constraint, not a Slurm GRES.
 Submission therefore uses `--constraint=h100 --exclusive` without

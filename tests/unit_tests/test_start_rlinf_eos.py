@@ -369,6 +369,15 @@ def test_prepare_runtime_reuses_only_matching_package_freeze(tmp_path: Path) -> 
     assert "runtime package freeze hash mismatch" in rejected.stderr
 
 
+def test_prepare_runtime_requires_uv_managed_python() -> None:
+    script = (ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'UV_PYTHON_INSTALL_DIR="$runtime_parent/.uv-python"' in script
+    assert "UV_PYTHON_PREFERENCE=only-managed" in script
+
+
 def test_dry_run_does_not_call_sbatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

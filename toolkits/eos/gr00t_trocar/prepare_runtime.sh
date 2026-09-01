@@ -140,6 +140,8 @@ cleanup_partial() {
 trap cleanup_partial EXIT
 
 export UV_CACHE_DIR="$W73_UV_CACHE"
+export UV_PYTHON_INSTALL_DIR="$runtime_parent/.uv-python"
+export UV_PYTHON_PREFERENCE=only-managed
 export UV_TORCH_BACKEND="$(spec_value torch_backend)"
 export ISAAC_LAB_PATH="$W73_ISAACLAB_ROOT"
 export GR00T_PATH="$W73_GROOT_ROOT"
