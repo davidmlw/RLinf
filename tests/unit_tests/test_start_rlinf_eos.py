@@ -230,6 +230,7 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
             "runner_sha256": _sha256(runner),
             "output_root": str(tmp_path / "output"),
             "max_steps": 100000,
+            "val_check_interval": 5,
             "save_interval": 5,
             "workload_seconds": 13200,
             "shutdown_grace_seconds": 600,
@@ -298,6 +299,18 @@ def test_site_rejects_external_provenance_drift(tmp_path: Path) -> None:
     site_path.write_text(json.dumps(value), encoding="utf-8")
 
     with pytest.raises(MODULE.WorkflowError, match="SHA-256 mismatch"):
+        MODULE._load_site(site_path)
+
+
+def test_site_rejects_incompatible_save_and_evaluation_intervals(
+    tmp_path: Path,
+) -> None:
+    site_path = _site(tmp_path)
+    value = json.loads(site_path.read_text(encoding="utf-8"))
+    value["experiment"]["val_check_interval"] = 3
+    site_path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(MODULE.WorkflowError, match="must be divisible"):
         MODULE._load_site(site_path)
 
 
@@ -705,8 +718,12 @@ def test_materialize_smoke_has_bounded_workload(
     smoke = json.loads(output.read_text(encoding="utf-8"))
     assert smoke["experiment"]["name"] == "W73-test-smoke"
     assert smoke["experiment"]["max_steps"] == 1
+    assert smoke["experiment"]["val_check_interval"] == 1
     assert smoke["experiment"]["save_interval"] == 1
     assert smoke["experiment"]["workload_seconds"] == 5_400
+    assert MODULE._load_site(output)["_resolved"]["workload_contract"][
+        "eval_interval"
+    ] == 1
     assert smoke["runtime"]["runtime_spec_sha256"] == _sha256(
         Path(smoke["runtime"]["runtime_spec"])
     )

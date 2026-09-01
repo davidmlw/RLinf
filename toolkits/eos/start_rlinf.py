@@ -699,6 +699,7 @@ def _load_site(
             "runner_sha256",
             "output_root",
             "max_steps",
+            "val_check_interval",
             "save_interval",
             "workload_seconds",
             "shutdown_grace_seconds",
@@ -719,7 +720,18 @@ def _load_site(
         experiment["output_root"], "experiment.output_root"
     )
     _positive_int(experiment["max_steps"], "experiment.max_steps")
+    val_check_interval = _positive_int(
+        experiment["val_check_interval"], "experiment.val_check_interval"
+    )
     _positive_int(experiment["save_interval"], "experiment.save_interval")
+    if experiment["save_interval"] % val_check_interval != 0:
+        raise WorkflowError(
+            "experiment.save_interval must be divisible by "
+            "experiment.val_check_interval"
+        )
+    contract = dict(contract)
+    if validate_contract:
+        contract["eval_interval"] = val_check_interval
     workload_seconds = _positive_int(
         experiment["workload_seconds"], "experiment.workload_seconds"
     )
@@ -900,6 +912,7 @@ def _materialize(args: argparse.Namespace) -> int:
             "runner_sha256",
             "output_root",
             "max_steps",
+            "val_check_interval",
             "save_interval",
             "workload_seconds",
             "shutdown_grace_seconds",
@@ -930,6 +943,7 @@ def _materialize(args: argparse.Namespace) -> int:
             {
                 "name": f"{experiment['name']}-smoke",
                 "max_steps": 1,
+                "val_check_interval": 1,
                 "save_interval": 1,
                 "workload_seconds": 5_400,
             }
@@ -1426,6 +1440,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             ],
             "W73_PYTHON_DEPS": os.pathsep.join(runtime["python_deps"]),
             "W73_MAX_STEPS": str(experiment["max_steps"]),
+            "W73_VAL_CHECK_INTERVAL": str(experiment["val_check_interval"]),
             "W73_SAVE_INTERVAL": str(experiment["save_interval"]),
             "W73_DEADLINE_UNIX_S": str(deadline),
         }

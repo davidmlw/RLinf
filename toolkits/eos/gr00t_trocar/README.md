@@ -116,7 +116,9 @@ python3 toolkits/eos/start_rlinf.py submit \
 
 The smoke retains the four-hour scheduler upper bound but runs at most one
 outer step and enforces a 90-minute workload deadline, releasing the allocation
-as soon as the end-to-end gate completes.
+as soon as the end-to-end gate completes. It overrides both evaluation and
+checkpoint intervals to one so the smoke exercises those paths together; site
+validation rejects interval combinations that RLinf cannot schedule.
 
 The real submit command creates an immutable submission receipt. Slurm creates
 an attempt named `W73-before-<job-id>/`, and the allocation coordinator records

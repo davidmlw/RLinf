@@ -115,6 +115,7 @@
     "runner_sha256": "AUTO",
     "output_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W73",
     "max_steps": 100000,
+    "val_check_interval": 5,
     "save_interval": 5,
     "workload_seconds": 13200,
     "shutdown_grace_seconds": 600

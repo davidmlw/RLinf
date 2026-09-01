@@ -14,6 +14,7 @@ required=(
   W73_SANITIZED_TRAY_USD
   W73_HEALTHCARE_ASSETS_ARCHIVE
   W73_MAX_STEPS
+  W73_VAL_CHECK_INTERVAL
   W73_SAVE_INTERVAL
   W73_DEADLINE_UNIX_S
 )
@@ -113,6 +114,7 @@ cd "$W73_SOURCE_ROOT"
   --config-path "$config_dir" \
   --config-name "$config_name" \
   runner.max_epochs="$W73_MAX_STEPS" \
+  runner.val_check_interval="$W73_VAL_CHECK_INTERVAL" \
   runner.save_interval="$W73_SAVE_INTERVAL" \
   runner.logger.log_path="$W73_ATTEMPT_ROOT/output" \
   env.train.video_cfg.video_base_dir="$W73_ATTEMPT_ROOT/output/video/train" \
