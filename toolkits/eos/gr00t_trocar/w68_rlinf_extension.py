@@ -133,6 +133,48 @@ def _assert_magnitude(value: object, *, stage: str, limit: float) -> None:
     )
 
 
+def _max_abs(value: object) -> float | None:
+    """Return a scalar magnitude for low-rate diagnostic telemetry."""
+    if isinstance(value, np.ndarray):
+        if not np.issubdtype(value.dtype, np.floating) or value.size == 0:
+            return None
+        return float(np.abs(value).max())
+    if isinstance(value, torch.Tensor):
+        if not value.is_floating_point() or value.numel() == 0:
+            return None
+        return float(value.detach().abs().max().item())
+    return None
+
+
+def _update_env_peak(
+    env: object, *, kind: str, value: object, physical_step: int
+) -> None:
+    peak = _max_abs(value)
+    if peak is None:
+        return
+    value_attr = f"_rlinf_nonfinite_{kind}_max_abs"
+    if peak > getattr(env, value_attr, -1.0):
+        setattr(env, value_attr, peak)
+        setattr(env, f"_rlinf_nonfinite_{kind}_peak_step", physical_step)
+
+
+def _log_env_epoch_range(env: object) -> None:
+    reset_count = getattr(env, "_rlinf_nonfinite_reset_count", 0)
+    if reset_count == 0:
+        return
+    logger.warning(
+        "RLINF_ENV_RANGE reset=%d physical_steps=%d "
+        "action_max_abs=%s action_peak_step=%s "
+        "state_max_abs=%s state_peak_step=%s",
+        reset_count,
+        getattr(env, "_rlinf_nonfinite_physical_step", 0),
+        getattr(env, "_rlinf_nonfinite_action_max_abs", None),
+        getattr(env, "_rlinf_nonfinite_action_peak_step", None),
+        getattr(env, "_rlinf_nonfinite_state_max_abs", None),
+        getattr(env, "_rlinf_nonfinite_state_peak_step", None),
+    )
+
+
 def _assert_nested_finite(value: object, *, stage: str) -> None:
     if isinstance(value, Mapping):
         for key, child in value.items():
@@ -145,7 +187,7 @@ def _assert_nested_finite(value: object, *, stage: str) -> None:
 
 
 def _install_nonfinite_diagnostics() -> None:
-    """Instrument the rollout/value boundary for the W73 resume diagnostic."""
+    """Instrument rollout, value, and Env boundaries for W73 diagnostics."""
     try:
         from rlinf.models.embodiment.gr00t.gr00t_n1d5.gr00t_action_model import (
             FlowMatchingActionHeadForRLActionPrediction,
@@ -246,14 +288,20 @@ def _install_nonfinite_diagnostics() -> None:
     original_env_step = IsaaclabBaseEnv.step
 
     def checked_env_reset(self, *args, **kwargs):
+        _log_env_epoch_range(self)
         obs, infos = original_env_reset(self, *args, **kwargs)
         self._rlinf_nonfinite_reset_count = (
             getattr(self, "_rlinf_nonfinite_reset_count", 0) + 1
         )
         self._rlinf_nonfinite_physical_step = 0
+        self._rlinf_nonfinite_action_max_abs = -1.0
+        self._rlinf_nonfinite_action_peak_step = None
+        self._rlinf_nonfinite_state_max_abs = -1.0
+        self._rlinf_nonfinite_state_peak_step = None
         stage = f"env.reset.{self._rlinf_nonfinite_reset_count}.states"
         _assert_finite(obs.get("states"), stage=stage)
         _assert_magnitude(obs.get("states"), stage=stage, limit=100.0)
+        _update_env_peak(self, kind="state", value=obs.get("states"), physical_step=0)
         return obs, infos
 
     def checked_env_step(self, actions=None, *args, **kwargs):
@@ -263,13 +311,35 @@ def _install_nonfinite_diagnostics() -> None:
         action_stage = f"env.action.reset_{reset_count}.physical_{physical_step}"
         _assert_finite(actions, stage=action_stage)
         _assert_magnitude(actions, stage=action_stage, limit=100.0)
+        _update_env_peak(
+            self, kind="action", value=actions, physical_step=physical_step
+        )
         result = original_env_step(self, actions, *args, **kwargs)
         obs, rewards, terminations, truncations, _infos = result
         state_stage = (
             f"env.step.output.reset_{reset_count}.physical_{physical_step}.states"
         )
-        _assert_finite(obs.get("states"), stage=state_stage)
-        _assert_magnitude(obs.get("states"), stage=state_stage, limit=100.0)
+        try:
+            _assert_finite(obs.get("states"), stage=state_stage)
+            _assert_magnitude(obs.get("states"), stage=state_stage, limit=100.0)
+        except RuntimeError:
+            logger.error(
+                "RLINF_ENV_CONTEXT reset=%d physical_step=%d "
+                "current_action_max_abs=%s epoch_action_max_abs=%s "
+                "epoch_action_peak_step=%s",
+                reset_count,
+                physical_step,
+                _max_abs(actions),
+                getattr(self, "_rlinf_nonfinite_action_max_abs", None),
+                getattr(self, "_rlinf_nonfinite_action_peak_step", None),
+            )
+            raise
+        _update_env_peak(
+            self,
+            kind="state",
+            value=obs.get("states"),
+            physical_step=physical_step,
+        )
         _assert_finite(rewards, stage=f"{state_stage}.rewards")
         _assert_finite(terminations, stage=f"{state_stage}.terminations")
         _assert_finite(truncations, stage=f"{state_stage}.truncations")
