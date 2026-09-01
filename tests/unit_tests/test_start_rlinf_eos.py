@@ -45,6 +45,8 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
         tmp_path / "torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl"
     )
     torchcodec_wheel.write_bytes(b"torchcodec-wheel")
+    healthcare_assets_archive = tmp_path / "w68-healthcare-assets.tar"
+    healthcare_assets_archive.write_bytes(b"healthcare-assets")
     runtime_python_target = Path(sys.executable).resolve(strict=True)
     for name in (
         "isaaclab",
@@ -185,6 +187,11 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
                     "path": str(torchcodec_wheel),
                     "sha256": _sha256(torchcodec_wheel),
                 },
+                {
+                    "name": "w68-healthcare-assets",
+                    "path": str(healthcare_assets_archive),
+                    "sha256": _sha256(healthcare_assets_archive),
+                },
             ],
         },
         "runtime": {
@@ -203,6 +210,10 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
             "flash_attn_wheel_sha256": _sha256(flash_attn_wheel),
             "torchcodec_wheel": str(torchcodec_wheel),
             "torchcodec_wheel_sha256": _sha256(torchcodec_wheel),
+            "healthcare_assets_archive": str(healthcare_assets_archive),
+            "healthcare_assets_archive_sha256": _sha256(
+                healthcare_assets_archive
+            ),
             "isaaclab_root": str(tmp_path / "isaaclab"),
             "gr00t_root": str(tmp_path / "gr00t"),
             "model_root": str(tmp_path / "model"),
@@ -516,6 +527,20 @@ def test_eos_template_pins_newton_tray_textures() -> None:
     assert files["trocar-tray-box-orm-texture"]["sha256"] == (
         "688701d0450d5f913134f978793d0c3e4423cc7c81d0397aec295a19dfe18bd3"
     )
+    assert files["w68-healthcare-assets"]["sha256"] == (
+        "9289b4e37b64a4fbe86f1a030393179dbcb2215f283a5411ca46529f5fe8bf13"
+    )
+
+
+def test_runner_stages_healthcare_assets_before_training() -> None:
+    runner = (
+        ROOT / "toolkits/eos/gr00t_trocar/run_baseline.sh"
+    ).read_text(encoding="utf-8")
+
+    extract = 'tar -xf "$W73_HEALTHCARE_ASSETS_ARCHIVE" -C "$short_tmp"'
+    launch = '"$W73_RUNTIME_PYTHON" examples/embodiment/train_embodied_agent.py'
+    assert extract in runner
+    assert runner.index(extract) < runner.index(launch)
 
 
 def test_prepare_runtime_build_isolated_from_canonical_source(tmp_path: Path) -> None:

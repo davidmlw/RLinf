@@ -516,6 +516,8 @@ def _load_site(
             "flash_attn_wheel_sha256",
             "torchcodec_wheel",
             "torchcodec_wheel_sha256",
+            "healthcare_assets_archive",
+            "healthcare_assets_archive_sha256",
             "isaaclab_root",
             "gr00t_root",
             "model_root",
@@ -558,6 +560,15 @@ def _load_site(
         torchcodec_wheel,
         runtime["torchcodec_wheel_sha256"],
         "runtime.torchcodec_wheel",
+    )
+    healthcare_assets_archive = _absolute_file(
+        runtime["healthcare_assets_archive"],
+        "runtime.healthcare_assets_archive",
+    )
+    _verify_sha256(
+        healthcare_assets_archive,
+        runtime["healthcare_assets_archive_sha256"],
+        "runtime.healthcare_assets_archive",
     )
     try:
         runtime_spec_value = json.loads(runtime_spec.read_text(encoding="utf-8"))
@@ -1410,6 +1421,9 @@ def _run_agent(args: argparse.Namespace) -> int:
             "W73_HF_CACHE": runtime["hf_cache"],
             "W73_TASK_OVERLAY_ROOT": runtime["task_overlay_root"],
             "W73_SANITIZED_TRAY_USD": runtime["sanitized_tray_usd"],
+            "W73_HEALTHCARE_ASSETS_ARCHIVE": runtime[
+                "healthcare_assets_archive"
+            ],
             "W73_PYTHON_DEPS": os.pathsep.join(runtime["python_deps"]),
             "W73_MAX_STEPS": str(experiment["max_steps"]),
             "W73_SAVE_INTERVAL": str(experiment["save_interval"]),

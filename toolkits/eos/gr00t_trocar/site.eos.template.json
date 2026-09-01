@@ -77,6 +77,11 @@
         "name": "torchcodec-cpu-wheel",
         "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl",
         "sha256": "6c26e90e7aa982302644d0af8cb706318682bb390f48a80ecbfeab03499acd04"
+      },
+      {
+        "name": "w68-healthcare-assets",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/assets/w68-healthcare-assets.tar",
+        "sha256": "9289b4e37b64a4fbe86f1a030393179dbcb2215f283a5411ca46529f5fe8bf13"
       }
     ]
   },
@@ -92,6 +97,8 @@
     "flash_attn_wheel_sha256": "79e0732cb5d988a96777af7ec63a5af91b557ce8fd1593d6d851f4dd9c42411e",
     "torchcodec_wheel": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl",
     "torchcodec_wheel_sha256": "6c26e90e7aa982302644d0af8cb706318682bb390f48a80ecbfeab03499acd04",
+    "healthcare_assets_archive": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/assets/w68-healthcare-assets.tar",
+    "healthcare_assets_archive_sha256": "9289b4e37b64a4fbe86f1a030393179dbcb2215f283a5411ca46529f5fe8bf13",
     "isaaclab_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/IsaacLab",
     "gr00t_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T",
     "model_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/models/Assemble_Trocar",

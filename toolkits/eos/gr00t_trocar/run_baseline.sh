@@ -12,6 +12,7 @@ required=(
   W73_HF_CACHE
   W73_TASK_OVERLAY_ROOT
   W73_SANITIZED_TRAY_USD
+  W73_HEALTHCARE_ASSETS_ARCHIVE
   W73_MAX_STEPS
   W73_SAVE_INTERVAL
   W73_DEADLINE_UNIX_S
@@ -31,6 +32,7 @@ test -d "$W73_GROOT_ROOT"
 test -d "$W73_MODEL_ROOT"
 test -d "$W73_TASK_OVERLAY_ROOT"
 test -f "$W73_SANITIZED_TRAY_USD"
+test -f "$W73_HEALTHCARE_ASSETS_ARCHIVE"
 
 mkdir -p \
   "$W73_ATTEMPT_ROOT/output" \
@@ -54,6 +56,12 @@ cleanup() {
   exit "$rc"
 }
 trap cleanup EXIT
+
+tar -xf "$W73_HEALTHCARE_ASSETS_ARCHIVE" -C "$short_tmp"
+test -f \
+  "$short_tmp/Assets/Isaac/Healthcare/0.5.0/132c82d/Robots/UnitreeG1/g1_29dof_with_dex3_base_fix/g1_29dof_with_dex3_base_fix.usd"
+test -f \
+  "$short_tmp/Assets/Isaac/Healthcare/0.5.0/132c82d/Props/LightWheel/Assets/DisposableLaparoscopicPunctureDevice001/DisposableLaparoscopicPunctureDevice005-xform.usd"
 
 python_paths=(
   "$W73_GROOT_ROOT"

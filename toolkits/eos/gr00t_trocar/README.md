@@ -46,6 +46,13 @@ to the USD. The three `T_Box001_{BC,N,ORM}001.png` files therefore live under
 individual hashes are submission gates; omitting them changes neither the USD
 nor the task, but makes renderer initialization fail.
 
+The remaining 26-file, 117 MiB Healthcare dependency tree is frozen in
+`inputs/assets/w68-healthcare-assets.tar` with SHA-256
+`9289b4e37b64a4fbe86f1a030393179dbcb2215f283a5411ca46529f5fe8bf13`.
+The runner extracts it into the job-local short `TMPDIR` before Ray starts.
+This preserves W68's qualified inputs and prevents Env ranks from racing while
+populating IsaacLab's on-demand asset cache.
+
 At allocation start the launcher creates or verifies the shared runtime before
 probing its interpreter, Torch, CUDA, FlashAttention, IsaacLab and Ray. Ray is
 never started until those checks and the deterministic-seed focused test pass.
