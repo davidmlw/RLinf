@@ -150,7 +150,9 @@ def test_site_freezes_canonical_chunk16_contract(tmp_path: Path) -> None:
     }
     command = MODULE._submission_argv(site)
     assert "--time=04:00:00" in command
-    assert "--gpus-per-node=8" in command
+    assert "--gpus-per-node=8" not in command
+    assert "--constraint=h100" in command
+    assert "--exclusive" in command
     assert "--signal=B:TERM@600" in command
 
 

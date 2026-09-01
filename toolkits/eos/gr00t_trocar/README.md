@@ -15,6 +15,11 @@ registry digest: sha256:aab301569e09f60e143ddcb7749b2610fe522503edcdc8538efbb4a4
 squashfs sha256: 64bbd7bda0f8d65d298073377a3e2331e91a75c49d459893ae5b3096410b022c
 ```
 
+EOS exposes H100 nodes as an exclusive node constraint, not a Slurm GRES.
+Submission therefore uses `--constraint=h100 --exclusive` without
+`--gpus-per-node`; the in-container preflight fails closed unless exactly eight
+GPUs are visible.
+
 The image alone is not the complete runtime. The v2 site manifest pins the OCI
 reference and registry digest, local squashfs hash, RLinf/Poiesis/Isaac-GR00T/
 IsaacLab revisions, model and Python-dependency manifests, sanitized USD and
