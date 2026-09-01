@@ -24,8 +24,9 @@ The image alone is not the complete runtime. The v2 site manifest pins the OCI
 reference and registry digest, local squashfs hash, RLinf/Poiesis/Isaac-GR00T/
 IsaacLab revisions, model and Python-dependency manifests, sanitized USD and
 task overlay. Git inputs must have clean tracked content and submodules at their
-exact revisions; untracked environments produced from the pinned lock files are
-allowed. File inputs must match their SHA-256 before submission. Large
+exact revisions; untracked environments and submodule build products produced
+from the pinned lock files are allowed. File inputs must match their SHA-256
+before submission. Large
 immutable inputs live below the persistent EOS workspace `inputs/`; experiment
 outputs live below `runs/W73/`.
 

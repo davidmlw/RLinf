@@ -193,7 +193,7 @@ def _validate_provenance(value: object) -> dict[str, object]:
             "status",
             "--short",
             "--untracked-files=no",
-            "--ignore-submodules=none",
+            "--ignore-submodules=untracked",
         ):
             raise WorkflowError(
                 f"provenance Git tracked content is not clean: {root}"
