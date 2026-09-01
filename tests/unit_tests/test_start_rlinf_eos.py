@@ -209,3 +209,29 @@ def test_dry_run_does_not_call_sbatch(
     args = argparse.Namespace(site=str(site_path), dry_run=True, skip_image_hash=False)
     assert MODULE._submit(args) == 0
     assert json.loads(capsys.readouterr().out)["status"] == "dry_run"
+
+
+def test_materialize_smoke_has_bounded_workload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site_path = _site(tmp_path)
+    template = tmp_path / "template.json"
+    value = json.loads(site_path.read_text(encoding="utf-8"))
+    value["source"]["revision"] = "AUTO"
+    value["experiment"]["config_sha256"] = "AUTO"
+    value["experiment"]["runner_sha256"] = "AUTO"
+    template.write_text(json.dumps(value), encoding="utf-8")
+    output = tmp_path / "smoke.json"
+    args = argparse.Namespace(
+        template=str(template),
+        output=str(output),
+        skip_image_hash=False,
+        smoke=True,
+    )
+
+    assert MODULE._materialize(args) == 0
+    smoke = json.loads(output.read_text(encoding="utf-8"))
+    assert smoke["experiment"]["name"] == "W73-test-smoke"
+    assert smoke["experiment"]["max_steps"] == 1
+    assert smoke["experiment"]["save_interval"] == 1
+    assert smoke["experiment"]["workload_seconds"] == 5_400

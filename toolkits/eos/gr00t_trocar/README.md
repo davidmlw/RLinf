@@ -50,6 +50,23 @@ python3 toolkits/eos/start_rlinf.py submit \
   --site /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W73/site.json
 ```
 
+Before the convergence attempt, materialize and submit a one-step smoke through
+the exact same lifecycle:
+
+```bash
+python3 toolkits/eos/start_rlinf.py materialize \
+  --template toolkits/eos/gr00t_trocar/site.eos.template.json \
+  --output /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W73/site-smoke.json \
+  --smoke
+
+python3 toolkits/eos/start_rlinf.py submit \
+  --site /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W73/site-smoke.json
+```
+
+The smoke retains the four-hour scheduler upper bound but runs at most one
+outer step and enforces a 90-minute workload deadline, releasing the allocation
+as soon as the end-to-end gate completes.
+
 The real submit command creates an immutable submission receipt. Slurm creates
 an attempt named `W73-before-<job-id>/`, and the allocation coordinator records
 the exact site, source, image, command, node, deadline and cleanup result.

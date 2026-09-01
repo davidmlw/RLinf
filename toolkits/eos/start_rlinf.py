@@ -685,6 +685,15 @@ def _materialize(args: argparse.Namespace) -> int:
     runner = _absolute_file(experiment["runner"], "experiment.runner")
     experiment["config_sha256"] = _sha256_file(config)
     experiment["runner_sha256"] = _sha256_file(runner)
+    if args.smoke:
+        experiment.update(
+            {
+                "name": f"{experiment['name']}-smoke",
+                "max_steps": 1,
+                "save_interval": 1,
+                "workload_seconds": 5_400,
+            }
+        )
     output = Path(args.output)
     if not output.is_absolute():
         raise WorkflowError("materialized site output must be absolute")
@@ -1000,6 +1009,11 @@ def _parser() -> argparse.ArgumentParser:
     materialize.add_argument("--template", required=True)
     materialize.add_argument("--output", required=True)
     materialize.add_argument("--skip-image-hash", action="store_true")
+    materialize.add_argument(
+        "--smoke",
+        action="store_true",
+        help="limit the materialized attempt to one step and 90 minutes",
+    )
     materialize.set_defaults(handler=_materialize)
 
     submit = commands.add_parser("submit")

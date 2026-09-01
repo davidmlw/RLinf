@@ -1,5 +1,5 @@
 {
-  "schema": "rlinf.eos.site.v1",
+  "schema": "rlinf.eos.site.v2",
   "slurm": {
     "account": "coreai_devtech_all",
     "partition": "batch",
