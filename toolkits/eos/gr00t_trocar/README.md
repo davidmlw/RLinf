@@ -18,7 +18,7 @@ under the RLinf-owned GitLab reference
 CUDA compatibility libraries, system dependencies and `uv`, but no experiment
 Python environment. `prepare_runtime.sh` materializes the RLinf-owned shared
 environment once at
-`rlinf-workspace/envs/gr00t-newton-py312-cu128-v4/`. The committed runtime spec,
+`rlinf-workspace/envs/gr00t-newton-py312-cu128-v5/`. The committed runtime spec,
 exact source revisions, package freeze and generated manifest identify it;
 later tickets can reuse it without rebuilding an image or reinstalling Python
 packages. `uv` also keeps its managed Python distribution, including matching
@@ -30,7 +30,7 @@ Submission therefore uses `--constraint=h100 --exclusive` without
 `--gpus-per-node`; the in-container preflight fails closed unless exactly eight
 GPUs are visible.
 
-The v4 site manifest pins the OCI reference and registry digest, local squashfs
+The v5 site manifest pins the OCI reference and registry digest, local squashfs
 hash, RLinf/Isaac-GR00T/IsaacLab revisions, runtime spec and prepare-script
 hashes, model manifest, sanitized USD and task overlay. No Poiesis-owned
 checkout, lock file, Python environment or prepare command is part of the
@@ -55,7 +55,7 @@ IsaacLab installs its own qualified Torch, Hydra and NumPy versions while
 installing extensions. Runtime preparation therefore disables RLinf's
 intermediate FlashAttention build, restores the committed Torch cu128 trio,
 pins `hydra-core==1.3.2`, `numpy==1.26.0`, and the PyTorch 2.11-compatible
-CPU wheel `torchcodec==0.11.1`, then installs an immutable
+CPU build `torchcodec==0.11.1+cpu`, then installs the immutable 0.11.1 wheel and
 FlashAttention 2.8.3 CPython 3.12 wheel built for H100 SM90 against the final
 Torch 2.11/cu128 ABI. Both wheel paths and SHA-256 values are part of the site,
 runtime spec and generated manifest. This removes the roughly 41-minute source

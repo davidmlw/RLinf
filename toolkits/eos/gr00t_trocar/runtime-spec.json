@@ -9,7 +9,7 @@
   "flash_attn_version": "2.8.3",
   "flash_attn_wheel_filename": "flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl",
   "flash_attn_wheel_sha256": "79e0732cb5d988a96777af7ec63a5af91b557ce8fd1593d6d851f4dd9c42411e",
-  "torchcodec_version": "0.11.1",
+  "torchcodec_version": "0.11.1+cpu",
   "torchcodec_backend": "cpu",
   "torchcodec_wheel_filename": "torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl",
   "torchcodec_wheel_sha256": "6c26e90e7aa982302644d0af8cb706318682bb390f48a80ecbfeab03499acd04",

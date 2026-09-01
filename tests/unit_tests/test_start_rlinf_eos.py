@@ -482,7 +482,7 @@ def test_runtime_contract_pins_torchcodec_for_torch_211() -> None:
     launcher = LAUNCHER.read_text(encoding="utf-8")
 
     assert spec["torch_version"] == "2.11.0"
-    assert spec["torchcodec_version"] == "0.11.1"
+    assert spec["torchcodec_version"] == "0.11.1+cpu"
     assert spec["torchcodec_backend"] == "cpu"
     assert (
         spec["torchcodec_wheel_filename"]
