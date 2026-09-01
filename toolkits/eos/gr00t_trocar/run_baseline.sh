@@ -131,6 +131,7 @@ overrides=(
 if [[ -n "$W73_RESUME_DIR" ]]; then
   overrides+=(runner.resume_dir="$W73_RESUME_DIR")
 fi
+printf 'W73_NEWTON_NUM_SUBSTEPS=%s\n' "$W73_NEWTON_NUM_SUBSTEPS"
 cd "$W73_SOURCE_ROOT"
 "$W73_RUNTIME_PYTHON" examples/embodiment/train_embodied_agent.py \
   --config-path "$config_dir" \
