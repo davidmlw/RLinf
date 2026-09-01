@@ -18,16 +18,17 @@ squashfs sha256: 64bbd7bda0f8d65d298073377a3e2331e91a75c49d459893ae5b3096410b022
 The image alone is not the complete runtime. The v2 site manifest pins the OCI
 reference and registry digest, local squashfs hash, RLinf/Poiesis/Isaac-GR00T/
 IsaacLab revisions, model and Python-dependency manifests, sanitized USD and
-task overlay. Git inputs must be clean at their exact revisions and file inputs
-must match their SHA-256 before submission. Large immutable inputs live below
-the persistent EOS workspace `inputs/`; experiment outputs live below
-`runs/W73/`.
+task overlay. Git inputs must have clean tracked content and submodules at their
+exact revisions; untracked environments produced from the pinned lock files are
+allowed. File inputs must match their SHA-256 before submission. Large
+immutable inputs live below the persistent EOS workspace `inputs/`; experiment
+outputs live below `runs/W73/`.
 
 The image is intentionally system-only. At allocation start the launcher runs
 the image-owned `poiesis-w63-prepare` against the pinned Poiesis lock files and
 stores its environment receipts under `build/poiesis-w71/`. Preparation is
 serialized and reusable; Ray is never started until the prepared interpreter
-exists and is executable.
+exists, is executable, and passes the deterministic-seed focused test.
 
 ## Commands
 

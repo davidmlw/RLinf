@@ -181,9 +181,15 @@ def _validate_provenance(value: object) -> dict[str, object]:
         if not isinstance(checkout["require_clean"], bool):
             raise WorkflowError(f"{label}.require_clean must be boolean")
         if checkout["require_clean"] and _git_output(
-            root, "status", "--short", "--ignore-submodules=none"
+            root,
+            "status",
+            "--short",
+            "--untracked-files=no",
+            "--ignore-submodules=none",
         ):
-            raise WorkflowError(f"provenance Git checkout is not clean: {root}")
+            raise WorkflowError(
+                f"provenance Git tracked content is not clean: {root}"
+            )
         git_names.add(name)
         git_roots.add(root)
         resolved_git.append(
@@ -913,6 +919,22 @@ def _run_agent(args: argparse.Namespace) -> int:
     if not os.access(python_path, os.X_OK):
         raise WorkflowError("runtime.python is not executable after preparation")
     python = str(python_path)
+    seed_test = _run_command(
+        [
+            python,
+            "-m",
+            "pytest",
+            "-q",
+            str(
+                Path(site["source"]["root"])
+                / "tests/unit_tests/test_convergence_seed.py"
+            ),
+        ],
+        output=attempt / "logs" / "seed-test.out",
+        error=attempt / "logs" / "seed-test.err",
+    )
+    if seed_test != 0:
+        raise WorkflowError("deterministic seed preflight failed")
     _ray_stop(python, attempt, "prestop")
     node_ip = socket.gethostbyname(hostname)
     ray_start = _run_command(
