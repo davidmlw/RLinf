@@ -57,12 +57,17 @@
         "name": "flash-attn-h100-wheel",
         "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl",
         "sha256": "79e0732cb5d988a96777af7ec63a5af91b557ce8fd1593d6d851f4dd9c42411e"
+      },
+      {
+        "name": "torchcodec-cpu-wheel",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl",
+        "sha256": "6c26e90e7aa982302644d0af8cb706318682bb390f48a80ecbfeab03499acd04"
       }
     ]
   },
   "runtime": {
-    "python": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v3/bin/python",
-    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v3",
+    "python": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v4/bin/python",
+    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-newton-py312-cu128-v4",
     "runtime_spec": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/runtime-spec.json",
     "runtime_spec_sha256": "AUTO",
     "prepare_script": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/prepare_runtime.sh",
@@ -70,6 +75,8 @@
     "uv_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/cache/uv",
     "flash_attn_wheel": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl",
     "flash_attn_wheel_sha256": "79e0732cb5d988a96777af7ec63a5af91b557ce8fd1593d6d851f4dd9c42411e",
+    "torchcodec_wheel": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl",
+    "torchcodec_wheel_sha256": "6c26e90e7aa982302644d0af8cb706318682bb390f48a80ecbfeab03499acd04",
     "isaaclab_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/IsaacLab",
     "gr00t_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T",
     "model_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/models/Assemble_Trocar",

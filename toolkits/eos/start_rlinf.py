@@ -514,6 +514,8 @@ def _load_site(
             "uv_cache",
             "flash_attn_wheel",
             "flash_attn_wheel_sha256",
+            "torchcodec_wheel",
+            "torchcodec_wheel_sha256",
             "isaaclab_root",
             "gr00t_root",
             "model_root",
@@ -549,6 +551,14 @@ def _load_site(
         runtime["flash_attn_wheel_sha256"],
         "runtime.flash_attn_wheel",
     )
+    torchcodec_wheel = _absolute_file(
+        runtime["torchcodec_wheel"], "runtime.torchcodec_wheel"
+    )
+    _verify_sha256(
+        torchcodec_wheel,
+        runtime["torchcodec_wheel_sha256"],
+        "runtime.torchcodec_wheel",
+    )
     try:
         runtime_spec_value = json.loads(runtime_spec.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
@@ -567,6 +577,9 @@ def _load_site(
             "flash_attn_wheel_filename",
             "flash_attn_wheel_sha256",
             "torchcodec_version",
+            "torchcodec_backend",
+            "torchcodec_wheel_filename",
+            "torchcodec_wheel_sha256",
             "hydra_core_version",
             "numpy_version",
             "isaaclab_revision",
@@ -601,6 +614,9 @@ def _load_site(
         "flash_attn_wheel_filename",
         "flash_attn_wheel_sha256",
         "torchcodec_version",
+        "torchcodec_backend",
+        "torchcodec_wheel_filename",
+        "torchcodec_wheel_sha256",
         "hydra_core_version",
         "numpy_version",
         "installer",
@@ -615,6 +631,15 @@ def _load_site(
         raise WorkflowError("runtime spec and FlashAttention wheel hash disagree")
     if runtime_spec_value["installer"] != "requirements/install.sh":
         raise WorkflowError("runtime spec uses an unsupported installer")
+    if runtime_spec_value["torchcodec_backend"] != "cpu":
+        raise WorkflowError("runtime spec uses an unsupported TorchCodec backend")
+    if torchcodec_wheel.name != runtime_spec_value["torchcodec_wheel_filename"]:
+        raise WorkflowError("runtime spec and TorchCodec wheel filename disagree")
+    if (
+        runtime["torchcodec_wheel_sha256"]
+        != runtime_spec_value["torchcodec_wheel_sha256"]
+    ):
+        raise WorkflowError("runtime spec and TorchCodec wheel hash disagree")
     expected_installer_arguments = [
         "--no-root",
         "--platform",
@@ -1164,6 +1189,10 @@ def _run_agent(args: argparse.Namespace) -> int:
             "W73_UV_CACHE": runtime["uv_cache"],
             "W73_FLASH_ATTN_WHEEL": runtime["flash_attn_wheel"],
             "W73_FLASH_ATTN_WHEEL_SHA256": runtime["flash_attn_wheel_sha256"],
+            "W73_TORCHCODEC_WHEEL": runtime["torchcodec_wheel"],
+            "W73_TORCHCODEC_WHEEL_SHA256": runtime[
+                "torchcodec_wheel_sha256"
+            ],
         }
     )
     remaining = max(1, deadline - int(time.time()))
@@ -1204,6 +1233,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             "flash_attn",
             "flash_attn_wheel_sha256",
             "torchcodec",
+            "torchcodec_wheel_sha256",
             "hydra_core",
             "numpy",
             "ray",
@@ -1250,6 +1280,11 @@ def _run_agent(args: argparse.Namespace) -> int:
         != runtime["flash_attn_wheel_sha256"]
     ):
         raise WorkflowError("RLinf runtime manifest FlashAttention wheel hash mismatch")
+    if (
+        runtime_manifest_value["torchcodec_wheel_sha256"]
+        != runtime["torchcodec_wheel_sha256"]
+    ):
+        raise WorkflowError("RLinf runtime manifest TorchCodec wheel hash mismatch")
     expected_packages = {
         "flash_attn": runtime_spec_value["flash_attn_version"],
         "torchcodec": runtime_spec_value["torchcodec_version"],

@@ -41,6 +41,10 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
     image.write_bytes(b"image")
     flash_attn_wheel = tmp_path / "flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl"
     flash_attn_wheel.write_bytes(b"wheel")
+    torchcodec_wheel = (
+        tmp_path / "torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl"
+    )
+    torchcodec_wheel.write_bytes(b"torchcodec-wheel")
     runtime_python_target = Path(sys.executable).resolve(strict=True)
     for name in (
         "isaaclab",
@@ -89,6 +93,7 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
             "isaaclab_revision": dependency_revisions["isaaclab"],
             "gr00t_revision": dependency_revisions["gr00t"],
             "flash_attn_wheel_sha256": _sha256(flash_attn_wheel),
+            "torchcodec_wheel_sha256": _sha256(torchcodec_wheel),
         }
     )
     runtime_spec.write_text(
@@ -175,6 +180,11 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
                     "path": str(flash_attn_wheel),
                     "sha256": _sha256(flash_attn_wheel),
                 },
+                {
+                    "name": "torchcodec-cpu-wheel",
+                    "path": str(torchcodec_wheel),
+                    "sha256": _sha256(torchcodec_wheel),
+                },
             ],
         },
         "runtime": {
@@ -191,6 +201,8 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
             "uv_cache": str(tmp_path / "uv-cache"),
             "flash_attn_wheel": str(flash_attn_wheel),
             "flash_attn_wheel_sha256": _sha256(flash_attn_wheel),
+            "torchcodec_wheel": str(torchcodec_wheel),
+            "torchcodec_wheel_sha256": _sha256(torchcodec_wheel),
             "isaaclab_root": str(tmp_path / "isaaclab"),
             "gr00t_root": str(tmp_path / "gr00t"),
             "model_root": str(tmp_path / "model"),
@@ -363,6 +375,10 @@ def test_prepare_runtime_reuses_only_matching_package_freeze(tmp_path: Path) -> 
 
     flash_attn_wheel = tmp_path / "flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl"
     flash_attn_wheel.write_bytes(b"wheel")
+    torchcodec_wheel = (
+        tmp_path / "torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl"
+    )
+    torchcodec_wheel.write_bytes(b"torchcodec-wheel")
     spec = json.loads(
         (ROOT / "toolkits/eos/gr00t_trocar/runtime-spec.json").read_text(
             encoding="utf-8"
@@ -371,6 +387,7 @@ def test_prepare_runtime_reuses_only_matching_package_freeze(tmp_path: Path) -> 
     spec["isaaclab_revision"] = revisions["isaaclab"]
     spec["gr00t_revision"] = revisions["gr00t"]
     spec["flash_attn_wheel_sha256"] = _sha256(flash_attn_wheel)
+    spec["torchcodec_wheel_sha256"] = _sha256(torchcodec_wheel)
     spec_path = tmp_path / "runtime-spec.json"
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
 
@@ -405,6 +422,7 @@ def test_prepare_runtime_reuses_only_matching_package_freeze(tmp_path: Path) -> 
         "isaaclab_revision": revisions["isaaclab"],
         "gr00t_revision": revisions["gr00t"],
         "flash_attn_wheel_sha256": _sha256(flash_attn_wheel),
+        "torchcodec_wheel_sha256": _sha256(torchcodec_wheel),
     }
     (runtime / "rlinf-runtime-manifest.json").write_text(
         json.dumps(manifest), encoding="utf-8"
@@ -421,6 +439,8 @@ def test_prepare_runtime_reuses_only_matching_package_freeze(tmp_path: Path) -> 
             "W73_UV_CACHE": str(tmp_path / "uv-cache"),
             "W73_FLASH_ATTN_WHEEL": str(flash_attn_wheel),
             "W73_FLASH_ATTN_WHEEL_SHA256": _sha256(flash_attn_wheel),
+            "W73_TORCHCODEC_WHEEL": str(torchcodec_wheel),
+            "W73_TORCHCODEC_WHEEL_SHA256": _sha256(torchcodec_wheel),
         }
     )
     reused = subprocess.run(
@@ -448,7 +468,8 @@ def test_prepare_runtime_requires_uv_managed_python() -> None:
         'cd "$runtime_parent"\n'
         'git -C "$W73_SOURCE_ROOT" worktree remove --force "$build_source"' in script
     )
-    assert '"torchcodec==$(spec_value torchcodec_version)"' in script
+    assert '"$W73_TORCHCODEC_WHEEL"' in script
+    assert "--no-deps" in script
     assert "from torchcodec.decoders import VideoDecoder" in script
 
 
@@ -462,6 +483,14 @@ def test_runtime_contract_pins_torchcodec_for_torch_211() -> None:
 
     assert spec["torch_version"] == "2.11.0"
     assert spec["torchcodec_version"] == "0.11.1"
+    assert spec["torchcodec_backend"] == "cpu"
+    assert (
+        spec["torchcodec_wheel_filename"]
+        == "torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl"
+    )
+    assert spec["torchcodec_wheel_sha256"] == (
+        "6c26e90e7aa982302644d0af8cb706318682bb390f48a80ecbfeab03499acd04"
+    )
     assert "from torchcodec.decoders import VideoDecoder" in launcher
 
 
@@ -507,6 +536,10 @@ def test_prepare_runtime_build_isolated_from_canonical_source(tmp_path: Path) ->
 
     flash_attn_wheel = tmp_path / "flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl"
     flash_attn_wheel.write_bytes(b"wheel")
+    torchcodec_wheel = (
+        tmp_path / "torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl"
+    )
+    torchcodec_wheel.write_bytes(b"torchcodec-wheel")
     spec = json.loads(
         (ROOT / "toolkits/eos/gr00t_trocar/runtime-spec.json").read_text(
             encoding="utf-8"
@@ -515,6 +548,7 @@ def test_prepare_runtime_build_isolated_from_canonical_source(tmp_path: Path) ->
     spec["isaaclab_revision"] = revisions["isaaclab"]
     spec["gr00t_revision"] = revisions["gr00t"]
     spec["flash_attn_wheel_sha256"] = _sha256(flash_attn_wheel)
+    spec["torchcodec_wheel_sha256"] = _sha256(torchcodec_wheel)
     spec_path = tmp_path / "runtime-spec.json"
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
 
@@ -552,6 +586,8 @@ def test_prepare_runtime_build_isolated_from_canonical_source(tmp_path: Path) ->
             "W73_UV_CACHE": str(tmp_path / "uv-cache"),
             "W73_FLASH_ATTN_WHEEL": str(flash_attn_wheel),
             "W73_FLASH_ATTN_WHEEL_SHA256": _sha256(flash_attn_wheel),
+            "W73_TORCHCODEC_WHEEL": str(torchcodec_wheel),
+            "W73_TORCHCODEC_WHEEL_SHA256": _sha256(torchcodec_wheel),
         }
     )
     script = ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh"

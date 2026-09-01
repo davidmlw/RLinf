@@ -11,6 +11,8 @@ required=(
   W73_UV_CACHE
   W73_FLASH_ATTN_WHEEL
   W73_FLASH_ATTN_WHEEL_SHA256
+  W73_TORCHCODEC_WHEEL
+  W73_TORCHCODEC_WHEEL_SHA256
 )
 for name in "${required[@]}"; do
   if [[ -z "${!name:-}" ]]; then
@@ -46,6 +48,10 @@ if [[ "$(spec_value schema)" != "rlinf.eos.python-runtime.v1" ]]; then
   printf 'unsupported runtime spec schema\n' >&2
   exit 2
 fi
+if [[ "$(spec_value torchcodec_backend)" != "cpu" ]]; then
+  printf 'unsupported TorchCodec backend\n' >&2
+  exit 2
+fi
 if [[ ! -f "$W73_FLASH_ATTN_WHEEL" ]]; then
   printf 'FlashAttention wheel is missing: %s\n' "$W73_FLASH_ATTN_WHEEL" >&2
   exit 2
@@ -62,6 +68,24 @@ if [[ "$(basename "$W73_FLASH_ATTN_WHEEL")" != "$(spec_value flash_attn_wheel_fi
 fi
 if [[ "$W73_FLASH_ATTN_WHEEL_SHA256" != "$(spec_value flash_attn_wheel_sha256)" ]]; then
   printf 'FlashAttention wheel hash does not match runtime spec\n' >&2
+  exit 2
+fi
+if [[ ! -f "$W73_TORCHCODEC_WHEEL" ]]; then
+  printf 'TorchCodec wheel is missing: %s\n' "$W73_TORCHCODEC_WHEEL" >&2
+  exit 2
+fi
+actual_torchcodec_sha=$(sha256sum "$W73_TORCHCODEC_WHEEL" | awk '{print $1}')
+if [[ "$actual_torchcodec_sha" != "$W73_TORCHCODEC_WHEEL_SHA256" ]]; then
+  printf 'TorchCodec wheel SHA-256 mismatch: expected %s, found %s\n' \
+    "$W73_TORCHCODEC_WHEEL_SHA256" "$actual_torchcodec_sha" >&2
+  exit 2
+fi
+if [[ "$(basename "$W73_TORCHCODEC_WHEEL")" != "$(spec_value torchcodec_wheel_filename)" ]]; then
+  printf 'TorchCodec wheel filename does not match runtime spec\n' >&2
+  exit 2
+fi
+if [[ "$W73_TORCHCODEC_WHEEL_SHA256" != "$(spec_value torchcodec_wheel_sha256)" ]]; then
+  printf 'TorchCodec wheel hash does not match runtime spec\n' >&2
   exit 2
 fi
 if [[ "$(spec_value isaaclab_revision)" != "$(git -C "$W73_ISAACLAB_ROOT" rev-parse HEAD)" ]]; then
@@ -102,7 +126,8 @@ if [[ -f "$manifest" ]]; then
     "$(git -C "$W73_GROOT_ROOT" rev-parse HEAD)" \
     "$prepare_script_sha" \
     "$dependency_inputs_sha" \
-    "$W73_FLASH_ATTN_WHEEL_SHA256" <<'PY'
+    "$W73_FLASH_ATTN_WHEEL_SHA256" \
+    "$W73_TORCHCODEC_WHEEL_SHA256" <<'PY'
 import hashlib
 import json
 import sys
@@ -129,6 +154,8 @@ if manifest.get("rlinf_dependency_inputs_sha256") != sys.argv[7]:
     raise SystemExit("runtime RLinf dependency-input hash mismatch")
 if manifest.get("flash_attn_wheel_sha256") != sys.argv[8]:
     raise SystemExit("runtime FlashAttention wheel hash mismatch")
+if manifest.get("torchcodec_wheel_sha256") != sys.argv[9]:
+    raise SystemExit("runtime TorchCodec wheel hash mismatch")
 PY
   PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
     "$(spec_value torch_version)" \
@@ -278,9 +305,12 @@ uv pip install \
   "torchaudio==$(spec_value torchaudio_version)"
 uv pip install \
   --python "$W73_RUNTIME_ROOT/bin/python" \
-  "torchcodec==$(spec_value torchcodec_version)" \
   "hydra-core==$(spec_value hydra_core_version)" \
   "numpy==$(spec_value numpy_version)"
+uv pip install \
+  --python "$W73_RUNTIME_ROOT/bin/python" \
+  --no-deps \
+  "$W73_TORCHCODEC_WHEEL"
 uv pip uninstall --python "$W73_RUNTIME_ROOT/bin/python" flash-attn || true
 uv pip install \
   --python "$W73_RUNTIME_ROOT/bin/python" \
@@ -307,7 +337,8 @@ PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
   "$(spec_value torchcodec_version)" \
   "$(spec_value hydra_core_version)" \
   "$(spec_value numpy_version)" \
-  "$W73_FLASH_ATTN_WHEEL_SHA256" <<'PY'
+  "$W73_FLASH_ATTN_WHEEL_SHA256" \
+  "$W73_TORCHCODEC_WHEEL_SHA256" <<'PY'
 import importlib.metadata
 import json
 import os
@@ -341,6 +372,7 @@ expected_torchcodec = sys.argv[13]
 expected_hydra_core = sys.argv[14]
 expected_numpy = sys.argv[15]
 flash_attn_wheel_sha256 = sys.argv[16]
+torchcodec_wheel_sha256 = sys.argv[17]
 
 expected_build = f"{expected_torch}+{expected_backend}"
 if not torch.__version__.startswith(expected_build):
@@ -376,6 +408,7 @@ value = {
     "flash_attn": flash_attn.__version__,
     "flash_attn_wheel_sha256": flash_attn_wheel_sha256,
     "torchcodec": torchcodec.__version__,
+    "torchcodec_wheel_sha256": torchcodec_wheel_sha256,
     "hydra_core": importlib.metadata.version("hydra-core"),
     "numpy": numpy.__version__,
     "ray": ray.__version__,
