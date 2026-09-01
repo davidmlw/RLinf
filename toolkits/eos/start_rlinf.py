@@ -160,6 +160,19 @@ def _git_output(root: Path, *args: str) -> str:
     return completed.stdout.strip()
 
 
+def _bootstrap_git_lfs_path() -> None:
+    """Expose the pinned Git LFS client before validating mounted checkouts."""
+    value = os.environ.get("W73_GIT_LFS_BIN")
+    if value is None:
+        return
+    path = Path(value)
+    if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+        raise WorkflowError("W73_GIT_LFS_BIN must be an absolute executable file")
+    os.environ["PATH"] = os.pathsep.join(
+        [str(path.parent), os.environ.get("PATH", "")]
+    )
+
+
 def _git_dependency_inputs_sha256(root: Path) -> str:
     listing = subprocess.run(
         [
@@ -512,6 +525,8 @@ def _load_site(
             "prepare_script",
             "prepare_script_sha256",
             "uv_cache",
+            "git_lfs_bin",
+            "git_lfs_bin_sha256",
             "flash_attn_wheel",
             "flash_attn_wheel_sha256",
             "torchcodec_wheel",
@@ -539,6 +554,12 @@ def _load_site(
         raise WorkflowError("runtime.python must be env_root/bin/python")
     runtime_spec = _absolute_file(runtime["runtime_spec"], "runtime.runtime_spec")
     prepare_script = _absolute_file(runtime["prepare_script"], "runtime.prepare_script")
+    git_lfs_bin = _absolute_executable(runtime["git_lfs_bin"], "runtime.git_lfs_bin")
+    _verify_sha256(
+        git_lfs_bin,
+        runtime["git_lfs_bin_sha256"],
+        "runtime.git_lfs_bin",
+    )
     _verify_sha256(runtime_spec, runtime["runtime_spec_sha256"], "runtime.runtime_spec")
     _verify_sha256(
         prepare_script,
@@ -817,6 +838,7 @@ def _submission_argv(site: Mapping[str, Any]) -> list[str]:
         f"--constraint={slurm['constraint']}",
         f"--output={output_root}/slurm-%j.out",
         f"--error={output_root}/slurm-%j.err",
+        f"--export=ALL,W73_GIT_LFS_BIN={site['runtime']['git_lfs_bin']}",
     ]
     if slurm["exclusive"]:
         argv.append("--exclusive")
@@ -1571,6 +1593,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     try:
+        _bootstrap_git_lfs_path()
         args = _parser().parse_args()
         return int(args.handler(args))
     except (OSError, subprocess.SubprocessError, WorkflowError) as error:

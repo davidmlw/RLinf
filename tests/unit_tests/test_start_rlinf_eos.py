@@ -47,6 +47,9 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
     torchcodec_wheel.write_bytes(b"torchcodec-wheel")
     healthcare_assets_archive = tmp_path / "w68-healthcare-assets.tar"
     healthcare_assets_archive.write_bytes(b"healthcare-assets")
+    git_lfs_bin = tmp_path / "git-lfs"
+    git_lfs_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    git_lfs_bin.chmod(0o755)
     runtime_python_target = Path(sys.executable).resolve(strict=True)
     for name in (
         "isaaclab",
@@ -192,6 +195,11 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
                     "path": str(healthcare_assets_archive),
                     "sha256": _sha256(healthcare_assets_archive),
                 },
+                {
+                    "name": "git-lfs-client",
+                    "path": str(git_lfs_bin),
+                    "sha256": _sha256(git_lfs_bin),
+                },
             ],
         },
         "runtime": {
@@ -206,6 +214,8 @@ def _site(tmp_path: Path, *, config: Path | None = None) -> Path:
                 ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh"
             ),
             "uv_cache": str(tmp_path / "uv-cache"),
+            "git_lfs_bin": str(git_lfs_bin),
+            "git_lfs_bin_sha256": _sha256(git_lfs_bin),
             "flash_attn_wheel": str(flash_attn_wheel),
             "flash_attn_wheel_sha256": _sha256(flash_attn_wheel),
             "torchcodec_wheel": str(torchcodec_wheel),
@@ -267,6 +277,7 @@ def test_site_freezes_canonical_chunk16_contract(tmp_path: Path) -> None:
     assert "--constraint=h100" in command
     assert "--exclusive" in command
     assert "--signal=B:TERM@600" in command
+    assert f"--export=ALL,W73_GIT_LFS_BIN={site['runtime']['git_lfs_bin']}" in command
     assert site["_resolved"]["launcher"] == str(LAUNCHER)
     assert command[-4:] == [
         str(LAUNCHER),
@@ -274,6 +285,18 @@ def test_site_freezes_canonical_chunk16_contract(tmp_path: Path) -> None:
         "--site",
         str(site["_resolved"]["path"]),
     ]
+
+
+def test_bootstrap_git_lfs_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    git_lfs_bin = tmp_path / "git-lfs"
+    git_lfs_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    git_lfs_bin.chmod(0o755)
+    monkeypatch.setenv("W73_GIT_LFS_BIN", str(git_lfs_bin))
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    MODULE._bootstrap_git_lfs_path()
+
+    assert os.environ["PATH"] == f"{tmp_path}:/usr/bin"
 
 
 def test_site_rejects_feature_reuse_in_baseline(tmp_path: Path) -> None:

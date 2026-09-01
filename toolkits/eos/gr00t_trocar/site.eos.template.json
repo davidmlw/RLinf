@@ -82,6 +82,11 @@
         "name": "w68-healthcare-assets",
         "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/assets/w68-healthcare-assets.tar",
         "sha256": "9289b4e37b64a4fbe86f1a030393179dbcb2215f283a5411ca46529f5fe8bf13"
+      },
+      {
+        "name": "git-lfs-client",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/bin/git-lfs",
+        "sha256": "0befea61a3e131a0c150f2f54179c83e7fbefc32a9d5e028dfd31864db42c4f1"
       }
     ]
   },
@@ -93,6 +98,8 @@
     "prepare_script": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/prepare_runtime.sh",
     "prepare_script_sha256": "AUTO",
     "uv_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/cache/uv",
+    "git_lfs_bin": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/bin/git-lfs",
+    "git_lfs_bin_sha256": "0befea61a3e131a0c150f2f54179c83e7fbefc32a9d5e028dfd31864db42c4f1",
     "flash_attn_wheel": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl",
     "flash_attn_wheel_sha256": "79e0732cb5d988a96777af7ec63a5af91b557ce8fd1593d6d851f4dd9c42411e",
     "torchcodec_wheel": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl",

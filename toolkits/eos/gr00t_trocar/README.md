@@ -40,6 +40,12 @@ exact revisions. File inputs must match their SHA-256 before submission. Large
 immutable inputs live below the persistent EOS workspace `inputs/`; experiment
 outputs live below `runs/W73/`.
 
+The site also pins a standalone Git LFS client under `inputs/bin/`. EOS login
+nodes provide `git-lfs`, but compute-node host and thin-container installations
+are not uniform. Submission exports the pinned client before either side
+validates the mounted IsaacLab/GR00T checkouts, so tracked-content cleanliness
+does not depend on a node's package set.
+
 The Newton renderer resolves the sanitized tray's material references relative
 to the USD. The three `T_Box001_{BC,N,ORM}001.png` files therefore live under
 `inputs/usd/texture/` exactly as in the qualified W68 input package. Their
