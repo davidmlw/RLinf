@@ -217,7 +217,7 @@ def _validate_provenance(value: object) -> dict[str, object]:
     return {"git_checkouts": resolved_git, "files": resolved_files}
 
 
-def _baseline_contract(config: Path) -> dict[str, int | str]:
+def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
     """Parse and validate the canonical feature-free chunk16 workload."""
     probe = subprocess.run(
         [
@@ -245,6 +245,8 @@ def _baseline_contract(config: Path) -> dict[str, int | str]:
         actor = cfg["actor"]
         actor_model = actor["model"]
         rollout = cfg["rollout"]
+        runner = cfg["runner"]
+        eval_env = cfg["env"]["eval"]
         chunks = int(actor_model["num_action_chunks"])
         envs = int(env["total_num_envs"])
         physical = envs * int(env["max_steps_per_rollout_epoch"]) * int(
@@ -283,11 +285,19 @@ def _baseline_contract(config: Path) -> dict[str, int | str]:
         "reward_type": algorithm.get("reward_type"),
         "logprob_type": algorithm.get("logprob_type"),
         "actor_lr": actor.get("optim", {}).get("lr"),
+        "eval_interval": runner.get("val_check_interval"),
+        "eval_envs": eval_env.get("total_num_envs"),
+        "eval_fixed_resets": eval_env.get("use_fixed_reset_state_ids"),
+        "eval_video": eval_env.get("video_cfg", {}).get("save_video"),
     }
     if semantic != {
         "reward_type": "chunk_level",
         "logprob_type": "action_level",
         "actor_lr": 2e-5,
+        "eval_interval": 5,
+        "eval_envs": 8,
+        "eval_fixed_resets": True,
+        "eval_video": True,
     }:
         raise WorkflowError(f"config algorithm mismatch: {semantic}")
     forbidden = {

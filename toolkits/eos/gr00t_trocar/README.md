@@ -88,5 +88,8 @@ outside the persistent attempt directory, and the shell removes it on exit.
 An exit-zero or deadline receipt proves operational health, not convergence.
 The result must separately report completed outer steps, reward/return curves,
 task success metrics, policy/critic health, checkpoints and fixed-seed
-evaluation videos. If the four-hour result is inconclusive, retain it and
-change the next experiment explicitly.
+evaluation videos. The convergence site runs an 8-env fixed-reset evaluation
+and records its videos every five completed outer steps. Evaluation is part of
+the four-hour time-to-learning budget but is excluded from steady training-step
+timing. If the four-hour result is inconclusive, retain it and change the next
+experiment explicitly.

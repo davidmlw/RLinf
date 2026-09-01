@@ -143,6 +143,10 @@ def test_site_freezes_canonical_chunk16_contract(tmp_path: Path) -> None:
         "reward_type": "chunk_level",
         "logprob_type": "action_level",
         "actor_lr": 2e-5,
+        "eval_interval": 5,
+        "eval_envs": 8,
+        "eval_fixed_resets": True,
+        "eval_video": True,
     }
     command = MODULE._submission_argv(site)
     assert "--time=04:00:00" in command
