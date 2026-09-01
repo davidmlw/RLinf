@@ -104,6 +104,7 @@ def _install_nonfinite_diagnostics() -> None:
         from rlinf.models.embodiment.gr00t.gr00t_action_model import (
             FlowMatchingActionHeadForRLActionPrediction,
         )
+    from rlinf.workers.actor.fsdp_actor_worker import EmbodiedFSDPActor
     from rlinf.workers.rollout.hf.huggingface_worker import MultiStepRolloutWorker
 
     if getattr(
@@ -148,6 +149,29 @@ def _install_nonfinite_diagnostics() -> None:
 
     MultiStepRolloutWorker._predict_rollout_actions = checked_predict
     MultiStepRolloutWorker.sync_model_from_actor = checked_sync
+
+    original_recv = EmbodiedFSDPActor.recv_rollout_trajectories
+
+    async def checked_recv(self, input_channel):
+        await original_recv(self, input_channel)
+        _assert_nested_finite(self.rollout_batch, stage="actor.trajectory")
+
+    original_compute_adv = EmbodiedFSDPActor.compute_advantages_and_returns
+
+    def checked_compute_adv(self):
+        for key in ("rewards", "prev_values", "prev_logprobs", "loss_mask"):
+            _assert_finite(
+                self.rollout_batch.get(key), stage=f"actor.gae_input.{key}"
+            )
+        metrics = original_compute_adv(self)
+        for key in ("advantages", "returns"):
+            _assert_finite(
+                self.rollout_batch.get(key), stage=f"actor.gae_output.{key}"
+            )
+        return metrics
+
+    EmbodiedFSDPActor.recv_rollout_trajectories = checked_recv
+    EmbodiedFSDPActor.compute_advantages_and_returns = checked_compute_adv
     logger.warning("Enabled W73 non-finite rollout/value diagnostics")
 
 
