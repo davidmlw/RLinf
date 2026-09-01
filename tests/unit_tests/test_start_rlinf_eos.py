@@ -154,6 +154,13 @@ def test_site_freezes_canonical_chunk16_contract(tmp_path: Path) -> None:
     assert "--constraint=h100" in command
     assert "--exclusive" in command
     assert "--signal=B:TERM@600" in command
+    assert site["_resolved"]["launcher"] == str(LAUNCHER)
+    assert command[-4:] == [
+        str(LAUNCHER),
+        "allocation-run",
+        "--site",
+        str(site["_resolved"]["path"]),
+    ]
 
 
 def test_site_rejects_feature_reuse_in_baseline(tmp_path: Path) -> None:

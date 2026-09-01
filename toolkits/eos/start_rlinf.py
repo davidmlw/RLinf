@@ -526,11 +526,15 @@ def _load_site(
     if workload_seconds + shutdown_grace > time_limit_s:
         raise WorkflowError("workload plus shutdown grace exceeds Slurm time limit")
 
+    launcher = source_root / "toolkits/eos/start_rlinf.py"
+    if not launcher.is_file() or launcher.is_symlink():
+        raise WorkflowError(f"source launcher is missing or invalid: {launcher}")
+    launcher = launcher.resolve(strict=True)
     site["_resolved"] = {
         "path": str(resolved),
         "sha256": _sha256_file(resolved),
-        "launcher": str(Path(__file__).resolve(strict=True)),
-        "launcher_sha256": _sha256_file(Path(__file__).resolve(strict=True)),
+        "launcher": str(launcher),
+        "launcher_sha256": _sha256_file(launcher),
         "source_root": str(source_root),
         "source_revision": revision,
         "image": str(image),
