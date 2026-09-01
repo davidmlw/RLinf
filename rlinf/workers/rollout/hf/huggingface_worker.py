@@ -982,5 +982,8 @@ class MultiStepRolloutWorker(Worker):
         ]
 
     def set_global_step(self, global_step: int):
+        from rlinf.utils.convergence_seed import seed_rollout_step
+
+        seed_rollout_step(self, global_step)
         if hasattr(self.hf_model, "set_global_step"):
             self.hf_model.set_global_step(global_step)
