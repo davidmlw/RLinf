@@ -16,8 +16,16 @@ import pytest
 import torch
 
 
-def test_rollout_reuse_captures_raw_backbone_output_before_action_head_mutation():
+def _require_n1d5_runtime() -> None:
     pytest.importorskip("gr00t")
+    try:
+        from gr00t.data.dataset import ModalityConfig  # noqa: F401
+    except ImportError:
+        pytest.skip("requires the GR00T N1.5 runtime API")
+
+
+def test_rollout_reuse_captures_raw_backbone_output_before_action_head_mutation():
+    _require_n1d5_runtime()
     from transformers.feature_extraction_utils import BatchFeature
 
     from rlinf.models.embodiment.gr00t.gr00t_n1d5.gr00t_action_model import (
@@ -100,7 +108,7 @@ def test_rollout_reuse_captures_raw_backbone_output_before_action_head_mutation(
 
 
 def test_rollout_does_not_retain_backbone_output_when_transport_is_disabled():
-    pytest.importorskip("gr00t")
+    _require_n1d5_runtime()
     from transformers.feature_extraction_utils import BatchFeature
 
     from rlinf.models.embodiment.gr00t.gr00t_n1d5.gr00t_action_model import (

@@ -100,7 +100,7 @@ class _FakeSender:
         self._pinned_stream_wait_seconds = 0.0
 
     def send(self, tensors, **kwargs) -> None:
-        self.sent.append((tensors, kwargs))
+        self.sent.append((list(tensors), kwargs))
 
     def recv(self, **kwargs):
         assert kwargs["async_op"] is True
