@@ -1,0 +1,34 @@
+{
+  "schema": "rlinf.eos.gr00t-model-inputs.v1",
+  "created": "2026-09-02",
+  "model": {
+    "repository": "nvidia/GR00T-N1.7-3B",
+    "revision": "2fc962b973bccdd5d8ce4f67cc63b264d6886495",
+    "root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/GR00T-N1.7-3B",
+    "files": {
+      "config.json": "54c0367060cd310d0b3343fe72a589860a8b6e8173810164a4ffd6253f52e689",
+      "embodiment_id.json": "abc4a749389837416a102d9455a8c089336f2e417afb18565703b9944974bc35",
+      "model-00001-of-00002.safetensors": "8a1a1d8a33c99103c7c80c136073c5bb8bfe9ca8f7a970c93c033ea89742906d",
+      "model-00002-of-00002.safetensors": "c3f61940deb2007ba1ad7743013b57f0f8462356151db9655175d7aca2d40661",
+      "model.safetensors.index.json": "407804ea5a62f4f8823f48811ae0edbb82fac101e9cf4d7273e6e2f692bb4d59",
+      "processor_config.json": "85c1b4690ae090559e79a45193e598b65d6146eedf14750884da65e6d31032be",
+      "statistics.json": "c97b1b07a82a8a8858771d56d278732d97dd8eae506032c146c77eb53828afc9"
+    }
+  },
+  "backbone": {
+    "repository": "nvidia/Cosmos-Reason2-2B",
+    "revision": "9ce19a195e423419c349abfc86fd07178b230561",
+    "root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Cosmos-Reason2-2B",
+    "files": {
+      "config.json": "bec4b3d446efa05807365c9e1cec03ac590836879d02f3a6da879971154bdd3b",
+      "model.safetensors": "fa5a6e6ef4fce40216b185cc48a3b24d31637ac3e2ba69c107ed1f389c1e6ede",
+      "preprocessor_config.json": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+      "tokenizer.json": "a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7"
+    }
+  },
+  "source": {
+    "repository": "https://github.com/NVIDIA/Isaac-GR00T.git",
+    "revision": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
+    "root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T-N1.7"
+  }
+}

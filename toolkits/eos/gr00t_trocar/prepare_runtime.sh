@@ -44,6 +44,17 @@ print(value[sys.argv[2]])
 PY
 }
 
+spec_value_or() {
+  python3 - "$W73_RUNTIME_SPEC" "$1" "$2" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+print(value.get(sys.argv[2], sys.argv[3]))
+PY
+}
+
 if [[ "$(spec_value schema)" != "rlinf.eos.python-runtime.v1" ]]; then
   printf 'unsupported runtime spec schema\n' >&2
   exit 2
@@ -280,6 +291,7 @@ export NVCC_THREADS=4
 
 python_version=$(spec_value python_version)
 torch_version=$(spec_value torch_version)
+installer_model=$(spec_value_or installer_model gr00t)
 if [[ -e "$build_source" ]]; then
   git -C "$W73_SOURCE_ROOT" worktree remove --force "$build_source" \
     >/dev/null 2>&1 || rm -rf "$build_source"
@@ -295,7 +307,7 @@ bash requirements/install.sh \
   --torch "$torch_version" \
   --venv "$W73_RUNTIME_ROOT" \
   --no-flash-attn \
-  embodied --model gr00t --env isaaclab
+  embodied --model "$installer_model" --env isaaclab
 
 cd "$runtime_parent"
 git -C "$W73_SOURCE_ROOT" worktree remove --force "$build_source"

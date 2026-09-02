@@ -575,6 +575,44 @@ def test_runtime_contract_pins_torchcodec_for_torch_211() -> None:
     assert "from transformers.image_utils import VideoInput" in launcher
 
 
+def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
+    spec = json.loads(
+        (ROOT / "toolkits/eos/gr00t_trocar/runtime-spec-n1d7.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    manifest = json.loads(
+        (ROOT / "toolkits/eos/gr00t_trocar/model-manifest-n1d7.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    script = (ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert spec["torch_version"] == "2.11.0"
+    assert spec["transformers_version"] == "4.57.3"
+    assert spec["installer_model"] == "gr00t_n1d7"
+    assert spec["gr00t_revision"] == (
+        "51d4c89f72fda44cbf77285c6a8114b52676b8a1"
+    )
+    assert 'installer_model=$(spec_value_or installer_model gr00t)' in script
+    assert 'embodied --model "$installer_model" --env isaaclab' in script
+
+    assert manifest["model"]["revision"] == (
+        "2fc962b973bccdd5d8ce4f67cc63b264d6886495"
+    )
+    assert manifest["backbone"]["revision"] == (
+        "9ce19a195e423419c349abfc86fd07178b230561"
+    )
+    assert manifest["model"]["files"]["model-00001-of-00002.safetensors"] == (
+        "8a1a1d8a33c99103c7c80c136073c5bb8bfe9ca8f7a970c93c033ea89742906d"
+    )
+    assert manifest["backbone"]["files"]["model.safetensors"] == (
+        "fa5a6e6ef4fce40216b185cc48a3b24d31637ac3e2ba69c107ed1f389c1e6ede"
+    )
+
+
 def test_eos_template_pins_newton_tray_textures() -> None:
     template = json.loads(
         (ROOT / "toolkits/eos/gr00t_trocar/site.eos.template.json").read_text(
