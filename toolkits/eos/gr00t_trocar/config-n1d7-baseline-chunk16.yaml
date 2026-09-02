@@ -281,7 +281,7 @@ actor:
   fsdp_config:
     strategy: fsdp
     sharding_strategy: full_shard
-    gradient_checkpointing: false
+    gradient_checkpointing: true
     cpu_offload: false
     offload_pin_memory: false
     reshard_after_forward: true

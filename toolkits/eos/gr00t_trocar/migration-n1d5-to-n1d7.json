@@ -51,7 +51,8 @@
       "image_mask"
     ],
     "backbone_trainable_parameters": 0,
-    "fsdp_use_orig_params": true
+    "fsdp_use_orig_params": true,
+    "fsdp_gradient_checkpointing": true
   },
   "preserved_workload": {
     "hardware": "8xH100-80GB",

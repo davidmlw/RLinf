@@ -659,6 +659,8 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
     assert "model_type: gr00t_n1d7" in config
     assert config.count("embodiment_tag_id: 10") == 2
     assert "use_orig_params: true" in config
+    assert "gradient_checkpointing: true" in config
+    assert migration["to"]["fsdp_gradient_checkpointing"] is True
     assert "rollout_backbone_feature_transport" not in config
     assert "W77_BACKBONE_MODEL_ROOT" in runner
     assert "W77_TROCAR_METADATA" in runner
