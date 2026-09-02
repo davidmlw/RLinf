@@ -63,6 +63,13 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _executable(path: Path) -> Path:
+    """Validate an executable while preserving a virtualenv symlink path."""
+    if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+        raise ValueError(f"builder Python must be an absolute executable: {path}")
+    return path
+
+
 def _artifact_inventory(root: Path, names: tuple[str, ...]) -> dict[str, Any]:
     inventory = {}
     for name in names:
@@ -170,7 +177,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     model = args.model.resolve(strict=True)
     backbone = args.backbone.resolve(strict=True)
     dataset = args.dataset.resolve(strict=True)
-    builder_python = args.builder_python.resolve(strict=True)
+    builder_python = _executable(args.builder_python)
 
     model_view = attempt / "model-view" / "libero_10"
     model_receipt = materialize_local_model_view(model, backbone, model_view)

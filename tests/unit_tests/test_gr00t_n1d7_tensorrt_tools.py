@@ -84,6 +84,16 @@ def test_onnx_inventory_includes_external_data(tmp_path: Path) -> None:
     assert set(inventory) == {*official_b1.EXPECTED_ONNX, "dit_bf16.onnx.data"}
 
 
+def test_builder_python_preserves_virtualenv_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "python-target"
+    target.write_text("#!/bin/sh\n", encoding="utf-8")
+    target.chmod(0o755)
+    venv_python = tmp_path / "venv-python"
+    venv_python.symlink_to(target)
+
+    assert official_b1._executable(venv_python) == venv_python
+
+
 def test_model_view_preserves_selector_suffix_and_hashes_weights(
     tmp_path: Path,
 ) -> None:
