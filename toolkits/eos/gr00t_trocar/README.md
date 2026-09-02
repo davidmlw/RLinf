@@ -107,6 +107,53 @@ python3 toolkits/eos/start_rlinf.py submit \
   --site /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W73/site.json
 ```
 
+### W74 matched A/B
+
+W74 runs the default-off baseline and the complete optimization bundle from the
+same clean source revision. The materializer accepts only two optimization
+states: feature-free `A/base`, or `B/bundle` with both unused-logits removal and
+`borrowed_ipc_pinned` feature transport enabled. Partial combinations fail the
+workload-contract gate.
+
+```bash
+ROOT=/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace
+SOURCE="$ROOT/RLinf"
+RUNS="$ROOT/runs/W74"
+
+cd "$SOURCE"
+mkdir -p "$RUNS"
+
+python3 toolkits/eos/start_rlinf.py materialize \
+  --template toolkits/eos/gr00t_trocar/site.eos.template.json \
+  --output "$RUNS/site-A-base.json" \
+  --experiment-name W74-A-base \
+  --experiment-config "$SOURCE/toolkits/eos/gr00t_trocar/config-baseline-chunk16.yaml" \
+  --output-root "$RUNS" \
+  --max-steps 5 \
+  --val-check-interval 5 \
+  --save-interval 5 \
+  --newton-num-substeps 2
+
+python3 toolkits/eos/start_rlinf.py materialize \
+  --template toolkits/eos/gr00t_trocar/site.eos.template.json \
+  --output "$RUNS/site-B-bundle.json" \
+  --experiment-name W74-B-bundle \
+  --experiment-config "$SOURCE/toolkits/eos/gr00t_trocar/config-feature-reuse-chunk16.yaml" \
+  --output-root "$RUNS" \
+  --max-steps 5 \
+  --val-check-interval 5 \
+  --save-interval 5 \
+  --newton-num-substeps 2
+
+python3 toolkits/eos/start_rlinf.py submit --site "$RUNS/site-A-base.json"
+python3 toolkits/eos/start_rlinf.py submit --site "$RUNS/site-B-bundle.json"
+```
+
+Do not submit B until A has finished and the node is clean. Each materialized
+site records the same source SHA and a workload contract that names its arm.
+The attempt directories, submission receipts and Slurm logs all remain under
+`runs/W74/`; no experiment output is written into the source checkout.
+
 Before the convergence attempt, materialize and submit a one-step smoke through
 the exact same lifecycle:
 

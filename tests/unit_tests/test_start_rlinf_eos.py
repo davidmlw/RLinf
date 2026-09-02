@@ -271,6 +271,12 @@ def test_site_freezes_canonical_chunk16_contract(tmp_path: Path) -> None:
         "eval_envs": 8,
         "eval_fixed_resets": True,
         "eval_video": True,
+        "optimization_arm": "A/base",
+        "skip_unused_lm_head": False,
+        "rollout_backbone_feature_transport": None,
+        "pinned_feature_ipc_batch_blocks": None,
+        "pinned_feature_ipc_timeout_seconds": None,
+        "pinned_feature_verify_trajectory": None,
         "newton_num_substeps": 2,
     }
     command = MODULE._submission_argv(site)
@@ -314,6 +320,35 @@ def test_site_rejects_feature_reuse_in_baseline(tmp_path: Path) -> None:
     config.write_text(modified, encoding="utf-8")
 
     with pytest.raises(MODULE.WorkflowError, match="feature-reuse fields"):
+        MODULE._load_site(_site(tmp_path, config=config))
+
+
+def test_site_accepts_complete_feature_reuse_bundle(tmp_path: Path) -> None:
+    config = ROOT / "toolkits/eos/gr00t_trocar/config-feature-reuse-chunk16.yaml"
+
+    contract = MODULE._load_site(
+        _site(tmp_path, config=config)
+    )["_resolved"]["workload_contract"]
+
+    assert contract["optimization_arm"] == "B/bundle"
+    assert contract["skip_unused_lm_head"] is True
+    assert contract["rollout_backbone_feature_transport"] == "borrowed_ipc_pinned"
+    assert contract["pinned_feature_ipc_batch_blocks"] == 16
+    assert contract["pinned_feature_ipc_timeout_seconds"] == 300.0
+    assert contract["pinned_feature_verify_trajectory"] is False
+
+
+def test_site_rejects_partial_feature_reuse_bundle(tmp_path: Path) -> None:
+    original = (
+        ROOT / "toolkits/eos/gr00t_trocar/config-feature-reuse-chunk16.yaml"
+    ).read_text(encoding="utf-8")
+    config = tmp_path / "partial-feature.yaml"
+    config.write_text(
+        original.replace("    skip_unused_lm_head: true\n", "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MODULE.WorkflowError, match="optimization arm"):
         MODULE._load_site(_site(tmp_path, config=config))
 
 
@@ -838,3 +873,38 @@ def test_materialize_overrides_checkpoint_and_evaluation_intervals(
     contract = MODULE._load_site(output)["_resolved"]["workload_contract"]
     assert contract["eval_interval"] == 5
     assert contract["newton_num_substeps"] == 4
+
+
+def test_materialize_overrides_ab_identity_config_and_output(
+    tmp_path: Path,
+) -> None:
+    site_path = _site(tmp_path)
+    template = tmp_path / "template-ab.json"
+    value = json.loads(site_path.read_text(encoding="utf-8"))
+    value["source"]["revision"] = "AUTO"
+    value["runtime"]["runtime_spec_sha256"] = "AUTO"
+    value["runtime"]["prepare_script_sha256"] = "AUTO"
+    value["experiment"]["config_sha256"] = "AUTO"
+    value["experiment"]["runner_sha256"] = "AUTO"
+    template.write_text(json.dumps(value), encoding="utf-8")
+    output = tmp_path / "candidate-site.json"
+    output_root = tmp_path / "w74-output"
+    output_root.mkdir()
+    candidate = ROOT / "toolkits/eos/gr00t_trocar/config-feature-reuse-chunk16.yaml"
+    args = argparse.Namespace(
+        template=str(template),
+        output=str(output),
+        skip_image_hash=False,
+        smoke=False,
+        experiment_name="W74-B-bundle",
+        experiment_config=str(candidate),
+        output_root=str(output_root),
+    )
+
+    assert MODULE._materialize(args) == 0
+    materialized = json.loads(output.read_text(encoding="utf-8"))
+    assert materialized["experiment"]["name"] == "W74-B-bundle"
+    assert materialized["experiment"]["config"] == str(candidate)
+    assert materialized["experiment"]["output_root"] == str(output_root)
+    contract = MODULE._load_site(output)["_resolved"]["workload_contract"]
+    assert contract["optimization_arm"] == "B/bundle"

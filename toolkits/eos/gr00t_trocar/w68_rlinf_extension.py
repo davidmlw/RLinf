@@ -560,6 +560,23 @@ def _patch_gr00t_get_model(cfg: dict) -> None:
             rl_head_config=model_cfg.rl_head_config,
         )
 
+        skip_unused_lm_head = model_cfg.get("skip_unused_lm_head", False)
+        if not isinstance(skip_unused_lm_head, bool):
+            raise TypeError("actor.model.skip_unused_lm_head must be boolean")
+        if skip_unused_lm_head:
+            from rlinf.models.embodiment.gr00t.gr00t_n1d5.unused_logits import (
+                replace_unused_lm_head,
+            )
+
+            replaced = replace_unused_lm_head(model)
+            logger.info(
+                "RLINF_UNUSED_LOGITS enabled=true replaced=%s lm_head=%s",
+                replaced,
+                type(model.backbone.eagle_model.language_model.lm_head).__name__,
+            )
+        else:
+            logger.info("RLINF_UNUSED_LOGITS enabled=false")
+
         if rl_model_path:
             rl_weights = Path(rl_model_path) / "actor" / "model_state_dict" / "full_weights.pt"
             if not rl_weights.exists():

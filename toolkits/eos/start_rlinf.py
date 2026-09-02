@@ -276,8 +276,8 @@ def _validate_provenance(value: object) -> dict[str, object]:
     return {"git_checkouts": resolved_git, "files": resolved_files}
 
 
-def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
-    """Parse and validate the canonical feature-free chunk16 workload."""
+def _workload_contract(config: Path) -> dict[str, object]:
+    """Parse the canonical chunk16 workload and its fail-closed A/B arm."""
     probe = subprocess.run(
         [
             sys.executable,
@@ -365,20 +365,63 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
         "eval_video": True,
     }:
         raise WorkflowError(f"config algorithm mismatch: {semantic}")
-    forbidden = {
+    unsupported = {
         "reuse_rollout_backbone_features",
-        "rollout_backbone_feature_transport",
-        "pinned_feature_ipc_batch_blocks",
-        "pinned_feature_verify_trajectory",
         "borrowed_feature_ipc_verify_trajectory",
         "gpu_feature_capacity_probe",
     }
-    present = forbidden.intersection(actor_model) | forbidden.intersection(rollout)
+    present = unsupported.intersection(actor_model) | unsupported.intersection(rollout)
     if present:
         raise WorkflowError(
-            f"feature-reuse fields are forbidden in baseline: {sorted(present)}"
+            f"unsupported feature-reuse fields: {sorted(present)}"
         )
-    return {**actual, **semantic}
+
+    skip_unused_lm_head = actor_model.get("skip_unused_lm_head", False)
+    if not isinstance(skip_unused_lm_head, bool):
+        raise WorkflowError("actor.model.skip_unused_lm_head must be boolean")
+    feature_transport = actor_model.get("rollout_backbone_feature_transport")
+    pinned_fields = {
+        "pinned_feature_ipc_batch_blocks",
+        "pinned_feature_ipc_timeout_seconds",
+        "pinned_feature_verify_trajectory",
+    }
+    present_pinned_fields = pinned_fields.intersection(rollout)
+
+    if not skip_unused_lm_head and feature_transport is None:
+        if present_pinned_fields:
+            raise WorkflowError(
+                "A/base must not configure pinned feature transport fields"
+            )
+        optimization = {
+            "optimization_arm": "A/base",
+            "skip_unused_lm_head": False,
+            "rollout_backbone_feature_transport": None,
+            "pinned_feature_ipc_batch_blocks": None,
+            "pinned_feature_ipc_timeout_seconds": None,
+            "pinned_feature_verify_trajectory": None,
+        }
+    elif (
+        skip_unused_lm_head
+        and feature_transport == "borrowed_ipc_pinned"
+        and rollout.get("pinned_feature_ipc_batch_blocks") == 16
+        and float(rollout.get("pinned_feature_ipc_timeout_seconds", 0.0)) == 300.0
+        and rollout.get("pinned_feature_verify_trajectory") is False
+    ):
+        optimization = {
+            "optimization_arm": "B/bundle",
+            "skip_unused_lm_head": True,
+            "rollout_backbone_feature_transport": feature_transport,
+            "pinned_feature_ipc_batch_blocks": 16,
+            "pinned_feature_ipc_timeout_seconds": 300.0,
+            "pinned_feature_verify_trajectory": False,
+        }
+    else:
+        raise WorkflowError(
+            "config optimization arm must be either feature-free A/base or the "
+            "complete unused-logits plus borrowed_ipc_pinned B/bundle"
+        )
+
+    return {**actual, **semantic, **optimization}
 
 
 def _load_site(
@@ -738,7 +781,7 @@ def _load_site(
     _verify_sha256(config, experiment["config_sha256"], "experiment.config")
     _verify_sha256(runner, experiment["runner_sha256"], "experiment.runner")
     contract = (
-        _baseline_contract(config) if validate_contract else {"status": "deferred"}
+        _workload_contract(config) if validate_contract else {"status": "deferred"}
     )
     output_root = _absolute_directory(
         experiment["output_root"], "experiment.output_root"
@@ -969,6 +1012,15 @@ def _materialize(args: argparse.Namespace) -> int:
         },
         "experiment",
     )
+    experiment_name = getattr(args, "experiment_name", None)
+    experiment_config = getattr(args, "experiment_config", None)
+    output_root = getattr(args, "output_root", None)
+    if experiment_name is not None:
+        experiment["name"] = experiment_name
+    if experiment_config is not None:
+        experiment["config"] = experiment_config
+    if output_root is not None:
+        experiment["output_root"] = output_root
     config = _absolute_file(experiment["config"], "experiment.config")
     runner = _absolute_file(experiment["runner"], "experiment.runner")
     experiment["config_sha256"] = _sha256_file(config)
@@ -1588,6 +1640,9 @@ def _parser() -> argparse.ArgumentParser:
     materialize.add_argument("--save-interval", type=int)
     materialize.add_argument("--newton-num-substeps", type=int)
     materialize.add_argument("--resume-dir")
+    materialize.add_argument("--experiment-name")
+    materialize.add_argument("--experiment-config")
+    materialize.add_argument("--output-root")
     materialize.add_argument("--debug-nonfinite", action="store_true")
     materialize.set_defaults(handler=_materialize)
 
