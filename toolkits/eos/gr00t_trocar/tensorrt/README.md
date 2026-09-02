@@ -38,6 +38,12 @@ command freezes the current Git revision and validates the image and inputs;
 the second submits one exclusive H100 node. Add `--dry-run` to `submit` to
 inspect the exact `sbatch` command without requesting resources.
 
+The official lockfile selects TorchCodec 0.8.0, whose Linux wheel hard-loads
+NVDEC even though this fixture is decoded on CPU. EOS compute containers do not
+expose that optional video-driver library. The builder applies the compatible
+TorchCodec 0.8.1 bugfix wheel by immutable path and SHA-256; all model, Torch,
+Transformers, flash-attn, TensorRT, and export settings remain unchanged.
+
 ```bash
 python toolkits/eos/gr00t_trocar/tensorrt/start_official_b1.py materialize \
   --template toolkits/eos/gr00t_trocar/tensorrt/site.official-b1.eos.template.json \

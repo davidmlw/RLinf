@@ -45,7 +45,9 @@
     "torch": "2.9.0+cu128",
     "transformers": "4.57.3",
     "flash_attn": "2.8.3",
-    "tensorrt": "10.15.1.29"
+    "tensorrt": "10.15.1.29",
+    "torchcodec": "0.8.1",
+    "torchcodec_reason": "Torch-2.9-compatible fix for the 0.8.0 hard NVDEC dependency; LIBERO fixture decode uses CPU fallback"
   },
   "production_hybrid": {
     "model": "nvidia/GR00T-N1.7-3B",

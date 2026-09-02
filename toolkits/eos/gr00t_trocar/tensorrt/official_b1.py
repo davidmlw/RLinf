@@ -168,6 +168,7 @@ def _runtime_packages() -> dict[str, str]:
         "transformers": transformers.__version__,
         "flash_attn": flash_attn.__version__,
         "tensorrt": tensorrt.__version__,
+        "torchcodec": __import__("torchcodec").__version__,
     }
 
 

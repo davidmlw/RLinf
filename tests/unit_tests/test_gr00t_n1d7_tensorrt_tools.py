@@ -144,6 +144,8 @@ def _site(tmp_path: Path) -> Path:
     uv = tmp_path / "uv"
     uv.write_text("#!/bin/sh\n", encoding="utf-8")
     uv.chmod(0o755)
+    torchcodec_wheel = tmp_path / "torchcodec.whl"
+    torchcodec_wheel.write_bytes(b"torchcodec")
     value = {
         "schema": start_official_b1.SCHEMA,
         "slurm": {
@@ -180,6 +182,8 @@ def _site(tmp_path: Path) -> Path:
             "env_root": str(tmp_path / "env"),
             "uv": str(uv),
             "uv_cache": str(tmp_path / "uv-cache"),
+            "torchcodec_wheel": str(torchcodec_wheel),
+            "torchcodec_wheel_sha256": start_official_b1._sha256(torchcodec_wheel),
         },
         "experiment": {
             "name": "W78-test",

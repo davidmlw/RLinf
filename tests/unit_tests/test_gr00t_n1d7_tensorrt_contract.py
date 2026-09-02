@@ -15,7 +15,6 @@
 import json
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_PATH = (
     ROOT
@@ -83,3 +82,11 @@ def test_contract_keeps_learning_claims_out_of_scope():
     assert gates["ppo_authority"] == "exact_revision_eager_recompute"
     assert gates["learning_status"] == "structural_frozen_learning_unproven"
     assert gates["tensorrt_reload_rebuild_refit_after_head_update"] == 0
+
+
+def test_contract_pins_torchcodec_compatibility_overlay():
+    builder = _load_contract()["builder"]
+
+    assert builder["torch"] == "2.9.0+cu128"
+    assert builder["torchcodec"] == "0.8.1"
+    assert "hard NVDEC dependency" in builder["torchcodec_reason"]

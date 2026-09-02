@@ -33,9 +33,11 @@
     "dataset_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T-N1.7/demo_data/libero_demo"
   },
   "builder": {
-    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-n1d7-trt-builder-py312-cu128-v1",
+    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-n1d7-trt-builder-py312-cu128-v2",
     "uv": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-n1d7-newton-py312-cu128-v1/bin/uv",
-    "uv_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/cache/uv"
+    "uv_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/cache/uv",
+    "torchcodec_wheel": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/torchcodec-0.8.1-cp312-cp312-manylinux_2_28_x86_64.whl",
+    "torchcodec_wheel_sha256": "8fc189dcb71739b89230bd56abbc721188f65d9a8c40afcc751b8d2809bbdd4d"
   },
   "experiment": {
     "name": "W78-official-b1",

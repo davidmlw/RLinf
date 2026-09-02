@@ -138,6 +138,11 @@ def _load(path: Path, *, verify_image: bool = True) -> dict[str, Any]:
     _directory(inputs["model_root"], "inputs.model_root")
     _directory(inputs["backbone_root"], "inputs.backbone_root")
     _file(value["builder"]["uv"], "builder.uv")
+    torchcodec_wheel = _file(
+        value["builder"]["torchcodec_wheel"], "builder.torchcodec_wheel"
+    )
+    if _sha256(torchcodec_wheel) != value["builder"]["torchcodec_wheel_sha256"]:
+        raise WorkflowError("builder TorchCodec wheel SHA-256 mismatch")
     output = _directory(value["experiment"]["output_root"], "experiment.output_root")
     _directory(value["experiment"]["artifact_cache"], "experiment.artifact_cache")
 
@@ -317,6 +322,8 @@ def _run_agent(args: argparse.Namespace) -> int:
         builder["uv"],
         "--uv-cache",
         builder["uv_cache"],
+        "--torchcodec-wheel",
+        builder["torchcodec_wheel"],
     ]
     _logged_run(prepare, attempt / "logs/prepare.out", attempt / "logs/prepare.err")
     run = [

@@ -29,6 +29,7 @@ EXPECTED = {
     "transformers": "4.57.3",
     "flash_attn": "2.8.3",
     "tensorrt": "10.15.1.29",
+    "torchcodec": "0.8.1",
 }
 
 
@@ -42,11 +43,12 @@ def _sha256(path: Path) -> str:
 
 def _probe(python: Path) -> dict[str, str]:
     script = (
-        "import json, torch, transformers, flash_attn, tensorrt; "
+        "import json, torch, transformers, flash_attn, tensorrt, torchcodec; "
         "print(json.dumps({'torch': torch.__version__, "
         "'transformers': transformers.__version__, "
         "'flash_attn': flash_attn.__version__, "
-        "'tensorrt': tensorrt.__version__}, sort_keys=True))"
+        "'tensorrt': tensorrt.__version__, "
+        "'torchcodec': torchcodec.__version__}, sort_keys=True))"
     )
     completed = subprocess.run(
         [str(python), "-c", script], check=True, capture_output=True, text=True
@@ -55,14 +57,20 @@ def _probe(python: Path) -> dict[str, str]:
 
 
 def prepare(
-    source: Path, env_root: Path, uv: Path, uv_cache: Path
+    source: Path,
+    env_root: Path,
+    uv: Path,
+    uv_cache: Path,
+    torchcodec_wheel: Path,
 ) -> dict[str, object]:
     source = source.resolve(strict=True)
     uv = uv.resolve(strict=True)
     for name in ("pyproject.toml", "uv.lock"):
         if not (source / name).is_file():
             raise ValueError(f"Isaac-GR00T source omits {name}")
+    torchcodec_wheel = torchcodec_wheel.resolve(strict=True)
     inputs = {name: _sha256(source / name) for name in ("pyproject.toml", "uv.lock")}
+    inputs["torchcodec_wheel"] = _sha256(torchcodec_wheel)
     manifest_path = env_root / "rlinf-trt-builder-manifest.json"
     python = env_root / "bin" / "python"
     if manifest_path.is_file() and python.is_file():
@@ -95,6 +103,22 @@ def prepare(
             check=True,
             env=environment,
         )
+        # TorchCodec 0.8.1 is the Torch 2.9-compatible bugfix that removes the
+        # 0.8.0 hard dependency on libnvcuvid. The offline LIBERO fixture uses
+        # its CPU fallback on H100 compute containers.
+        subprocess.run(
+            [
+                str(uv),
+                "pip",
+                "install",
+                "--python",
+                str(staging / "bin" / "python"),
+                "--reinstall",
+                str(torchcodec_wheel),
+            ],
+            check=True,
+            env=environment,
+        )
         packages = _probe(staging / "bin" / "python")
         if packages != EXPECTED:
             raise RuntimeError(
@@ -123,10 +147,17 @@ def main() -> None:
     parser.add_argument("--env-root", type=Path, required=True)
     parser.add_argument("--uv", type=Path, required=True)
     parser.add_argument("--uv-cache", type=Path, required=True)
+    parser.add_argument("--torchcodec-wheel", type=Path, required=True)
     args = parser.parse_args()
     print(
         json.dumps(
-            prepare(args.source, args.env_root, args.uv, args.uv_cache),
+            prepare(
+                args.source,
+                args.env_root,
+                args.uv,
+                args.uv_cache,
+                args.torchcodec_wheel,
+            ),
             indent=2,
             sort_keys=True,
         )
