@@ -340,6 +340,19 @@ def test_site_accepts_complete_feature_reuse_bundle(tmp_path: Path) -> None:
     assert contract["pinned_feature_verify_trajectory"] is False
 
 
+def test_site_accepts_debug_feature_transport_verification(tmp_path: Path) -> None:
+    config = (
+        ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-feature-reuse-verify-chunk16.yaml"
+    )
+
+    contract = MODULE._load_site(_site(tmp_path, config=config))["_resolved"][
+        "workload_contract"
+    ]
+
+    assert contract["optimization_arm"] == "B/debug-verify"
+    assert contract["pinned_feature_verify_trajectory"] is True
+
+
 def test_site_rejects_partial_feature_reuse_bundle(tmp_path: Path) -> None:
     original = (
         ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-feature-reuse-chunk16.yaml"

@@ -431,26 +431,30 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
             "pinned_feature_ipc_timeout_seconds": None,
             "pinned_feature_verify_trajectory": None,
         }
-    elif (
-        actor_skip_unused_logits
-        and feature_transport == "borrowed_ipc_pinned"
-        and rollout.get("pinned_feature_ipc_batch_blocks") == 16
-        and pinned_timeout == 300.0
-        and rollout.get("pinned_feature_verify_trajectory") is False
-    ):
-        optimization = {
-            "optimization_arm": "B/bundle",
-            "skip_unused_lm_head": True,
-            "rollout_backbone_feature_transport": feature_transport,
-            "pinned_feature_ipc_batch_blocks": 16,
-            "pinned_feature_ipc_timeout_seconds": 300.0,
-            "pinned_feature_verify_trajectory": False,
-        }
     else:
-        raise WorkflowError(
-            "config optimization arm must be either feature-free A/base or the "
-            "complete unused-logits plus borrowed_ipc_pinned B/bundle"
-        )
+        verify_trajectory = rollout.get("pinned_feature_verify_trajectory")
+        if (
+            actor_skip_unused_logits
+            and feature_transport == "borrowed_ipc_pinned"
+            and rollout.get("pinned_feature_ipc_batch_blocks") == 16
+            and pinned_timeout == 300.0
+            and isinstance(verify_trajectory, bool)
+        ):
+            optimization = {
+                "optimization_arm": (
+                    "B/debug-verify" if verify_trajectory else "B/bundle"
+                ),
+                "skip_unused_lm_head": True,
+                "rollout_backbone_feature_transport": feature_transport,
+                "pinned_feature_ipc_batch_blocks": 16,
+                "pinned_feature_ipc_timeout_seconds": 300.0,
+                "pinned_feature_verify_trajectory": verify_trajectory,
+            }
+        else:
+            raise WorkflowError(
+                "config optimization arm must be either feature-free A/base or the "
+                "complete unused-logits plus borrowed_ipc_pinned B/bundle"
+            )
 
     return {**actual, **semantic, **optimization}
 
