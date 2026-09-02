@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "implementation": {
+    "owner": "rlinf",
+    "language": "python",
+    "runtime": [
+      "tensorrt_python",
+      "pytorch"
+    ],
+    "forbidden_dependencies": [
+      "praxis_runtime",
+      "poiesis_runtime",
+      "rust_executor",
+      "aoti_executor"
+    ]
+  },
+  "source": {
+    "rlinf_parent": "6998036d130f235f8d77367ed9b48c432e35e9e2",
+    "isaac_gr00t": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
+    "isaac_gr00t_archive_sha256": "7da0c0b1f1ca196c1a8f38f74fa428c53b983ee1ce361c4a481b1e954c1845df"
+  },
+  "official_b1_oracle": {
+    "checkpoint": "nvidia/GR00T-N1.7-LIBERO/libero_10",
+    "dataset": "demo_data/libero_demo",
+    "dataset_requires_materialized_git_lfs": true,
+    "embodiment_tag": "LIBERO_PANDA",
+    "batch_size": 1,
+    "precision": "bf16",
+    "export_mode": "full_pipeline",
+    "workspace_mib": 8192,
+    "warmup": 5,
+    "iterations": 20,
+    "steps": [
+      "export",
+      "build",
+      "verify",
+      "benchmark"
+    ],
+    "visual_grids": 2,
+    "patches": 512,
+    "sequence_length": 156,
+    "engine_count": 7
+  },
+  "builder": {
+    "torch": "2.9.0+cu128",
+    "transformers": "4.57.3",
+    "flash_attn": "2.8.3",
+    "tensorrt": "10.15.1.29"
+  },
+  "production_hybrid": {
+    "model": "nvidia/GR00T-N1.7-3B",
+    "cut": "vit_llm_only_pre_final_qwen_hidden",
+    "tensorrt_engines": [
+      "vit",
+      "llm_bf16"
+    ],
+    "pytorch_components": [
+      "vlln",
+      "vl_self_attention",
+      "state_encoder",
+      "action_encoder",
+      "dit",
+      "action_decoder",
+      "value_head"
+    ],
+    "apply_final_llm_norm": false,
+    "static_batch": 8,
+    "camera_order": [
+      "room_view",
+      "left_wrist_view",
+      "right_wrist_view"
+    ],
+    "camera_frame_policy": "latest",
+    "camera_height": 224,
+    "camera_width": 224,
+    "raw_patches_per_row": 768,
+    "merged_visual_tokens_per_row": 192,
+    "vit_pixel_values_shape": [
+      6144,
+      1536
+    ],
+    "deepstack_count": 3,
+    "deepstack_shape": [
+      1536,
+      2048
+    ],
+    "public_state_dim": 28,
+    "public_action_dim": 28,
+    "model_state_action_width": 132,
+    "generated_action_shape": [
+      8,
+      40,
+      132
+    ],
+    "executed_action_shape": [
+      8,
+      16,
+      28
+    ]
+  },
+  "workload": {
+    "gpus": 8,
+    "global_envs": 64,
+    "envs_per_rollout_rank": 8,
+    "action_chunks": 16,
+    "physical_actions_per_outer_step": 65536,
+    "policy_decisions_per_outer_step": 4096,
+    "policy_decisions_per_rank": 512,
+    "global_batch_size": 2048,
+    "micro_batch_size": 128,
+    "ppo_epochs": 4,
+    "optimizer_updates": 8,
+    "logprob_type": "action_level",
+    "actor_lr": 2e-05
+  },
+  "matched_ab": {
+    "common": {
+      "skip_unused_lm_head": true,
+      "rollout_backbone_feature_transport": null,
+      "action_head_executor": "pytorch_eager"
+    },
+    "control_backbone_executor": "pytorch",
+    "candidate_backbone_executor": "tensorrt",
+    "only_allowed_difference": "rollout.model.frozen_backbone_backend"
+  },
+  "artifact": {
+    "eos_cache_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/artifacts/W78/tensorrt",
+    "attempt_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W78",
+    "git_tracks_large_artifacts": false,
+    "qualification_failure": "startup_reject",
+    "silent_eager_fallback": false
+  },
+  "runtime_gates": {
+    "persistent_engine": true,
+    "persistent_execution_context": true,
+    "persistent_io_buffers": true,
+    "gpu_only_handoff": true,
+    "synthetic_delta_before_real_revision": true,
+    "tensorrt_reload_rebuild_refit_after_head_update": 0,
+    "feature_reuse_enabled": false,
+    "ppo_authority": "exact_revision_eager_recompute",
+    "learning_status": "structural_frozen_learning_unproven"
+  },
+  "statistics": {
+    "warmup_steps": [
+      0
+    ],
+    "measured_steps": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "report": [
+      "mean",
+      "sample_std",
+      "cv"
+    ]
+  }
+}
