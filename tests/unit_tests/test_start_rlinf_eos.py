@@ -271,9 +271,12 @@ def test_site_freezes_canonical_chunk16_contract(tmp_path: Path) -> None:
         "eval_envs": 8,
         "eval_fixed_resets": True,
         "eval_video": True,
-        "variant": "baseline",
-        "feature_transport": "none",
-        "pinned_feature_verify_trajectory": False,
+        "optimization_arm": "A/base",
+        "skip_unused_lm_head": False,
+        "rollout_backbone_feature_transport": None,
+        "pinned_feature_ipc_batch_blocks": None,
+        "pinned_feature_ipc_timeout_seconds": None,
+        "pinned_feature_verify_trajectory": None,
         "newton_num_substeps": 2,
     }
     command = MODULE._submission_argv(site)
@@ -320,6 +323,67 @@ def test_site_rejects_feature_reuse_in_baseline(tmp_path: Path) -> None:
 
     with pytest.raises(MODULE.WorkflowError, match="feature-reuse fields"):
         MODULE._load_site(_site(tmp_path, config=config))
+
+
+def test_site_accepts_complete_feature_reuse_bundle(tmp_path: Path) -> None:
+    config = ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-feature-reuse-chunk16.yaml"
+
+    contract = MODULE._load_site(_site(tmp_path, config=config))["_resolved"][
+        "workload_contract"
+    ]
+
+    assert contract["optimization_arm"] == "B/bundle"
+    assert contract["skip_unused_lm_head"] is True
+    assert contract["rollout_backbone_feature_transport"] == "borrowed_ipc_pinned"
+    assert contract["pinned_feature_ipc_batch_blocks"] == 16
+    assert contract["pinned_feature_ipc_timeout_seconds"] == 300.0
+    assert contract["pinned_feature_verify_trajectory"] is False
+
+
+def test_site_rejects_partial_feature_reuse_bundle(tmp_path: Path) -> None:
+    original = (
+        ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-feature-reuse-chunk16.yaml"
+    ).read_text(encoding="utf-8")
+    config = tmp_path / "partial-feature.yaml"
+    config.write_text(
+        original.replace("    skip_unused_lm_head: true\n", "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MODULE.WorkflowError, match="same unused-logits mode"):
+        MODULE._load_site(_site(tmp_path, config=config))
+
+
+def test_site_rejects_non_numeric_feature_timeout(tmp_path: Path) -> None:
+    original = (
+        ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-feature-reuse-chunk16.yaml"
+    ).read_text(encoding="utf-8")
+    config = tmp_path / "bad-timeout.yaml"
+    config.write_text(
+        original.replace(
+            "  pinned_feature_ipc_timeout_seconds: 300.0\n",
+            "  pinned_feature_ipc_timeout_seconds: invalid\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MODULE.WorkflowError, match="must be numeric"):
+        MODULE._load_site(_site(tmp_path, config=config))
+
+
+@pytest.mark.parametrize(
+    ("max_steps", "expected"),
+    [
+        (1, None),
+        (2, (-1, (0, 1))),
+        (4, (-1, (0, 1, 2, 3))),
+        (5, (0, (1, 2, 3, 4))),
+        (8, (0, (1, 2, 3, 4))),
+    ],
+)
+def test_measurement_plan(max_steps: int, expected: object) -> None:
+    assert MODULE._measurement_plan(max_steps) == expected
 
 
 def test_site_rejects_external_provenance_drift(tmp_path: Path) -> None:
@@ -689,8 +753,11 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
     candidate_contract = MODULE._baseline_contract(
         ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-feature-reuse-chunk16.yaml"
     )
-    assert candidate_contract["variant"] == "feature_reuse"
-    assert candidate_contract["feature_transport"] == "borrowed_ipc_pinned"
+    assert candidate_contract["optimization_arm"] == "B/bundle"
+    assert (
+        candidate_contract["rollout_backbone_feature_transport"]
+        == "borrowed_ipc_pinned"
+    )
     assert candidate_contract["pinned_feature_verify_trajectory"] is False
     assert "W77_BACKBONE_MODEL_ROOT" in runner
     assert "W77_TROCAR_METADATA" in runner

@@ -364,17 +364,23 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
         "eval_video": True,
     }:
         raise WorkflowError(f"config algorithm mismatch: {semantic}")
-    deprecated = {
+    unsupported = {
         "reuse_rollout_backbone_features",
         "borrowed_feature_ipc_verify_trajectory",
         "gpu_feature_capacity_probe",
     }
-    present = deprecated.intersection(actor_model) | deprecated.intersection(rollout)
+    present = unsupported.intersection(actor_model) | unsupported.intersection(rollout)
     if present:
-        raise WorkflowError(f"deprecated feature-reuse fields found: {sorted(present)}")
+        raise WorkflowError(f"unsupported feature-reuse fields: {sorted(present)}")
 
-    feature_transport = actor_model.get("rollout_backbone_feature_transport")
-    if actor_model.get("model_type") == "gr00t_n1d7":
+    actor_skip_unused_logits = actor_model.get("skip_unused_lm_head", False)
+    rollout_skip_unused_logits = rollout_model.get("skip_unused_lm_head", False)
+    if not isinstance(actor_skip_unused_logits, bool) or not isinstance(
+        rollout_skip_unused_logits, bool
+    ):
+        raise WorkflowError("model.skip_unused_lm_head must be boolean")
+    model_type = actor_model.get("model_type")
+    if model_type == "gr00t_n1d7":
         n1d7_common = {
             "actor_bounded_backbone": actor_model.get("bounded_frozen_backbone"),
             "rollout_bounded_backbone": rollout_model.get("bounded_frozen_backbone"),
@@ -388,65 +394,61 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
                 "GR00T N1.7 bounded-backbone mismatch: "
                 f"expected {expected_n1d7_common}, found {n1d7_common}"
             )
-    if feature_transport is None:
-        forbidden = {
-            "pinned_feature_ipc_batch_blocks",
-            "pinned_feature_ipc_timeout_seconds",
-            "pinned_feature_verify_trajectory",
-        }
-        present = forbidden.intersection(rollout)
-        if present:
+        if rollout_skip_unused_logits != actor_skip_unused_logits:
             raise WorkflowError(
-                f"feature-reuse fields require actor.model transport: {sorted(present)}"
+                "GR00T N1.7 Actor and Rollout must use the same unused-logits mode"
             )
-        if actor_model.get("model_type") == "gr00t_n1d7":
-            baseline_logits = {
-                "actor_skip_unused_logits": actor_model.get("skip_unused_lm_head"),
-                "rollout_skip_unused_logits": rollout_model.get("skip_unused_lm_head"),
-            }
-            if baseline_logits != {
-                "actor_skip_unused_logits": False,
-                "rollout_skip_unused_logits": False,
-            }:
-                raise WorkflowError(
-                    "GR00T N1.7 baseline must compute the unused logits: "
-                    f"{baseline_logits}"
-                )
-        variant = "baseline"
-        verify_trajectory = False
-    else:
-        candidate = {
-            "transport": feature_transport,
-            "actor_skip_unused_logits": actor_model.get("skip_unused_lm_head"),
-            "rollout_skip_unused_logits": rollout_model.get("skip_unused_lm_head"),
-            "batch_blocks": rollout.get("pinned_feature_ipc_batch_blocks"),
-            "timeout_seconds": rollout.get("pinned_feature_ipc_timeout_seconds"),
-        }
-        expected_candidate = {
-            "transport": "borrowed_ipc_pinned",
-            "actor_skip_unused_logits": True,
-            "rollout_skip_unused_logits": True,
-            "batch_blocks": 16,
-            "timeout_seconds": 300.0,
-        }
-        if candidate != expected_candidate:
-            raise WorkflowError(
-                "feature-reuse config mismatch: "
-                f"expected {expected_candidate}, found {candidate}"
-            )
-        verify_trajectory = rollout.get("pinned_feature_verify_trajectory")
-        if not isinstance(verify_trajectory, bool):
-            raise WorkflowError(
-                "rollout.pinned_feature_verify_trajectory must be a boolean"
-            )
-        variant = "feature_reuse"
-    return {
-        **actual,
-        **semantic,
-        "variant": variant,
-        "feature_transport": feature_transport or "none",
-        "pinned_feature_verify_trajectory": verify_trajectory,
+
+    feature_transport = actor_model.get("rollout_backbone_feature_transport")
+    pinned_fields = {
+        "pinned_feature_ipc_batch_blocks",
+        "pinned_feature_ipc_timeout_seconds",
+        "pinned_feature_verify_trajectory",
     }
+    present_pinned_fields = pinned_fields.intersection(rollout)
+    pinned_timeout = rollout.get("pinned_feature_ipc_timeout_seconds")
+    if pinned_timeout is not None and (
+        isinstance(pinned_timeout, bool) or not isinstance(pinned_timeout, (int, float))
+    ):
+        raise WorkflowError(
+            "rollout.pinned_feature_ipc_timeout_seconds must be numeric"
+        )
+
+    if not actor_skip_unused_logits and feature_transport is None:
+        if present_pinned_fields:
+            raise WorkflowError(
+                "A/base must not configure pinned feature transport fields"
+            )
+        optimization = {
+            "optimization_arm": "A/base",
+            "skip_unused_lm_head": False,
+            "rollout_backbone_feature_transport": None,
+            "pinned_feature_ipc_batch_blocks": None,
+            "pinned_feature_ipc_timeout_seconds": None,
+            "pinned_feature_verify_trajectory": None,
+        }
+    elif (
+        actor_skip_unused_logits
+        and feature_transport == "borrowed_ipc_pinned"
+        and rollout.get("pinned_feature_ipc_batch_blocks") == 16
+        and pinned_timeout == 300.0
+        and rollout.get("pinned_feature_verify_trajectory") is False
+    ):
+        optimization = {
+            "optimization_arm": "B/bundle",
+            "skip_unused_lm_head": True,
+            "rollout_backbone_feature_transport": feature_transport,
+            "pinned_feature_ipc_batch_blocks": 16,
+            "pinned_feature_ipc_timeout_seconds": 300.0,
+            "pinned_feature_verify_trajectory": False,
+        }
+    else:
+        raise WorkflowError(
+            "config optimization arm must be either feature-free A/base or the "
+            "complete unused-logits plus borrowed_ipc_pinned B/bundle"
+        )
+
+    return {**actual, **semantic, **optimization}
 
 
 def _load_site(
@@ -1173,6 +1175,16 @@ def _allocation_deadline(site: Mapping[str, Any]) -> int:
     return requested
 
 
+def _measurement_plan(max_steps: int) -> tuple[int, tuple[int, ...]] | None:
+    """Return warmup and measured steps for an automatically qualified run."""
+
+    if max_steps < 2:
+        return None
+    if max_steps >= 5:
+        return 0, (1, 2, 3, 4)
+    return -1, tuple(range(max_steps))
+
+
 def _allocation_run(args: argparse.Namespace) -> int:
     site = _load_site(Path(args.site))
     job_id, node = _discover_allocation()
@@ -1564,6 +1576,14 @@ def _run_agent(args: argparse.Namespace) -> int:
         raise WorkflowError("deterministic seed preflight failed")
     _ray_stop(python, attempt, "prestop")
     ray_env = _ray_worker_environment(site)
+    measurement_dir = attempt / "measurement" / "events"
+    measurement_dir.mkdir(parents=True)
+    ray_env.update(
+        {
+            "RLINF_PERF_MEASUREMENT_DIR": str(measurement_dir),
+            "RLINF_PERF_RUN_ID": attempt.name,
+        }
+    )
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
     if not slurm_job_id or not slurm_job_id.isdecimal():
         raise WorkflowError("run-agent requires a numeric SLURM_JOB_ID")
@@ -1664,8 +1684,33 @@ def _run_agent(args: argparse.Namespace) -> int:
         if timed_out or child_code != 0:
             _archive_ray_failure_logs(ray_temp, attempt)
         shutil.rmtree(ray_temp, ignore_errors=True)
+    measurement_return_code: int | None = None
+    measurement_receipt: Path | None = None
+    measurement_plan = _measurement_plan(int(experiment["max_steps"]))
+    if not timed_out and child_code == 0 and measurement_plan is not None:
+        warmup_step, measured_steps = measurement_plan
+        measurement_receipt = attempt / "measurement" / "receipt.json"
+        measurement_return_code = _run_command(
+            [
+                python,
+                str(
+                    Path(site["source"]["root"])
+                    / "tests/performance/summarize_measurement.py"
+                ),
+                str(measurement_dir),
+                str(measurement_receipt),
+                "--measured-steps",
+                ",".join(str(step) for step in measured_steps),
+                "--warmup-step",
+                str(warmup_step),
+            ],
+            output=attempt / "logs" / "measurement-summary.out",
+            error=attempt / "logs" / "measurement-summary.err",
+        )
     status = "deadline_reached" if timed_out else "completed"
     if not timed_out and child_code != 0:
+        status = "failed"
+    if measurement_return_code not in {None, 0}:
         status = "failed"
     result = {
         "schema": RESULT_SCHEMA,
@@ -1673,6 +1718,10 @@ def _run_agent(args: argparse.Namespace) -> int:
         "training_return_code": child_code,
         "deadline_reached": timed_out,
         "ray_stop_return_code": ray_stop,
+        "measurement_return_code": measurement_return_code,
+        "measurement_receipt": (
+            str(measurement_receipt) if measurement_receipt is not None else None
+        ),
         "timestamp_unix_s": time.time(),
     }
     _write_new_json(attempt / "run-result.json", result)
