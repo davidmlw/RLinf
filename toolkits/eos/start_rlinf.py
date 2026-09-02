@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -48,6 +49,9 @@ BASE_REVISION = "0f9ea98c7a6d9e3ade24e8f4846c64d3b135dbcc"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 GIT_OID_RE = re.compile(r"[0-9a-f]{40}")
 TIME_LIMIT_RE = re.compile(r"(\d{2}):(\d{2}):(\d{2})")
+TRAINING_METRIC_RE = re.compile(
+    r"actor/(?P<name>grad_norm|policy_loss|total_loss)=(?P<value>[^\s│]+)"
+)
 
 
 class WorkflowError(RuntimeError):
@@ -1141,6 +1145,37 @@ def _measurement_plan(max_steps: int) -> tuple[int, tuple[int, ...]] | None:
     return -1, tuple(range(max_steps))
 
 
+def _training_metric_integrity(path: Path, expected_steps: int) -> dict[str, Any]:
+    """Validate the finite per-step training metrics used to qualify a run."""
+
+    values: dict[str, list[float]] = {
+        "grad_norm": [],
+        "policy_loss": [],
+        "total_loss": [],
+    }
+    for match in TRAINING_METRIC_RE.finditer(path.read_text(encoding="utf-8")):
+        values[match.group("name")].append(float(match.group("value")))
+
+    failures = []
+    for name, metric_values in values.items():
+        if len(metric_values) != expected_steps:
+            failures.append(
+                f"actor/{name}: expected {expected_steps} values, "
+                f"found {len(metric_values)}"
+            )
+        nonfinite_steps = [
+            step for step, value in enumerate(metric_values) if not math.isfinite(value)
+        ]
+        if nonfinite_steps:
+            failures.append(f"actor/{name}: nonfinite at steps {nonfinite_steps}")
+    return {
+        "status": "passed" if not failures else "failed",
+        "expected_steps": expected_steps,
+        "counts": {name: len(metric_values) for name, metric_values in values.items()},
+        "failures": failures,
+    }
+
+
 def _allocation_run(args: argparse.Namespace) -> int:
     site = _load_site(Path(args.site))
     job_id, node = _discover_allocation()
@@ -1651,10 +1686,21 @@ def _run_agent(args: argparse.Namespace) -> int:
             output=attempt / "logs" / "measurement-summary.out",
             error=attempt / "logs" / "measurement-summary.err",
         )
+    training_metric_integrity: dict[str, Any] | None = None
+    if not timed_out and child_code == 0:
+        training_metric_integrity = _training_metric_integrity(
+            attempt / "logs" / "training.out",
+            int(experiment["max_steps"]),
+        )
     status = "deadline_reached" if timed_out else "completed"
     if not timed_out and child_code != 0:
         status = "failed"
     if measurement_return_code not in {None, 0}:
+        status = "failed"
+    if (
+        training_metric_integrity is not None
+        and training_metric_integrity["status"] != "passed"
+    ):
         status = "failed"
     result = {
         "schema": RESULT_SCHEMA,
@@ -1666,6 +1712,7 @@ def _run_agent(args: argparse.Namespace) -> int:
         "measurement_receipt": (
             str(measurement_receipt) if measurement_receipt is not None else None
         ),
+        "training_metric_integrity": training_metric_integrity,
         "timestamp_unix_s": time.time(),
     }
     _write_new_json(attempt / "run-result.json", result)
