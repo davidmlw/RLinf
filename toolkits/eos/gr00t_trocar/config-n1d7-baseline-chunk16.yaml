@@ -289,7 +289,7 @@ actor:
     forward_prefetch: false
     limit_all_gathers: false
     backward_prefetch: null
-    use_orig_params: false
+    use_orig_params: true
     use_liger_kernel: false
     fsdp_size: -1
     mixed_precision:

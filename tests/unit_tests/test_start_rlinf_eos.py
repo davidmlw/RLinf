@@ -638,6 +638,7 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
     assert site["experiment"]["output_root"].endswith("/runs/W77")
     assert "model_type: gr00t_n1d7" in config
     assert config.count("embodiment_tag_id: 10") == 2
+    assert "use_orig_params: true" in config
     assert "rollout_backbone_feature_transport" not in config
     assert "W77_BACKBONE_MODEL_ROOT" in runner
     assert "W77_TROCAR_METADATA" in runner
