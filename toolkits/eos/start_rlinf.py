@@ -1438,6 +1438,18 @@ def _run_agent(args: argparse.Namespace) -> int:
     )
     python_path = _absolute_executable(runtime["python"], "runtime.python")
     python = str(python_path)
+    transformers_version = runtime_spec_value["transformers_version"]
+    if transformers_version == "4.51.3":
+        transformers_probe = "from transformers.image_utils import VideoInput; "
+    elif transformers_version == "4.57.3":
+        transformers_probe = (
+            "from transformers import Qwen3VLForConditionalGeneration, "
+            "Qwen3VLProcessor; "
+        )
+    else:
+        raise WorkflowError(
+            f"unsupported Transformers dependency probe: {transformers_version}"
+        )
     runtime_probe = _run_command(
         [
             python,
@@ -1445,7 +1457,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             (
                 "import flash_attn, hydra, importlib.metadata, json, numpy, ray, torch, torchcodec; "
                 "from torchcodec.decoders import VideoDecoder; "
-                "from transformers.image_utils import VideoInput; "
+                f"{transformers_probe}"
                 "assert torch.cuda.is_available(), "
                 "'PyTorch cannot access an allocation GPU'; "
                 "probe = torch.ones(1, device='cuda'); "

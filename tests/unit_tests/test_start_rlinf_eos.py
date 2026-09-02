@@ -573,6 +573,7 @@ def test_runtime_contract_pins_torchcodec_for_torch_211() -> None:
     )
     assert "from torchcodec.decoders import VideoDecoder" in launcher
     assert "from transformers.image_utils import VideoInput" in launcher
+    assert "Qwen3VLForConditionalGeneration" in launcher
 
 
 def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
