@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import torch
@@ -43,18 +44,33 @@ class PinnedRolloutBackboneCache:
         self,
         *,
         total_samples: int,
-        feature_example: torch.Tensor,
-        mask_example: torch.Tensor,
+        feature_example: torch.Tensor | None = None,
+        mask_example: torch.Tensor | None = None,
+        tensor_examples: Mapping[str, torch.Tensor] | None = None,
         device: torch.device | str | int,
     ) -> None:
         if total_samples <= 0:
             raise ValueError("pinned rollout backbone cache requires positive samples")
-        if feature_example.device.type != "cuda" or mask_example.device.type != "cuda":
+        if tensor_examples is None:
+            if feature_example is None or mask_example is None:
+                raise ValueError("pinned rollout backbone examples are incomplete")
+            examples = {
+                "backbone_features": feature_example,
+                "backbone_attention_mask": mask_example,
+            }
+        else:
+            if feature_example is not None or mask_example is not None:
+                raise ValueError("use either named or legacy backbone examples")
+            examples = dict(tensor_examples)
+        if not examples:
+            raise ValueError("pinned rollout backbone examples must not be empty")
+        batch_sizes = {int(tensor.shape[0]) for tensor in examples.values()}
+        if len(batch_sizes) != 1:
+            raise ValueError("pinned rollout backbone tensor batch mismatch")
+        if any(tensor.device.type != "cuda" for tensor in examples.values()):
             raise ValueError(
                 "pinned rollout backbone source tensors must be CUDA tensors"
             )
-        if feature_example.shape[0] != mask_example.shape[0]:
-            raise ValueError("pinned rollout backbone feature/mask batch mismatch")
 
         self._device = (
             torch.device("cuda", device)
@@ -67,22 +83,18 @@ class PinnedRolloutBackboneCache:
             )
         self._samples = int(total_samples)
         allocation_start = time.perf_counter()
-        self._features: torch.Tensor | None = torch.empty(
-            (self._samples, *feature_example.shape[1:]),
-            dtype=feature_example.dtype,
-            device="cpu",
-            pin_memory=True,
-        )
-        self._masks: torch.Tensor | None = torch.empty(
-            (self._samples, *mask_example.shape[1:]),
-            dtype=mask_example.dtype,
-            device="cpu",
-            pin_memory=True,
-        )
+        self._tensors: dict[str, torch.Tensor] | None = {
+            name: torch.empty(
+                (self._samples, *example.shape[1:]),
+                dtype=example.dtype,
+                device="cpu",
+                pin_memory=True,
+            )
+            for name, example in examples.items()
+        }
         self._allocation_seconds = time.perf_counter() - allocation_start
         self._bytes = sum(
-            tensor.numel() * tensor.element_size()
-            for tensor in (self._features, self._masks)
+            tensor.numel() * tensor.element_size() for tensor in self._tensors.values()
         )
         self._copy_stream = torch.cuda.Stream(device=self._device)
         self._stored_samples = 0
@@ -110,9 +122,9 @@ class PinnedRolloutBackboneCache:
         self,
         *,
         offset: int,
-        blocks: list[tuple[torch.Tensor, torch.Tensor]],
+        blocks: list[tuple[torch.Tensor, torch.Tensor] | Mapping[str, torch.Tensor]],
     ) -> None:
-        if self._features is None or self._masks is None:
+        if self._tensors is None:
             raise RuntimeError("pinned rollout backbone cache was cleared")
         if offset != self._stored_samples:
             raise ValueError(
@@ -122,39 +134,48 @@ class PinnedRolloutBackboneCache:
         if not blocks:
             raise ValueError("pinned rollout backbone batch must not be empty")
 
-        validated_blocks: list[tuple[torch.Tensor, torch.Tensor, int, int]] = []
+        validated_blocks: list[tuple[dict[str, torch.Tensor], int, int]] = []
         end = offset
-        for feature, mask in blocks:
-            if feature.device != self._device or mask.device != self._device:
+        for block in blocks:
+            if isinstance(block, Mapping):
+                tensors = dict(block)
+            else:
+                feature, mask = block
+                tensors = {
+                    "backbone_features": feature,
+                    "backbone_attention_mask": mask,
+                }
+            if set(tensors) != set(self._tensors):
+                raise ValueError("pinned rollout backbone tensor fields changed")
+            if any(tensor.device != self._device for tensor in tensors.values()):
                 raise ValueError(
                     "pinned rollout backbone block is on the wrong CUDA device"
                 )
-            if feature.shape[0] != mask.shape[0]:
-                raise ValueError("pinned rollout backbone feature/mask block mismatch")
-            block_size = int(feature.shape[0])
+            batch_sizes = {int(tensor.shape[0]) for tensor in tensors.values()}
+            if len(batch_sizes) != 1:
+                raise ValueError("pinned rollout backbone tensor block mismatch")
+            block_size = batch_sizes.pop()
             block_end = end + block_size
             if block_end > self._samples:
                 raise ValueError("pinned rollout backbone block exceeds cache capacity")
-            if tuple(feature.shape[1:]) != tuple(self._features.shape[1:]):
-                raise ValueError("pinned rollout backbone feature shape changed")
-            if tuple(mask.shape[1:]) != tuple(self._masks.shape[1:]):
-                raise ValueError("pinned rollout backbone mask shape changed")
-            if feature.dtype != self._features.dtype or mask.dtype != self._masks.dtype:
-                raise ValueError("pinned rollout backbone dtype changed")
-            validated_blocks.append((feature, mask, end, block_end))
+            for name, tensor in tensors.items():
+                target = self._tensors[name]
+                if tuple(tensor.shape[1:]) != tuple(target.shape[1:]):
+                    raise ValueError(f"pinned rollout backbone {name} shape changed")
+                if tensor.dtype != target.dtype:
+                    raise ValueError(f"pinned rollout backbone {name} dtype changed")
+            validated_blocks.append((tensors, end, block_end))
             end = block_end
 
         start_event = torch.cuda.Event(enable_timing=True)
         end_event = torch.cuda.Event(enable_timing=True)
         with torch.cuda.stream(self._copy_stream):
             start_event.record(self._copy_stream)
-            for feature, mask, block_offset, block_end in validated_blocks:
-                self._features[block_offset:block_end].copy_(
-                    feature.detach(), non_blocking=True
-                )
-                self._masks[block_offset:block_end].copy_(
-                    mask.detach(), non_blocking=True
-                )
+            for tensors, block_offset, block_end in validated_blocks:
+                for name, tensor in tensors.items():
+                    self._tensors[name][block_offset:block_end].copy_(
+                        tensor.detach(), non_blocking=True
+                    )
             end_event.record(self._copy_stream)
         end_event.synchronize()
         self._d2h_seconds += start_event.elapsed_time(end_event) / 1000.0
@@ -177,38 +198,26 @@ class PinnedRolloutBackboneCache:
             self._h2d_seconds += start_event.elapsed_time(end_event) / 1000.0
 
     def _get_staging_slot(self, sample_count: int) -> dict[str, object]:
-        if self._features is None or self._masks is None:
+        if self._tensors is None:
             raise RuntimeError("pinned rollout backbone cache was cleared")
         slot = self._staging[self._loads % len(self._staging)]
         self._complete_staging_slot(slot)
-        feature_shape = (sample_count, *self._features.shape[1:])
-        mask_shape = (sample_count, *self._masks.shape[1:])
-        feature_staging = slot.get("features")
-        mask_staging = slot.get("masks")
-        if not isinstance(feature_staging, torch.Tensor) or tuple(
-            feature_staging.shape
-        ) != tuple(feature_shape):
-            feature_staging = torch.empty(
-                feature_shape,
-                dtype=self._features.dtype,
-                device="cpu",
-                pin_memory=True,
-            )
-            slot["features"] = feature_staging
-        if not isinstance(mask_staging, torch.Tensor) or tuple(
-            mask_staging.shape
-        ) != tuple(mask_shape):
-            mask_staging = torch.empty(
-                mask_shape,
-                dtype=self._masks.dtype,
-                device="cpu",
-                pin_memory=True,
-            )
-            slot["masks"] = mask_staging
+        staging_tensors = slot.setdefault("tensors", {})
+        assert isinstance(staging_tensors, dict)
+        for name, source in self._tensors.items():
+            shape = (sample_count, *source.shape[1:])
+            staging = staging_tensors.get(name)
+            if not isinstance(staging, torch.Tensor) or tuple(staging.shape) != shape:
+                staging_tensors[name] = torch.empty(
+                    shape,
+                    dtype=source.dtype,
+                    device="cpu",
+                    pin_memory=True,
+                )
         return slot
 
     def load(self, sample_ids: torch.Tensor) -> BackboneOutput:
-        if self._features is None or self._masks is None:
+        if self._tensors is None:
             raise RuntimeError("pinned rollout backbone cache was cleared")
         if self._stored_samples != self._samples:
             raise RuntimeError("pinned rollout backbone cache is incomplete")
@@ -224,32 +233,29 @@ class PinnedRolloutBackboneCache:
             )
 
         slot = self._get_staging_slot(sample_ids.numel())
-        feature_staging = slot["features"]
-        mask_staging = slot["masks"]
-        assert isinstance(feature_staging, torch.Tensor)
-        assert isinstance(mask_staging, torch.Tensor)
+        staging_tensors = slot["tensors"]
+        assert isinstance(staging_tensors, dict)
         gather_start = time.perf_counter()
-        torch.index_select(self._features, 0, sample_ids, out=feature_staging)
-        torch.index_select(self._masks, 0, sample_ids, out=mask_staging)
+        for name, source in self._tensors.items():
+            torch.index_select(source, 0, sample_ids, out=staging_tensors[name])
         self._cpu_gather_seconds += time.perf_counter() - gather_start
 
-        feature_out = torch.empty_like(feature_staging, device=self._device)
-        mask_out = torch.empty_like(mask_staging, device=self._device)
+        outputs = {
+            name: torch.empty_like(staging, device=self._device)
+            for name, staging in staging_tensors.items()
+        }
         stream = torch.cuda.current_stream(self._device)
         start_event = torch.cuda.Event(enable_timing=True)
         end_event = torch.cuda.Event(enable_timing=True)
         start_event.record(stream)
-        feature_out.copy_(feature_staging, non_blocking=True)
-        mask_out.copy_(mask_staging, non_blocking=True)
+        for name, staging in staging_tensors.items():
+            outputs[name].copy_(staging, non_blocking=True)
         end_event.record(stream)
         slot["start_event"] = start_event
         slot["end_event"] = end_event
         self._loads += 1
         self._loaded_samples += sample_ids.numel()
-        return {
-            "backbone_features": feature_out,
-            "backbone_attention_mask": mask_out,
-        }
+        return outputs
 
     def stats(self) -> PinnedRolloutBackboneCacheStats:
         for slot in self._staging:
@@ -257,7 +263,11 @@ class PinnedRolloutBackboneCache:
         staging_bytes = sum(
             value.numel() * value.element_size()
             for slot in self._staging
-            for value in slot.values()
+            for value in (
+                list(slot.get("tensors", {}).values())
+                if isinstance(slot.get("tensors"), dict)
+                else []
+            )
             if isinstance(value, torch.Tensor)
         )
         return PinnedRolloutBackboneCacheStats(
@@ -277,5 +287,4 @@ class PinnedRolloutBackboneCache:
         for slot in self._staging:
             self._complete_staging_slot(slot)
             slot.clear()
-        self._features = None
-        self._masks = None
+        self._tensors = None

@@ -33,8 +33,21 @@ class _Stats:
 class _FakeCache:
     instances = []
 
-    def __init__(self, *, total_samples, feature_example, mask_example, device) -> None:
-        del feature_example, mask_example, device
+    def __init__(
+        self,
+        *,
+        total_samples,
+        feature_example=None,
+        mask_example=None,
+        tensor_examples=None,
+        device,
+    ) -> None:
+        del device
+        if tensor_examples is None:
+            self.tensor_keys = ("backbone_features", "backbone_attention_mask")
+            assert feature_example is not None and mask_example is not None
+        else:
+            self.tensor_keys = tuple(tensor_examples)
         self.samples = total_samples
         self.stored = 0
         self.byte_count = 0
@@ -44,10 +57,14 @@ class _FakeCache:
 
     def store_blocks(self, *, offset, blocks) -> None:
         assert offset == self.stored
-        for feature, mask in blocks:
-            self.stored += feature.shape[0]
+        for block in blocks:
+            if isinstance(block, dict):
+                tensors = tuple(block.values())
+            else:
+                tensors = block
+            self.stored += tensors[0].shape[0]
             self.byte_count += sum(
-                tensor.numel() * tensor.element_size() for tensor in (feature, mask)
+                tensor.numel() * tensor.element_size() for tensor in tensors
             )
 
     def finalize(self) -> None:
@@ -135,12 +152,25 @@ def _batch(
     consumer_rank: int = 5,
     model_version: int = 7,
     lease_id: str = "lease-1",
+    schema: int = 3,
+    tensor_keys: tuple[str, ...] = (
+        "backbone_features",
+        "backbone_attention_mask",
+    ),
 ):
-    blocks = [_block(size) for size in block_sizes]
+    blocks = []
+    for size in block_sizes:
+        feature, mask = _block(size)
+        block = {
+            "backbone_features": feature,
+            "backbone_attention_mask": mask,
+            "image_mask": torch.zeros(size, 3, dtype=torch.bool),
+        }
+        blocks.append(tuple(block[key] for key in tensor_keys))
     tensors = [tensor for block in blocks for tensor in block]
     byte_count = sum(tensor.numel() * tensor.element_size() for tensor in tensors)
     metadata = {
-        "schema": 3,
+        "schema": schema,
         "lease_id": lease_id,
         "batch_index": batch_index,
         "start_block_index": start_block_index,
@@ -154,6 +184,8 @@ def _batch(
         "block_sizes": block_sizes,
         "bytes": byte_count,
     }
+    if schema == 4:
+        metadata["tensor_keys"] = list(tensor_keys)
     return tensors, metadata
 
 
@@ -164,6 +196,7 @@ def _receive(
     expected_samples=6,
     blocks_per_batch=2,
     timeout_seconds=1.0,
+    expected_tensor_keys=("backbone_features", "backbone_attention_mask"),
 ):
     return asyncio.run(
         pinned_feature_stream.receive_pinned_rollout_backbone_stream(
@@ -176,6 +209,7 @@ def _receive(
             blocks_per_batch=blocks_per_batch,
             rollout_group_name="rollout",
             timeout_seconds=timeout_seconds,
+            expected_tensor_keys=expected_tensor_keys,
         )
     )
 
@@ -214,6 +248,64 @@ def test_receive_stream_validates_counts_and_acks_each_batch():
     assert worker.torch_platform.collects == 2
     assert metrics["actor/pinned_feature_samples"] == 6.0
     assert metrics["actor/pinned_feature_batches"] == 2.0
+
+
+def test_receive_n1d7_named_tensor_stream():
+    tensor_keys = (
+        "backbone_features",
+        "backbone_attention_mask",
+        "image_mask",
+    )
+    worker = _FakeWorker(
+        [
+            _batch(
+                batch_index=0,
+                start_block_index=0,
+                offset=0,
+                block_sizes=[2, 2],
+                schema=4,
+                tensor_keys=tensor_keys,
+            ),
+            _batch(
+                batch_index=1,
+                start_block_index=2,
+                offset=4,
+                block_sizes=[2],
+                schema=4,
+                tensor_keys=tensor_keys,
+            ),
+        ]
+    )
+
+    cache, metadata, metrics = _receive(
+        worker,
+        expected_tensor_keys=tensor_keys,
+    )
+
+    assert cache.finalized
+    assert cache.tensor_keys == tensor_keys
+    assert metadata["tensor_keys"] == list(tensor_keys)
+    assert [entry[0]["schema"] for entry in worker.sent] == [4, 4]
+    assert metrics["actor/pinned_feature_samples"] == 6.0
+
+
+def test_receive_rejects_n1d7_tensor_field_mismatch():
+    tensors, metadata = _batch(
+        batch_index=0,
+        start_block_index=0,
+        offset=0,
+        block_sizes=[2, 2],
+        schema=4,
+        tensor_keys=(
+            "backbone_features",
+            "backbone_attention_mask",
+            "image_mask",
+        ),
+    )
+    worker = _FakeWorker([(tensors, metadata)])
+
+    with pytest.raises(RuntimeError, match="tensor fields changed"):
+        _receive(worker)
 
 
 @pytest.mark.parametrize(

@@ -17,7 +17,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from rlinf.utils.backbone_cache import ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE
+from rlinf.utils.backbone_cache import (
+    ROLLOUT_BACKBONE_OUTPUT_FIELDS,
+    ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
+)
 from rlinf.utils.pinned_rollout_cache import PinnedRolloutBackboneCache
 
 
@@ -70,6 +73,9 @@ async def receive_pinned_rollout_backbone_stream(
     blocks_per_batch: int,
     rollout_group_name: str,
     timeout_seconds: float,
+    expected_tensor_keys: tuple[str, ...] = tuple(
+        output_key for _, output_key in ROLLOUT_BACKBONE_OUTPUT_FIELDS
+    ),
 ) -> tuple[PinnedRolloutBackboneCache, dict[str, Any], dict[str, float]]:
     if expected_blocks <= 0 or expected_samples <= 0:
         raise ValueError("pinned backbone stream requires positive expected counts")
@@ -77,6 +83,10 @@ async def receive_pinned_rollout_backbone_stream(
         raise ValueError("pinned backbone batch size must be positive")
     if timeout_seconds <= 0:
         raise ValueError("pinned backbone stream timeout must be positive")
+    if not expected_tensor_keys or len(set(expected_tensor_keys)) != len(
+        expected_tensor_keys
+    ):
+        raise ValueError("pinned backbone tensor keys must be non-empty and unique")
 
     cache: PinnedRolloutBackboneCache | None = None
     stream_metadata: dict[str, Any] | None = None
@@ -113,10 +123,35 @@ async def receive_pinned_rollout_backbone_stream(
             if not isinstance(received, tuple) or len(received) != 2:
                 raise RuntimeError("pinned backbone IPC requires tensors and metadata")
             tensors, metadata = received
-            if not isinstance(metadata, dict) or metadata.get("schema") != 3:
+            if not isinstance(metadata, dict) or metadata.get("schema") not in (3, 4):
                 raise RuntimeError(f"unsupported pinned backbone metadata: {metadata}")
-            if not isinstance(tensors, list) or not tensors or len(tensors) % 2:
-                raise RuntimeError("pinned backbone batch requires feature/mask pairs")
+            schema = int(metadata["schema"])
+            if schema == 3:
+                tensor_keys = tuple(
+                    output_key for _, output_key in ROLLOUT_BACKBONE_OUTPUT_FIELDS
+                )
+            else:
+                raw_tensor_keys = metadata.get("tensor_keys")
+                if (
+                    not isinstance(raw_tensor_keys, list)
+                    or not raw_tensor_keys
+                    or not all(isinstance(key, str) and key for key in raw_tensor_keys)
+                    or len(set(raw_tensor_keys)) != len(raw_tensor_keys)
+                ):
+                    raise RuntimeError("pinned backbone tensor key schema is invalid")
+                tensor_keys = tuple(raw_tensor_keys)
+            if tensor_keys != expected_tensor_keys:
+                raise RuntimeError(
+                    "pinned backbone tensor fields changed: "
+                    f"expected={expected_tensor_keys}, got={tensor_keys}"
+                )
+            tensors_per_block = len(tensor_keys)
+            if (
+                not isinstance(tensors, list)
+                or not tensors
+                or len(tensors) % tensors_per_block
+            ):
+                raise RuntimeError("pinned backbone batch tensor schema is invalid")
             if int(metadata.get("batch_index", -1)) != expected_batch_index:
                 raise RuntimeError("pinned backbone batches arrived out of order")
             if int(metadata.get("start_block_index", -1)) != completed_blocks:
@@ -143,39 +178,54 @@ async def receive_pinned_rollout_backbone_stream(
             )
             if len(block_sizes) != expected_batch_blocks:
                 raise RuntimeError("pinned backbone batch block count mismatch")
-            if len(tensors) != 2 * len(block_sizes) or any(
+            if len(tensors) != tensors_per_block * len(block_sizes) or any(
                 size <= 0 for size in block_sizes
             ):
                 raise RuntimeError("pinned backbone batch tensor schema is invalid")
 
             batch_bytes = 0
             for block_offset, block_size in enumerate(block_sizes):
-                feature = tensors[2 * block_offset]
-                mask = tensors[2 * block_offset + 1]
-                if feature.shape[0] != block_size or mask.shape[0] != block_size:
-                    raise RuntimeError(
-                        "pinned backbone feature/mask block size mismatch"
-                    )
-                blocks.append((feature, mask))
+                block_start = tensors_per_block * block_offset
+                block_tensors = tensors[block_start : block_start + tensors_per_block]
+                if any(tensor.shape[0] != block_size for tensor in block_tensors):
+                    raise RuntimeError("pinned backbone tensor block size mismatch")
+                if schema == 3:
+                    blocks.append(tuple(block_tensors))
+                else:
+                    blocks.append(dict(zip(tensor_keys, block_tensors, strict=True)))
                 batch_bytes += sum(
-                    tensor.numel() * tensor.element_size() for tensor in (feature, mask)
+                    tensor.numel() * tensor.element_size() for tensor in block_tensors
                 )
             if batch_bytes != int(metadata.get("bytes", -1)):
                 raise RuntimeError("pinned backbone batch byte count mismatch")
 
             if cache is None:
-                first_feature, first_mask = blocks[0]
-                cache = PinnedRolloutBackboneCache(
-                    total_samples=expected_samples,
-                    feature_example=first_feature,
-                    mask_example=first_mask,
-                    device=worker.torch_platform.current_device(),
-                )
+                if schema == 3:
+                    first_feature, first_mask = blocks[0]
+                    cache = PinnedRolloutBackboneCache(
+                        total_samples=expected_samples,
+                        feature_example=first_feature,
+                        mask_example=first_mask,
+                        device=worker.torch_platform.current_device(),
+                    )
+                else:
+                    cache = PinnedRolloutBackboneCache(
+                        total_samples=expected_samples,
+                        tensor_examples=blocks[0],
+                        device=worker.torch_platform.current_device(),
+                    )
                 stream_metadata = dict(metadata)
-            elif stream_metadata is None or metadata.get(
-                "lease_id"
-            ) != stream_metadata.get("lease_id"):
-                raise RuntimeError("pinned backbone lease changed within one stream")
+            else:
+                if stream_metadata is None or metadata.get(
+                    "lease_id"
+                ) != stream_metadata.get("lease_id"):
+                    raise RuntimeError(
+                        "pinned backbone lease changed within one stream"
+                    )
+                if metadata.get("schema") != stream_metadata.get("schema"):
+                    raise RuntimeError(
+                        "pinned backbone schema changed within one stream"
+                    )
 
             cache.store_blocks(offset=completed_samples, blocks=blocks)
             completed_blocks += len(block_sizes)
@@ -196,7 +246,7 @@ async def receive_pinned_rollout_backbone_stream(
             worker.torch_platform.ipc_collect()
             worker.send(
                 {
-                    "schema": 3,
+                    "schema": schema,
                     "status": "ok",
                     "lease_id": lease_id,
                     "batch_index": expected_batch_index,
@@ -226,7 +276,7 @@ async def receive_pinned_rollout_backbone_stream(
         if isinstance(metadata, dict) and metadata.get("lease_id"):
             worker.send(
                 {
-                    "schema": 3,
+                    "schema": int(metadata.get("schema", 3)),
                     "status": "error",
                     "lease_id": str(metadata["lease_id"]),
                     "batch_index": int(metadata.get("batch_index", -1)),

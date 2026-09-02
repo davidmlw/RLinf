@@ -19,6 +19,7 @@ from torch import nn
 
 ROLLOUT_BACKBONE_FEATURE_KEY = "rollout_backbone_features"
 ROLLOUT_BACKBONE_MASK_KEY = "rollout_backbone_attention_mask"
+ROLLOUT_BACKBONE_IMAGE_MASK_KEY = "rollout_backbone_image_mask"
 ROLLOUT_BACKBONE_SAMPLE_IDS_KEY = "_rlinf_rollout_backbone_sample_ids"
 ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE = 1 << 40
 ROLLOUT_BACKBONE_TRANSPORT_KEY = "rollout_backbone_feature_transport"
@@ -36,7 +37,37 @@ ROLLOUT_BACKBONE_INPUT_KEYS = (
     "eagle_image_sizes",
 )
 
+ROLLOUT_BACKBONE_N1D7_INPUT_KEYS = (
+    "input_ids",
+    "attention_mask",
+    "pixel_values",
+    "image_grid_thw",
+)
+
+ROLLOUT_BACKBONE_OUTPUT_FIELDS = (
+    (ROLLOUT_BACKBONE_FEATURE_KEY, "backbone_features"),
+    (ROLLOUT_BACKBONE_MASK_KEY, "backbone_attention_mask"),
+)
+ROLLOUT_BACKBONE_N1D7_OUTPUT_FIELDS = (
+    *ROLLOUT_BACKBONE_OUTPUT_FIELDS,
+    (ROLLOUT_BACKBONE_IMAGE_MASK_KEY, "image_mask"),
+)
+
 BackboneOutput = dict[str, torch.Tensor]
+
+
+def rollout_backbone_contract(
+    model_type: str,
+) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
+    """Return ordered transported outputs and removable raw inputs."""
+    if model_type == "gr00t":
+        return ROLLOUT_BACKBONE_OUTPUT_FIELDS, ROLLOUT_BACKBONE_INPUT_KEYS
+    if model_type == "gr00t_n1d7":
+        return ROLLOUT_BACKBONE_N1D7_OUTPUT_FIELDS, ROLLOUT_BACKBONE_N1D7_INPUT_KEYS
+    raise ValueError(
+        "rollout backbone feature reuse supports only gr00t and gr00t_n1d7; "
+        f"got {model_type!r}"
+    )
 
 
 def rollout_backbone_channel_key(actor_rank: int) -> str:
@@ -94,23 +125,23 @@ def filter_rollout_backbone_transport(
     forward_inputs: dict[str, torch.Tensor],
     *,
     reuse_enabled: bool,
+    model_type: str = "gr00t",
 ) -> bool:
-    """Keep either raw Eagle inputs or a complete reusable backbone output."""
+    """Keep either raw model inputs or a complete reusable backbone output."""
+    output_fields, input_keys = rollout_backbone_contract(model_type)
+    output_keys = tuple(transport_key for transport_key, _ in output_fields)
     if not reuse_enabled:
-        forward_inputs.pop(ROLLOUT_BACKBONE_FEATURE_KEY, None)
-        forward_inputs.pop(ROLLOUT_BACKBONE_MASK_KEY, None)
+        for key in output_keys:
+            forward_inputs.pop(key, None)
         return False
 
-    has_complete_feature = all(
-        key in forward_inputs
-        for key in (ROLLOUT_BACKBONE_FEATURE_KEY, ROLLOUT_BACKBONE_MASK_KEY)
-    )
+    has_complete_feature = all(key in forward_inputs for key in output_keys)
     if not has_complete_feature:
-        forward_inputs.pop(ROLLOUT_BACKBONE_FEATURE_KEY, None)
-        forward_inputs.pop(ROLLOUT_BACKBONE_MASK_KEY, None)
+        for key in output_keys:
+            forward_inputs.pop(key, None)
         return False
 
-    for key in ROLLOUT_BACKBONE_INPUT_KEYS:
+    for key in input_keys:
         forward_inputs.pop(key, None)
     return True
 
@@ -122,7 +153,7 @@ def validate_frozen_backbone(backbone: nn.Module) -> None:
     trainable = sum(
         parameter.numel() for parameter in parameters if parameter.requires_grad
     )
-    if trainable:
+    if trainable and not getattr(backbone, "_rlinf_frozen_verified", False):
         raise ValueError(
             "backbone cache requires every backbone parameter to be frozen; "
             f"found {trainable} trainable parameters"
