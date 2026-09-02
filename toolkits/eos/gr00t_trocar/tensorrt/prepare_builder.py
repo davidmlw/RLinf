@@ -114,6 +114,7 @@ def prepare(
                 str(uv),
                 "pip",
                 "install",
+                "--no-cache",
                 "--python",
                 str(staging / "bin" / "python"),
                 "--reinstall",
