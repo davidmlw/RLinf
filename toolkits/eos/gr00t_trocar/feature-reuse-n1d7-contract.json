@@ -1,0 +1,64 @@
+{
+  "schema": "rlinf.eos.gr00t-n1d7-feature-reuse.v1",
+  "created": "2026-09-02",
+  "source_base": "0f9ea98c7a6d9e3ade24e8f4846c64d3b135dbcc",
+  "operational_parent": "77cdcc9a41542751d2288fc56b7c1de5d8c4a7ce",
+  "reference_implementation": {
+    "branch": "david/w74/gr00t-feature-reuse-ab",
+    "revision": "7cc283fca608f0864469913d673daf691d207a7f",
+    "model_family": "GR00T N1.5"
+  },
+  "model": {
+    "family": "GR00T N1.7",
+    "type": "gr00t_n1d7",
+    "frozen_backbone": true,
+    "backbone_eval": true,
+    "raw_input_keys": [
+      "input_ids",
+      "attention_mask",
+      "pixel_values",
+      "image_grid_thw"
+    ],
+    "transported_output_keys": [
+      "backbone_features",
+      "backbone_attention_mask",
+      "image_mask"
+    ]
+  },
+  "transport": {
+    "kind": "borrowed_ipc_pinned",
+    "wire_schema": 4,
+    "blocks_per_batch": 16,
+    "producer": "Rollout",
+    "consumer": "Actor",
+    "producer_tensor_lifetime": "until matching Actor ACK",
+    "actor_storage": "pinned_cpu",
+    "fallback_allowed": false
+  },
+  "comparison": {
+    "same_source_revision": true,
+    "baseline": {
+      "skip_unused_lm_head": false,
+      "rollout_backbone_feature_transport": null
+    },
+    "candidate": {
+      "skip_unused_lm_head": true,
+      "rollout_backbone_feature_transport": "borrowed_ipc_pinned",
+      "pinned_feature_verify_trajectory": false
+    },
+    "debug_transport_parity": {
+      "pinned_feature_verify_trajectory": true
+    },
+    "steady_steps": [
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  "limitations": [
+    "Both arms use the bounded frozen-backbone implementation needed to fit the N1.7 workload on H100-80GB.",
+    "The baseline computes and discards the unused vocabulary projection in bounded row chunks; it is not timing-equivalent to the upstream unbounded implementation.",
+    "A five-step witness establishes execution, transport integrity, finite numerics, and performance only; it does not establish task convergence."
+  ]
+}

@@ -271,6 +271,9 @@ def test_site_freezes_canonical_chunk16_contract(tmp_path: Path) -> None:
         "eval_envs": 8,
         "eval_fixed_resets": True,
         "eval_video": True,
+        "variant": "baseline",
+        "feature_transport": "none",
+        "pinned_feature_verify_trajectory": False,
         "newton_num_substeps": 2,
     }
     command = MODULE._submission_argv(site)
@@ -289,7 +292,9 @@ def test_site_freezes_canonical_chunk16_contract(tmp_path: Path) -> None:
     ]
 
 
-def test_bootstrap_git_lfs_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_bootstrap_git_lfs_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     git_lfs_bin = tmp_path / "git-lfs"
     git_lfs_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     git_lfs_bin.chmod(0o755)
@@ -588,10 +593,9 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
         )
     )
     migration = json.loads(
-        (
-            ROOT
-            / "toolkits/eos/gr00t_trocar/migration-n1d5-to-n1d7.json"
-        ).read_text(encoding="utf-8")
+        (ROOT / "toolkits/eos/gr00t_trocar/migration-n1d5-to-n1d7.json").read_text(
+            encoding="utf-8"
+        )
     )
     script = (ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh").read_text(
         encoding="utf-8"
@@ -601,31 +605,40 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
             encoding="utf-8"
         )
     )
+    candidate_site = json.loads(
+        (
+            ROOT / "toolkits/eos/gr00t_trocar/site.n1d7-feature-reuse.eos.template.json"
+        ).read_text(encoding="utf-8")
+    )
+    feature_contract = json.loads(
+        (ROOT / "toolkits/eos/gr00t_trocar/feature-reuse-n1d7-contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
     config = (
         ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-baseline-chunk16.yaml"
+    ).read_text(encoding="utf-8")
+    candidate_config = (
+        ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-feature-reuse-chunk16.yaml"
     ).read_text(encoding="utf-8")
     runner = (ROOT / "toolkits/eos/gr00t_trocar/run_n1d7.sh").read_text(
         encoding="utf-8"
     )
-    extension = (
-        ROOT / "toolkits/eos/gr00t_trocar/w68_rlinf_extension.py"
-    ).read_text(encoding="utf-8")
+    extension = (ROOT / "toolkits/eos/gr00t_trocar/w68_rlinf_extension.py").read_text(
+        encoding="utf-8"
+    )
     installer = (ROOT / "requirements/install.sh").read_text(encoding="utf-8")
 
     assert spec["torch_version"] == "2.11.0"
     assert spec["transformers_version"] == "4.57.3"
     assert spec["installer_model"] == "gr00t_n1d7"
-    assert spec["gr00t_revision"] == (
-        "51d4c89f72fda44cbf77285c6a8114b52676b8a1"
-    )
-    assert 'installer_model=$(spec_value_or installer_model gr00t)' in script
+    assert spec["gr00t_revision"] == ("51d4c89f72fda44cbf77285c6a8114b52676b8a1")
+    assert "installer_model=$(spec_value_or installer_model gr00t)" in script
     assert 'embodied --model "$installer_model" --env isaaclab' in script
     assert script.count('expected_transformers == "4.57.3"') == 2
     assert script.count("Qwen3VLForConditionalGeneration") == 4
 
-    assert manifest["model"]["revision"] == (
-        "2fc962b973bccdd5d8ce4f67cc63b264d6886495"
-    )
+    assert manifest["model"]["revision"] == ("2fc962b973bccdd5d8ce4f67cc63b264d6886495")
     assert manifest["backbone"]["revision"] == (
         "9ce19a195e423419c349abfc86fd07178b230561"
     )
@@ -642,9 +655,7 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
         "backbone_attention_mask",
         "image_mask",
     ]
-    assert migration["preserved_workload"]["physical_actions_per_outer_step"] == (
-        65536
-    )
+    assert migration["preserved_workload"]["physical_actions_per_outer_step"] == (65536)
     assert (
         migration["comparison_boundary"]["cross_model_performance_delta_allowed"]
         is False
@@ -652,10 +663,17 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
 
     assert site["runtime"]["gr00t_root"].endswith("/inputs/Isaac-GR00T-N1.7")
     assert site["runtime"]["model_root"].endswith("/inputs/GR00T-N1.7-3B")
-    assert site["runtime"]["backbone_model_root"].endswith(
-        "/inputs/Cosmos-Reason2-2B"
-    )
+    assert site["runtime"]["backbone_model_root"].endswith("/inputs/Cosmos-Reason2-2B")
     assert site["experiment"]["output_root"].endswith("/runs/W77")
+    assert candidate_site["experiment"]["config"].endswith(
+        "/config-n1d7-feature-reuse-chunk16.yaml"
+    )
+    assert feature_contract["transport"]["wire_schema"] == 4
+    assert feature_contract["model"]["transported_output_keys"] == [
+        "backbone_features",
+        "backbone_attention_mask",
+        "image_mask",
+    ]
     assert "model_type: gr00t_n1d7" in config
     assert config.count("embodiment_tag_id: 10") == 2
     assert "use_orig_params: true" in config
@@ -666,6 +684,14 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
     assert config.count("unused_logits_chunk_rows: 4096") == 2
     assert migration["to"]["baseline_computes_unused_logits"] is True
     assert "rollout_backbone_feature_transport" not in config
+    assert candidate_config.count("skip_unused_lm_head: true") == 2
+    assert "rollout_backbone_feature_transport: borrowed_ipc_pinned" in candidate_config
+    candidate_contract = MODULE._baseline_contract(
+        ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-feature-reuse-chunk16.yaml"
+    )
+    assert candidate_contract["variant"] == "feature_reuse"
+    assert candidate_contract["feature_transport"] == "borrowed_ipc_pinned"
+    assert candidate_contract["pinned_feature_verify_trajectory"] is False
     assert "W77_BACKBONE_MODEL_ROOT" in runner
     assert "W77_TROCAR_METADATA" in runner
     assert 'embodiment_id_mapping={"new_embodiment": 10}' in extension

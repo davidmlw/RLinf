@@ -168,9 +168,7 @@ def _bootstrap_git_lfs_path() -> None:
     path = Path(value)
     if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
         raise WorkflowError("W73_GIT_LFS_BIN must be an absolute executable file")
-    os.environ["PATH"] = os.pathsep.join(
-        [str(path.parent), os.environ.get("PATH", "")]
-    )
+    os.environ["PATH"] = os.pathsep.join([str(path.parent), os.environ.get("PATH", "")])
 
 
 def _git_dependency_inputs_sha256(root: Path) -> str:
@@ -277,7 +275,7 @@ def _validate_provenance(value: object) -> dict[str, object]:
 
 
 def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
-    """Parse and validate the canonical feature-free chunk16 workload."""
+    """Parse and validate a canonical baseline or feature-reuse workload."""
     probe = subprocess.run(
         [
             sys.executable,
@@ -306,6 +304,7 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
         actor = cfg["actor"]
         actor_model = actor["model"]
         rollout = cfg["rollout"]
+        rollout_model = rollout["model"]
         runner = cfg["runner"]
         eval_env = cfg["env"]["eval"]
         chunks = int(actor_model["num_action_chunks"])
@@ -365,20 +364,89 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
         "eval_video": True,
     }:
         raise WorkflowError(f"config algorithm mismatch: {semantic}")
-    forbidden = {
+    deprecated = {
         "reuse_rollout_backbone_features",
-        "rollout_backbone_feature_transport",
-        "pinned_feature_ipc_batch_blocks",
-        "pinned_feature_verify_trajectory",
         "borrowed_feature_ipc_verify_trajectory",
         "gpu_feature_capacity_probe",
     }
-    present = forbidden.intersection(actor_model) | forbidden.intersection(rollout)
+    present = deprecated.intersection(actor_model) | deprecated.intersection(rollout)
     if present:
-        raise WorkflowError(
-            f"feature-reuse fields are forbidden in baseline: {sorted(present)}"
-        )
-    return {**actual, **semantic}
+        raise WorkflowError(f"deprecated feature-reuse fields found: {sorted(present)}")
+
+    feature_transport = actor_model.get("rollout_backbone_feature_transport")
+    if actor_model.get("model_type") == "gr00t_n1d7":
+        n1d7_common = {
+            "actor_bounded_backbone": actor_model.get("bounded_frozen_backbone"),
+            "rollout_bounded_backbone": rollout_model.get("bounded_frozen_backbone"),
+        }
+        expected_n1d7_common = {
+            "actor_bounded_backbone": True,
+            "rollout_bounded_backbone": True,
+        }
+        if n1d7_common != expected_n1d7_common:
+            raise WorkflowError(
+                "GR00T N1.7 bounded-backbone mismatch: "
+                f"expected {expected_n1d7_common}, found {n1d7_common}"
+            )
+    if feature_transport is None:
+        forbidden = {
+            "pinned_feature_ipc_batch_blocks",
+            "pinned_feature_ipc_timeout_seconds",
+            "pinned_feature_verify_trajectory",
+        }
+        present = forbidden.intersection(rollout)
+        if present:
+            raise WorkflowError(
+                f"feature-reuse fields require actor.model transport: {sorted(present)}"
+            )
+        if actor_model.get("model_type") == "gr00t_n1d7":
+            baseline_logits = {
+                "actor_skip_unused_logits": actor_model.get("skip_unused_lm_head"),
+                "rollout_skip_unused_logits": rollout_model.get("skip_unused_lm_head"),
+            }
+            if baseline_logits != {
+                "actor_skip_unused_logits": False,
+                "rollout_skip_unused_logits": False,
+            }:
+                raise WorkflowError(
+                    "GR00T N1.7 baseline must compute the unused logits: "
+                    f"{baseline_logits}"
+                )
+        variant = "baseline"
+        verify_trajectory = False
+    else:
+        candidate = {
+            "transport": feature_transport,
+            "actor_skip_unused_logits": actor_model.get("skip_unused_lm_head"),
+            "rollout_skip_unused_logits": rollout_model.get("skip_unused_lm_head"),
+            "batch_blocks": rollout.get("pinned_feature_ipc_batch_blocks"),
+            "timeout_seconds": rollout.get("pinned_feature_ipc_timeout_seconds"),
+        }
+        expected_candidate = {
+            "transport": "borrowed_ipc_pinned",
+            "actor_skip_unused_logits": True,
+            "rollout_skip_unused_logits": True,
+            "batch_blocks": 16,
+            "timeout_seconds": 300.0,
+        }
+        if candidate != expected_candidate:
+            raise WorkflowError(
+                "feature-reuse config mismatch: "
+                f"expected {expected_candidate}, found {candidate}"
+            )
+        verify_trajectory = rollout.get("pinned_feature_verify_trajectory")
+        if not isinstance(verify_trajectory, bool):
+            raise WorkflowError(
+                "rollout.pinned_feature_verify_trajectory must be a boolean"
+            )
+        variant = "feature_reuse"
+    return {
+        **actual,
+        **semantic,
+        "variant": variant,
+        "feature_transport": feature_transport or "none",
+        "pinned_feature_verify_trajectory": verify_trajectory,
+    }
 
 
 def _load_site(
@@ -1320,9 +1388,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             "W73_FLASH_ATTN_WHEEL": runtime["flash_attn_wheel"],
             "W73_FLASH_ATTN_WHEEL_SHA256": runtime["flash_attn_wheel_sha256"],
             "W73_TORCHCODEC_WHEEL": runtime["torchcodec_wheel"],
-            "W73_TORCHCODEC_WHEEL_SHA256": runtime[
-                "torchcodec_wheel_sha256"
-            ],
+            "W73_TORCHCODEC_WHEEL_SHA256": runtime["torchcodec_wheel_sha256"],
         }
     )
     remaining = max(1, deadline - int(time.time()))
@@ -1552,9 +1618,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             "W73_HF_CACHE": runtime["hf_cache"],
             "W73_TASK_OVERLAY_ROOT": runtime["task_overlay_root"],
             "W73_SANITIZED_TRAY_USD": runtime["sanitized_tray_usd"],
-            "W73_HEALTHCARE_ASSETS_ARCHIVE": runtime[
-                "healthcare_assets_archive"
-            ],
+            "W73_HEALTHCARE_ASSETS_ARCHIVE": runtime["healthcare_assets_archive"],
             "W73_PYTHON_DEPS": os.pathsep.join(runtime["python_deps"]),
             "W73_MAX_STEPS": str(experiment["max_steps"]),
             "W73_VAL_CHECK_INTERVAL": str(experiment["val_check_interval"]),
