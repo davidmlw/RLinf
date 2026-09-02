@@ -1,0 +1,79 @@
+{
+  "schema": "rlinf.eos.gr00t-migration.v1",
+  "created": "2026-09-02",
+  "source_base": "0f9ea98c7a6d9e3ade24e8f4846c64d3b135dbcc",
+  "from": {
+    "model_family": "GR00T N1.5",
+    "model_type": "gr00t",
+    "checkpoint_kind": "assemble_trocar_finetuned",
+    "model_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/models/Assemble_Trocar",
+    "model_manifest_sha256": "0ac04c0773e3dc7835da136eda22d6641e0dfe38d2e025385d061744c076f2b8",
+    "isaac_gr00t_revision": "4af2b622892f7dcb5aae5a3fb70bcb02dc217b96",
+    "transformers_version": "4.51.3",
+    "data_config_class": "gr00t_config:IsaacLabDataConfig",
+    "embodiment_tag": "new_embodiment",
+    "embodiment_projector_id": 31,
+    "backbone_input_keys": [
+      "eagle_input_ids",
+      "eagle_attention_mask",
+      "eagle_pixel_values",
+      "eagle_image_sizes"
+    ],
+    "backbone_output_keys": [
+      "backbone_features",
+      "backbone_attention_mask"
+    ],
+    "fsdp_use_orig_params": false
+  },
+  "to": {
+    "model_family": "GR00T N1.7",
+    "model_type": "gr00t_n1d7",
+    "checkpoint_kind": "base_not_trocar_finetuned",
+    "model_repository": "nvidia/GR00T-N1.7-3B",
+    "model_revision": "2fc962b973bccdd5d8ce4f67cc63b264d6886495",
+    "backbone_repository": "nvidia/Cosmos-Reason2-2B",
+    "backbone_revision": "9ce19a195e423419c349abfc86fd07178b230561",
+    "isaac_gr00t_revision": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
+    "transformers_version": "4.57.3",
+    "data_config_class": "n1d7_trocar",
+    "embodiment_tag": "new_embodiment",
+    "embodiment_projector_id": 10,
+    "statistics_source": "N1.5 Assemble Trocar experiment_cfg/metadata.json",
+    "backbone_input_keys": [
+      "input_ids",
+      "attention_mask",
+      "pixel_values",
+      "image_grid_thw"
+    ],
+    "backbone_output_keys": [
+      "backbone_features",
+      "backbone_attention_mask",
+      "image_mask"
+    ],
+    "backbone_trainable_parameters": 0,
+    "fsdp_use_orig_params": true
+  },
+  "preserved_workload": {
+    "hardware": "8xH100-80GB",
+    "environment": "Assemble Trocar Newton/MJWarp",
+    "global_environments": 64,
+    "newton_num_substeps": 2,
+    "action_chunks": 16,
+    "physical_actions_per_outer_step": 65536,
+    "policy_decisions_per_outer_step": 4096,
+    "global_batch_size": 2048,
+    "micro_batch_size": 128,
+    "ppo_epochs": 4,
+    "optimizer_updates_per_outer_step": 8,
+    "logprob_type": "action_level",
+    "reward_type": "chunk_level",
+    "actor_learning_rate": 2e-05,
+    "environment_action_dim": 28,
+    "denoising_steps": 4
+  },
+  "comparison_boundary": {
+    "cross_model_performance_delta_allowed": false,
+    "reason": "The N1.7 input is a base checkpoint and changes model, processor, backbone, runtime, and FSDP contracts.",
+    "n1d7_short_witness_claim": "execution_and_finite_numerics_only"
+  }
+}

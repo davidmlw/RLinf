@@ -587,6 +587,12 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
             encoding="utf-8"
         )
     )
+    migration = json.loads(
+        (
+            ROOT
+            / "toolkits/eos/gr00t_trocar/migration-n1d5-to-n1d7.json"
+        ).read_text(encoding="utf-8")
+    )
     script = (ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh").read_text(
         encoding="utf-8"
     )
@@ -628,6 +634,20 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
     )
     assert manifest["backbone"]["files"]["model.safetensors"] == (
         "fa5a6e6ef4fce40216b185cc48a3b24d31637ac3e2ba69c107ed1f389c1e6ede"
+    )
+    assert migration["from"]["embodiment_projector_id"] == 31
+    assert migration["to"]["embodiment_projector_id"] == 10
+    assert migration["to"]["backbone_output_keys"] == [
+        "backbone_features",
+        "backbone_attention_mask",
+        "image_mask",
+    ]
+    assert migration["preserved_workload"]["physical_actions_per_outer_step"] == (
+        65536
+    )
+    assert (
+        migration["comparison_boundary"]["cross_model_performance_delta_allowed"]
+        is False
     )
 
     assert site["runtime"]["gr00t_root"].endswith("/inputs/Isaac-GR00T-N1.7")
