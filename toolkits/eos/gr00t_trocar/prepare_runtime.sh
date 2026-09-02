@@ -193,7 +193,6 @@ import torchaudio
 import torchcodec
 import torchvision
 from torchcodec.decoders import VideoDecoder
-from transformers.image_utils import VideoInput
 
 (
     expected_torch,
@@ -206,6 +205,20 @@ from transformers.image_utils import VideoInput
     expected_numpy,
     expected_transformers,
 ) = sys.argv[1:]
+
+if expected_transformers == "4.51.3":
+    from transformers.image_utils import VideoInput
+
+    if VideoInput is None:
+        raise SystemExit("runtime Transformers VideoInput import failed")
+elif expected_transformers == "4.57.3":
+    from transformers import Qwen3VLForConditionalGeneration, Qwen3VLProcessor
+
+    if Qwen3VLForConditionalGeneration is None or Qwen3VLProcessor is None:
+        raise SystemExit("runtime Transformers Qwen3-VL import failed")
+else:
+    raise SystemExit(f"unsupported Transformers probe: {expected_transformers}")
+
 expected_build = f"{expected_torch}+{expected_backend}"
 if not torch.__version__.startswith(expected_build):
     raise SystemExit(
@@ -223,8 +236,6 @@ if torchcodec.__version__ != expected_torchcodec:
     )
 if VideoDecoder is None:
     raise SystemExit("runtime TorchCodec decoder import failed")
-if VideoInput is None:
-    raise SystemExit("runtime Transformers VideoInput import failed")
 if not torchvision.__version__.startswith(f"{expected_torchvision}+{expected_backend}"):
     raise SystemExit(
         "runtime torchvision mismatch: "
@@ -383,7 +394,6 @@ import torchaudio
 import torchcodec
 import torchvision
 from torchcodec.decoders import VideoDecoder
-from transformers.image_utils import VideoInput
 
 manifest_path = Path(sys.argv[1])
 spec_sha = sys.argv[2]
@@ -404,6 +414,19 @@ expected_transformers = sys.argv[16]
 flash_attn_wheel_sha256 = sys.argv[17]
 torchcodec_wheel_sha256 = sys.argv[18]
 
+if expected_transformers == "4.51.3":
+    from transformers.image_utils import VideoInput
+
+    if VideoInput is None:
+        raise SystemExit("unexpected Transformers VideoInput import failure")
+elif expected_transformers == "4.57.3":
+    from transformers import Qwen3VLForConditionalGeneration, Qwen3VLProcessor
+
+    if Qwen3VLForConditionalGeneration is None or Qwen3VLProcessor is None:
+        raise SystemExit("unexpected Transformers Qwen3-VL import failure")
+else:
+    raise SystemExit(f"unsupported Transformers probe: {expected_transformers}")
+
 expected_build = f"{expected_torch}+{expected_backend}"
 if not torch.__version__.startswith(expected_build):
     raise SystemExit(f"unexpected Torch build: {torch.__version__}")
@@ -413,8 +436,6 @@ if torchcodec.__version__ != expected_torchcodec:
     raise SystemExit(f"unexpected TorchCodec build: {torchcodec.__version__}")
 if VideoDecoder is None:
     raise SystemExit("unexpected TorchCodec decoder import failure")
-if VideoInput is None:
-    raise SystemExit("unexpected Transformers VideoInput import failure")
 if not torchvision.__version__.startswith(f"{expected_torchvision}+{expected_backend}"):
     raise SystemExit(f"unexpected torchvision build: {torchvision.__version__}")
 if not torchaudio.__version__.startswith(f"{expected_torchaudio}+{expected_backend}"):

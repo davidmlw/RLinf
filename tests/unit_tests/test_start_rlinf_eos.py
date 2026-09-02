@@ -613,6 +613,8 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
     )
     assert 'installer_model=$(spec_value_or installer_model gr00t)' in script
     assert 'embodied --model "$installer_model" --env isaaclab' in script
+    assert script.count('expected_transformers == "4.57.3"') == 2
+    assert script.count("Qwen3VLForConditionalGeneration") == 4
 
     assert manifest["model"]["revision"] == (
         "2fc962b973bccdd5d8ce4f67cc63b264d6886495"
