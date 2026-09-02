@@ -590,6 +590,19 @@ def _load_n1d7_trocar_model(model_cfg, torch_dtype: torch.dtype) -> object:
     # future feature-reuse boundary, so fail closed unless it is fully frozen.
     model.backbone.requires_grad_(False)
     model.backbone.eval()
+    bounded_backbone = bool(model_cfg.get("bounded_frozen_backbone", False))
+    skip_unused_logits = bool(model_cfg.get("skip_unused_lm_head", False))
+    if skip_unused_logits and not bounded_backbone:
+        raise ValueError(
+            "skip_unused_lm_head requires bounded_frozen_backbone for GR00T N1.7"
+        )
+    model.use_bounded_frozen_backbone = bounded_backbone
+    model.compute_unused_backbone_logits = not skip_unused_logits
+    model.unused_logits_chunk_rows = int(
+        model_cfg.get("unused_logits_chunk_rows", 4096)
+    )
+    if model.unused_logits_chunk_rows <= 0:
+        raise ValueError("unused_logits_chunk_rows must be positive")
     model.to(torch_dtype)
     if model_cfg.rl_head_config.add_value_head:
         seed = model_cfg.get("value_head_init_seed", None)
@@ -619,10 +632,14 @@ def _load_n1d7_trocar_model(model_cfg, torch_dtype: torch.dtype) -> object:
             f"GR00T N1.7 backbone must be frozen, found {trainable_backbone} trainable parameters"
         )
     logger.info(
-        "Loaded GR00T N1.7 Trocar model model=%s backbone=%s metadata=%s",
+        "Loaded GR00T N1.7 Trocar model model=%s backbone=%s metadata=%s "
+        "bounded_backbone=%s compute_unused_logits=%s logits_chunk_rows=%d",
         model_path,
         backbone_path,
         metadata_path,
+        model.use_bounded_frozen_backbone,
+        model.compute_unused_backbone_logits,
+        model.unused_logits_chunk_rows,
     )
     return model
 

@@ -661,6 +661,10 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
     assert "use_orig_params: true" in config
     assert "gradient_checkpointing: true" in config
     assert migration["to"]["fsdp_gradient_checkpointing"] is True
+    assert config.count("bounded_frozen_backbone: true") == 2
+    assert config.count("skip_unused_lm_head: false") == 2
+    assert config.count("unused_logits_chunk_rows: 4096") == 2
+    assert migration["to"]["baseline_computes_unused_logits"] is True
     assert "rollout_backbone_feature_transport" not in config
     assert "W77_BACKBONE_MODEL_ROOT" in runner
     assert "W77_TROCAR_METADATA" in runner

@@ -30,6 +30,9 @@ from transformers import Qwen3VLForConditionalGeneration, Qwen3VLProcessor
 from transformers.feature_extraction_utils import BatchFeature
 
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
+from rlinf.models.embodiment.gr00t.gr00t_n1d7.bounded_backbone import (
+    run_bounded_frozen_qwen3_backbone,
+)
 from rlinf.models.embodiment.gr00t.simulation_io import (
     ACTION_CONVERSION_N1D7,
     OBS_CONVERSION,
@@ -920,6 +923,21 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         else:
             raise NotImplementedError
 
+    def _forward_backbone(self, backbone_inputs: BatchFeature) -> BatchFeature:
+        if not getattr(self, "use_bounded_frozen_backbone", False):
+            return self.backbone(backbone_inputs)
+        output = run_bounded_frozen_qwen3_backbone(
+            self.backbone,
+            backbone_inputs,
+            compute_unused_logits=getattr(
+                self, "compute_unused_backbone_logits", True
+            ),
+            logits_chunk_rows=int(
+                getattr(self, "unused_logits_chunk_rows", 4096)
+            ),
+        )
+        return BatchFeature(data=output)
+
     def default_forward(
         self,
         forward_inputs: dict[str, torch.Tensor],
@@ -937,7 +955,7 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         )
 
         backbone_inputs, action_inputs = self.prepare_input(normalized_input)
-        backbone_outputs = self.backbone(backbone_inputs)
+        backbone_outputs = self._forward_backbone(backbone_inputs)
 
         chains = forward_inputs["chains"]
         denoise_inds = forward_inputs["denoise_inds"]
@@ -1140,7 +1158,7 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         normalized_input = _normalize_gr00t_forward_inputs(normalized_input)
 
         backbone_inputs, action_inputs = self.prepare_input(normalized_input)
-        backbone_outputs = self.backbone(backbone_inputs)
+        backbone_outputs = self._forward_backbone(backbone_inputs)
         action_head_outputs, rlinf_outputs = self.action_head.get_rl_action(
             backbone_outputs, action_inputs, mode=mode
         )

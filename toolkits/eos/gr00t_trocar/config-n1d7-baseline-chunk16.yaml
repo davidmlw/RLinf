@@ -213,6 +213,9 @@ rollout:
   model:
     model_path: /models/GR00T-N1.7-3B
     backbone_model_path: ${oc.env:W77_BACKBONE_MODEL_ROOT}
+    bounded_frozen_backbone: true
+    skip_unused_lm_head: false
+    unused_logits_chunk_rows: 4096
     precision: bf16
     obs_converter_type: dex3
     embodiment_tag: new_embodiment
@@ -240,6 +243,9 @@ actor:
     model_type: gr00t_n1d7
     model_path: /models/GR00T-N1.7-3B
     backbone_model_path: ${oc.env:W77_BACKBONE_MODEL_ROOT}
+    bounded_frozen_backbone: true
+    skip_unused_lm_head: false
+    unused_logits_chunk_rows: 4096
     precision: bf16
     trust_remote_code: true
     is_lora: false

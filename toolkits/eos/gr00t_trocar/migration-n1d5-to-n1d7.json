@@ -52,7 +52,10 @@
     ],
     "backbone_trainable_parameters": 0,
     "fsdp_use_orig_params": true,
-    "fsdp_gradient_checkpointing": true
+    "fsdp_gradient_checkpointing": true,
+    "bounded_frozen_backbone": true,
+    "baseline_computes_unused_logits": true,
+    "unused_logits_chunk_rows": 4096
   },
   "preserved_workload": {
     "hardware": "8xH100-80GB",
