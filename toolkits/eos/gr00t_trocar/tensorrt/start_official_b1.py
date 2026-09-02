@@ -294,6 +294,55 @@ def _logged_run(command: list[str], output: Path, error: Path) -> None:
         raise WorkflowError(f"command failed ({completed.returncode}): {command}")
 
 
+def _ensure_ffmpeg(attempt: Path) -> None:
+    """Install and record the image's distribution FFmpeg in this container."""
+    environment = dict(os.environ)
+    environment["DEBIAN_FRONTEND"] = "noninteractive"
+    commands = (
+        ["apt-get", "update"],
+        ["apt-get", "install", "-y", "--no-install-recommends", "ffmpeg"],
+    )
+    with (
+        (attempt / "logs/ffmpeg-install.out").open("w", encoding="utf-8") as stdout,
+        (attempt / "logs/ffmpeg-install.err").open("w", encoding="utf-8") as stderr,
+    ):
+        for command in commands:
+            completed = subprocess.run(
+                command,
+                env=environment,
+                stdout=stdout,
+                stderr=stderr,
+                check=False,
+            )
+            if completed.returncode:
+                raise WorkflowError(
+                    f"FFmpeg system dependency failed ({completed.returncode}): {command}"
+                )
+    ffmpeg = subprocess.check_output(["ffmpeg", "-version"], text=True).splitlines()
+    packages = subprocess.check_output(
+        [
+            "dpkg-query",
+            "-W",
+            "-f=${Package}=${Version}\n",
+            "ffmpeg",
+            "libavcodec60",
+            "libavformat60",
+            "libavutil58",
+            "libswresample4",
+            "libswscale7",
+        ],
+        text=True,
+    ).splitlines()
+    _write_new(
+        attempt / "ffmpeg.json",
+        {
+            "source": "ephemeral Ubuntu image apt repositories",
+            "ffmpeg": ffmpeg,
+            "packages": packages,
+        },
+    )
+
+
 def _run_agent(args: argparse.Namespace) -> int:
     site = _load(Path(args.site))
     attempt = Path(args.attempt).resolve(strict=True)
@@ -307,6 +356,7 @@ def _run_agent(args: argparse.Namespace) -> int:
     if len(gpus) != 8 or any("H100" not in line for line in gpus):
         raise WorkflowError(f"expected exactly 8 H100 GPUs, found {gpus}")
     _write_new(attempt / "gpu.json", {"query": query, "gpus": gpus})
+    _ensure_ffmpeg(attempt)
 
     source = Path(site["_resolved"]["source_root"])
     tools = source / "toolkits/eos/gr00t_trocar/tensorrt"

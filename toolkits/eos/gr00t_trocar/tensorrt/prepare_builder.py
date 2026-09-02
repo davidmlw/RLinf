@@ -51,8 +51,11 @@ def _probe(python: Path) -> dict[str, str]:
         "'torchcodec': torchcodec.__version__}, sort_keys=True))"
     )
     completed = subprocess.run(
-        [str(python), "-c", script], check=True, capture_output=True, text=True
+        [str(python), "-c", script], check=False, capture_output=True, text=True
     )
+    if completed.returncode:
+        diagnostic = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(f"builder package probe failed: {diagnostic}")
     return json.loads(completed.stdout)
 
 

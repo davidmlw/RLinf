@@ -43,6 +43,8 @@ NVDEC even though this fixture is decoded on CPU. EOS compute containers do not
 expose that optional video-driver library. The builder applies the compatible
 TorchCodec 0.8.1 bugfix wheel by immutable path and SHA-256; all model, Torch,
 Transformers, flash-attn, TensorRT, and export settings remain unchanged.
+The allocation also installs the Ubuntu 24.04 FFmpeg 6 runtime into its
+ephemeral container and records exact `dpkg` versions in `ffmpeg.json`.
 
 ```bash
 python toolkits/eos/gr00t_trocar/tensorrt/start_official_b1.py materialize \
