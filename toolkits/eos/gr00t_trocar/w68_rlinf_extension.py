@@ -631,6 +631,10 @@ def _load_n1d7_trocar_model(model_cfg, torch_dtype: torch.dtype) -> object:
         raise RuntimeError(
             f"GR00T N1.7 backbone must be frozen, found {trainable_backbone} trainable parameters"
         )
+    # FSDP may expose trainable-looking original parameter views after wrapping.
+    # Preserve the loader's pre-FSDP verification as the runtime trust boundary;
+    # bounded backbone execution remains inside torch.no_grad().
+    model.backbone._rlinf_frozen_verified = True
     logger.info(
         "Loaded GR00T N1.7 Trocar model model=%s backbone=%s metadata=%s "
         "bounded_backbone=%s compute_unused_logits=%s logits_chunk_rows=%d",

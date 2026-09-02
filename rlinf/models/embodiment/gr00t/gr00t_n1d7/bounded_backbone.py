@@ -57,7 +57,8 @@ def run_bounded_frozen_qwen3_backbone(
         for name, parameter in backbone.named_parameters()
         if parameter.requires_grad
     ]
-    if trainable:
+    frozen_verified = bool(getattr(backbone, "_rlinf_frozen_verified", False))
+    if trainable and not frozen_verified:
         raise RuntimeError(
             "bounded Qwen3-VL execution requires a fully frozen backbone; "
             f"found trainable parameters: {trainable[:4]}"

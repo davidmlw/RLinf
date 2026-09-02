@@ -129,3 +129,19 @@ def test_bounded_backbone_rejects_trainable_parameters() -> None:
             compute_unused_logits=False,
             logits_chunk_rows=3,
         )
+
+
+def test_bounded_backbone_accepts_pre_fsdp_freeze_verification() -> None:
+    backbone = _Backbone()
+    backbone.model.lm_head.weight.requires_grad_(True)
+    backbone._rlinf_frozen_verified = True
+
+    output = run_bounded_frozen_qwen3_backbone(
+        backbone,
+        _inputs(),
+        compute_unused_logits=False,
+        logits_chunk_rows=3,
+    )
+
+    assert output["backbone_features"].shape == (2, 3, 4)
+    assert output["backbone_features"].requires_grad is False
