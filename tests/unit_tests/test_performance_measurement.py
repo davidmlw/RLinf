@@ -13,6 +13,7 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 record_event = MODULE.record_event
 record_span = MODULE.record_span
+RUNNER_PATH = Path(__file__).parents[2] / "rlinf" / "runners" / "embodied_runner.py"
 
 
 def _records(path):
@@ -78,3 +79,9 @@ def test_record_span_closes_with_error_status(monkeypatch, tmp_path):
     assert records[0]["status"] == "ok"
     assert records[1]["status"] == "error"
     assert records[0]["timestamp_ns"] <= records[1]["timestamp_ns"]
+
+
+def test_fixed_base_runner_does_not_pass_unsupported_timer_trace_args():
+    source = RUNNER_PATH.read_text(encoding="utf-8")
+
+    assert 'self.timer("step", trace_args=' not in source

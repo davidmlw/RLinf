@@ -521,7 +521,7 @@ class EmbodiedRunner:
                         if _step % self.weight_sync_interval == 0:
                             self.update_rollout_weights()
 
-                with self.timer("step", trace_args={"step_idx": _step}):
+                with self.timer("step"):
                     with self.timer("generate_rollouts"):
                         with record_span(
                             owner="runner",
