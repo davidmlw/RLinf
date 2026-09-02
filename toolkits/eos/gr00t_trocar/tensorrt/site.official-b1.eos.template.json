@@ -1,0 +1,45 @@
+{
+  "schema": "rlinf.eos.gr00t-tensorrt-site.v1",
+  "slurm": {
+    "account": "coreai_devtech_all",
+    "partition": "batch",
+    "constraint": "h100",
+    "cpus_per_task": 32,
+    "time_limit": "04:00:00",
+    "signal_seconds": 600,
+    "exclusive": true
+  },
+  "container": {
+    "oci_reference": "gitlab-master.nvidia.com:5005/liweim/image/rlinf-eos-system:cuda128-ubuntu2404-be095dc",
+    "registry_digest": "sha256:aab301569e09f60e143ddcb7749b2610fe522503edcdc8538efbb4a446b1a53f",
+    "image": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/images/rlinf-eos-system-cuda128-ubuntu2404-be095dc.sqsh",
+    "image_sha256": "64bbd7bda0f8d65d298073377a3e2331e91a75c49d459893ae5b3096410b022c",
+    "mounts": [
+      "/lustre:/lustre"
+    ]
+  },
+  "source": {
+    "root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf",
+    "revision": "AUTO",
+    "required_ancestor": "6998036d130f235f8d77367ed9b48c432e35e9e2",
+    "require_clean": true
+  },
+  "inputs": {
+    "isaac_gr00t_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T-N1.7",
+    "isaac_gr00t_revision": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
+    "model_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/GR00T-N1.7-LIBERO/libero_10",
+    "model_revision": "2ea293aa20ba7cf5bbf3ba17a5fbcb1a01cbfe21",
+    "backbone_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Cosmos-Reason2-2B",
+    "dataset_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T-N1.7/demo_data/libero_demo"
+  },
+  "builder": {
+    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-n1d7-trt-builder-py312-cu128-v1",
+    "uv": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-n1d7-newton-py312-cu128-v1/bin/uv",
+    "uv_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/cache/uv"
+  },
+  "experiment": {
+    "name": "W78-official-b1",
+    "output_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W78",
+    "artifact_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/artifacts/W78/tensorrt"
+  }
+}

@@ -30,3 +30,25 @@ interop gates pass.
 The normative machine-readable contract is
 `contract-n1d7-trocar-b8.json`. Any contract change must be reviewed before an
 EOS qualification result can be retained.
+
+## Official B1 Oracle
+
+Run these commands on the EOS login node from a clean RLInf checkout. The first
+command freezes the current Git revision and validates the image and inputs;
+the second submits one exclusive H100 node. Add `--dry-run` to `submit` to
+inspect the exact `sbatch` command without requesting resources.
+
+```bash
+python toolkits/eos/gr00t_trocar/tensorrt/start_official_b1.py materialize \
+  --template toolkits/eos/gr00t_trocar/tensorrt/site.official-b1.eos.template.json \
+  --output /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W78/official-b1-site.json
+
+python toolkits/eos/gr00t_trocar/tensorrt/start_official_b1.py submit \
+  --site /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W78/official-b1-site.json
+```
+
+The allocation creates `W78-official-b1-<job-id>/` under the attempt root. A
+passing attempt contains the official logs, all seven ONNX graphs and engines,
+and `qualification.json` with package, model, numerical, binding, and artifact
+hash evidence. Failed and unqualified output stays attempt-local and is never
+promoted to the artifact cache.
