@@ -22,6 +22,8 @@ from rlinf.data.embodied_io_struct import RolloutResult
 from rlinf.utils.backbone_cache import (
     ROLLOUT_BACKBONE_FEATURE_KEY,
     ROLLOUT_BACKBONE_MASK_KEY,
+    ROLLOUT_BACKBONE_N1D7_OUTPUT_FIELDS,
+    ROLLOUT_BACKBONE_OUTPUT_FIELDS,
 )
 from rlinf.workers.rollout.hf.async_huggingface_worker import (
     AsyncMultiStepRolloutWorker,
@@ -76,6 +78,8 @@ class _FakeSender:
         self.ack = ack
         self._pinned_feature_verify_trajectory = False
         self._pinned_feature_ipc_enabled = True
+        self._pinned_feature_output_fields = ROLLOUT_BACKBONE_OUTPUT_FIELDS
+        self._pinned_feature_schema = 3
         self._pinned_feature_ipc_batch_blocks = 1
         self._pinned_feature_ipc_timeout_seconds = 0.05
         self._pinned_feature_tensors = [
@@ -211,6 +215,30 @@ def test_sender_releases_batch_only_after_valid_ack():
     assert sender._pinned_feature_block_sizes == []
     assert sender._pinned_feature_active_lease == "lease-1"
     assert sender.torch_platform.collects == 1
+
+
+def test_sender_emits_named_n1d7_tensor_schema():
+    ack = {**_ok_ack(), "schema": 4}
+    sender = _FakeSender(ack)
+    sender._pinned_feature_output_fields = ROLLOUT_BACKBONE_N1D7_OUTPUT_FIELDS
+    sender._pinned_feature_schema = 4
+    sender._pinned_feature_tensors = [
+        torch.ones(2, 3),
+        torch.ones(2, 3, dtype=torch.bool),
+        torch.zeros(2, 3, dtype=torch.bool),
+    ]
+
+    _flush(sender)
+
+    tensors, kwargs = sender.sent[0]
+    metadata = kwargs["piggyback_payload"]
+    assert len(tensors) == 3
+    assert metadata["schema"] == 4
+    assert metadata["tensor_keys"] == [
+        "backbone_features",
+        "backbone_attention_mask",
+        "image_mask",
+    ]
 
 
 def test_sender_aborts_lease_when_actor_nacks_batch():

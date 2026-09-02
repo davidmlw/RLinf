@@ -45,13 +45,12 @@ from rlinf.models.embodiment.base_policy import ForwardType
 from rlinf.scheduler import Channel, Cluster, Worker
 from rlinf.utils.backbone_cache import (
     ROLLOUT_BACKBONE_BORROWED_IPC_PINNED,
-    ROLLOUT_BACKBONE_FEATURE_KEY,
-    ROLLOUT_BACKBONE_MASK_KEY,
     ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
     ROLLOUT_BACKBONE_SAMPLE_IDS_KEY,
     ROLLOUT_BACKBONE_TRANSPORT_KEY,
     is_rollout_backbone_ipc_transport,
     rollout_backbone_channel_key,
+    rollout_backbone_contract,
     rollout_backbone_producer_rank,
     validate_frozen_backbone,
     validate_rollout_backbone_sample_ids,
@@ -1068,6 +1067,11 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         self._pinned_feature_ipc_enabled = is_rollout_backbone_ipc_transport(
             feature_transport
         )
+        self._pinned_feature_output_fields = ()
+        if self._pinned_feature_ipc_enabled:
+            self._pinned_feature_output_fields, _ = rollout_backbone_contract(
+                SupportedModel(cfg.actor.model.model_type).value
+            )
         self._pinned_feature_ipc_batch_blocks = int(
             cfg.rollout.get("pinned_feature_ipc_batch_blocks", 1)
         )
@@ -1246,9 +1250,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             raise RuntimeError("previous rollout backbone cache is still active")
         expected_blocks, expected_samples = compute_rollout_backbone_stream_counts(
             rollout_epochs=int(self.cfg.env.train.rollout_epoch),
-            max_steps_per_epoch=int(
-                self.cfg.env.train.max_steps_per_rollout_epoch
-            ),
+            max_steps_per_epoch=int(self.cfg.env.train.max_steps_per_rollout_epoch),
             num_action_chunks=int(self.cfg.actor.model.num_action_chunks),
             pipeline_stages=int(self.stage_num),
             total_num_envs=int(self.cfg.env.train.total_num_envs),
@@ -1264,6 +1266,9 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             blocks_per_batch=self._pinned_feature_ipc_batch_blocks,
             rollout_group_name=self._rollout_group_name,
             timeout_seconds=self._pinned_feature_ipc_timeout_seconds,
+            expected_tensor_keys=tuple(
+                output_key for _, output_key in self._pinned_feature_output_fields
+            ),
         )
         self._pinned_rollout_backbone_cache = cache
         self._pinned_backbone_metadata = metadata
@@ -1501,9 +1506,12 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         """Validate the pinned Rollout feature-reuse contract."""
         if not self._pinned_feature_ipc_enabled:
             return False
-        if SupportedModel(self.cfg.actor.model.model_type) != SupportedModel.GR00T:
+        if SupportedModel(self.cfg.actor.model.model_type) not in {
+            SupportedModel.GR00T,
+            SupportedModel.GR00T_N1D7,
+        }:
             raise ValueError(
-                "pinned rollout backbone transport currently supports GR00T N1.5 only"
+                "pinned rollout backbone transport supports only GR00T N1.5/N1.7"
             )
         if self.enable_sft_co_train:
             raise ValueError(
@@ -1622,45 +1630,38 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                         local_sample_ids = sample_ids - int(metadata["sample_id_base"])
                         pinned_output = pinned_rollout_cache.load(local_sample_ids)
                         if bool(metadata.get("verify_trajectory", False)):
-                            trajectory_feature = forward_inputs.get(
-                                ROLLOUT_BACKBONE_FEATURE_KEY
-                            )
-                            trajectory_mask = forward_inputs.get(
-                                ROLLOUT_BACKBONE_MASK_KEY
-                            )
-                            if trajectory_feature is None or trajectory_mask is None:
-                                raise RuntimeError(
-                                    "pinned feature transport verification requires trajectory features"
-                                )
-                            if not torch.equal(
-                                pinned_output["backbone_features"],
-                                trajectory_feature.to(self.device),
-                            ):
-                                max_diff = (
-                                    (
-                                        pinned_output["backbone_features"].float()
-                                        - trajectory_feature.to(self.device).float()
+                            for (
+                                transport_key,
+                                output_key,
+                            ) in self._pinned_feature_output_fields:
+                                trajectory_tensor = forward_inputs.get(transport_key)
+                                if trajectory_tensor is None:
+                                    raise RuntimeError(
+                                        "pinned feature transport verification requires "
+                                        f"trajectory field {transport_key}"
                                     )
-                                    .abs()
-                                    .max()
-                                )
-                                raise RuntimeError(
-                                    "pinned feature transport feature mismatch against trajectory "
-                                    f"reference: max_diff={float(max_diff.item())}"
-                                )
-                            if not torch.equal(
-                                pinned_output["backbone_attention_mask"],
-                                trajectory_mask.to(self.device),
-                            ):
-                                raise RuntimeError(
-                                    "pinned feature transport attention mask mismatch against trajectory"
-                                )
-                        forward_inputs[ROLLOUT_BACKBONE_FEATURE_KEY] = pinned_output[
-                            "backbone_features"
-                        ]
-                        forward_inputs[ROLLOUT_BACKBONE_MASK_KEY] = pinned_output[
-                            "backbone_attention_mask"
-                        ]
+                                reference = trajectory_tensor.to(self.device)
+                                if not torch.equal(
+                                    pinned_output[output_key], reference
+                                ):
+                                    max_diff = (
+                                        (
+                                            pinned_output[output_key].float()
+                                            - reference.float()
+                                        )
+                                        .abs()
+                                        .max()
+                                    )
+                                    raise RuntimeError(
+                                        "pinned feature transport mismatch against "
+                                        f"trajectory field {output_key}: "
+                                        f"max_diff={float(max_diff.item())}"
+                                    )
+                        for (
+                            transport_key,
+                            output_key,
+                        ) in self._pinned_feature_output_fields:
+                            forward_inputs[transport_key] = pinned_output[output_key]
                     self.train_micro_batch(
                         micro_batch=batch,
                         metrics=metrics,
@@ -1750,20 +1751,24 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
         if reuse_rollout_feature:
             fwd = micro_batch.get("forward_inputs", {})
-            reuse_feat = fwd.pop(ROLLOUT_BACKBONE_FEATURE_KEY, None)
-            reuse_mask = fwd.pop(ROLLOUT_BACKBONE_MASK_KEY, None)
-            if reuse_feat is not None and reuse_mask is not None:
-                backbone_kwargs = {
-                    "precomputed_backbone": {
-                        "backbone_features": reuse_feat.detach(),
-                        "backbone_attention_mask": reuse_mask.detach(),
-                    }
-                }
-            else:
+            precomputed_backbone = {
+                output_key: fwd.pop(transport_key, None)
+                for transport_key, output_key in self._pinned_feature_output_fields
+            }
+            missing = [
+                key for key, value in precomputed_backbone.items() if value is None
+            ]
+            if missing:
                 self._reuse_feature_fallbacks += 1
                 raise RuntimeError(
-                    "pinned rollout backbone cache returned an incomplete feature"
+                    "pinned rollout backbone cache returned incomplete outputs: "
+                    f"missing={missing}"
                 )
+            backbone_kwargs = {
+                "precomputed_backbone": {
+                    key: value.detach() for key, value in precomputed_backbone.items()
+                }
+            }
 
         backward_ctx = self.before_micro_batch(self.model, is_last_micro_batch=is_last)
         advantages = micro_batch["advantages"]

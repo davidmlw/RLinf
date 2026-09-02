@@ -38,13 +38,12 @@ from rlinf.models.embodiment.base_policy import BasePolicy
 from rlinf.scheduler import Channel, Cluster, Worker, split_channel_message
 from rlinf.utils.backbone_cache import (
     ROLLOUT_BACKBONE_BORROWED_IPC_PINNED,
-    ROLLOUT_BACKBONE_FEATURE_KEY,
-    ROLLOUT_BACKBONE_MASK_KEY,
     ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE,
     ROLLOUT_BACKBONE_SAMPLE_IDS_KEY,
     ROLLOUT_BACKBONE_TRANSPORT_KEY,
     filter_rollout_backbone_transport,
     is_rollout_backbone_ipc_transport,
+    rollout_backbone_contract,
 )
 from rlinf.utils.pinned_feature_stream import (
     compute_rollout_backbone_stream_counts,
@@ -157,13 +156,21 @@ class MultiStepRolloutWorker(Worker):
         self._pinned_feature_ipc_enabled = is_rollout_backbone_ipc_transport(
             feature_transport
         )
-        if (
-            self._pinned_feature_ipc_enabled
-            and SupportedModel(self.model_cfg.model_type) != SupportedModel.GR00T
-        ):
+        model_type = SupportedModel(self.model_cfg.model_type)
+        self._pinned_feature_model_type = model_type.value
+        if self._pinned_feature_ipc_enabled and model_type not in {
+            SupportedModel.GR00T,
+            SupportedModel.GR00T_N1D7,
+        }:
             raise ValueError(
-                "pinned rollout backbone transport currently supports GR00T N1.5 only"
+                "pinned rollout backbone transport supports only GR00T N1.5/N1.7"
             )
+        self._pinned_feature_output_fields = ()
+        if self._pinned_feature_ipc_enabled:
+            self._pinned_feature_output_fields, _ = rollout_backbone_contract(
+                self._pinned_feature_model_type
+            )
+        self._pinned_feature_schema = 3 if model_type == SupportedModel.GR00T else 4
         if self._pinned_feature_ipc_enabled and (
             self.placement.get_world_size("rollout")
             != self.placement.get_world_size("actor")
@@ -227,9 +234,7 @@ class MultiStepRolloutWorker(Worker):
             self._pinned_stream_expected_samples,
         ) = compute_rollout_backbone_stream_counts(
             rollout_epochs=int(self.cfg.env.train.rollout_epoch),
-            max_steps_per_epoch=int(
-                self.cfg.env.train.max_steps_per_rollout_epoch
-            ),
+            max_steps_per_epoch=int(self.cfg.env.train.max_steps_per_rollout_epoch),
             num_action_chunks=int(self.model_cfg.num_action_chunks),
             pipeline_stages=int(self.num_pipeline_stages),
             total_num_envs=int(self.cfg.env.train.total_num_envs),
@@ -261,17 +266,24 @@ class MultiStepRolloutWorker(Worker):
     async def _retain_pinned_feature_block(
         self, forward_inputs: dict[str, torch.Tensor]
     ) -> None:
-        feature = forward_inputs.get(ROLLOUT_BACKBONE_FEATURE_KEY)
-        mask = forward_inputs.get(ROLLOUT_BACKBONE_MASK_KEY)
-        if feature is None or mask is None:
+        output_tensors = [
+            forward_inputs.get(transport_key)
+            for transport_key, _ in self._pinned_feature_output_fields
+        ]
+        if not output_tensors or any(tensor is None for tensor in output_tensors):
             raise RuntimeError("pinned backbone IPC requires complete rollout features")
-        if feature.device.type != "cuda" or mask.device.type != "cuda":
+        if any(tensor.device.type != "cuda" for tensor in output_tensors):
             raise RuntimeError("pinned backbone IPC requires producer CUDA tensors")
-        if feature.shape[0] != mask.shape[0]:
-            raise RuntimeError("pinned backbone feature/mask batch mismatch")
+        batch_sizes = {int(tensor.shape[0]) for tensor in output_tensors}
+        if len(batch_sizes) != 1:
+            raise RuntimeError("pinned backbone output tensor batch mismatch")
 
-        filter_rollout_backbone_transport(forward_inputs, reuse_enabled=True)
-        block_size = int(feature.shape[0])
+        filter_rollout_backbone_transport(
+            forward_inputs,
+            reuse_enabled=True,
+            model_type=self._pinned_feature_model_type,
+        )
+        block_size = batch_sizes.pop()
         sample_id_base = self._rank * ROLLOUT_BACKBONE_SAMPLE_ID_STRIDE
         sample_ids = torch.arange(
             sample_id_base + self._pinned_feature_samples,
@@ -281,9 +293,11 @@ class MultiStepRolloutWorker(Worker):
         )
         forward_inputs[ROLLOUT_BACKBONE_SAMPLE_IDS_KEY] = sample_ids
         if not self._pinned_feature_verify_trajectory:
-            forward_inputs.pop(ROLLOUT_BACKBONE_FEATURE_KEY)
-            forward_inputs.pop(ROLLOUT_BACKBONE_MASK_KEY)
-        self._pinned_feature_tensors.extend((feature.detach(), mask.detach()))
+            for transport_key, _ in self._pinned_feature_output_fields:
+                forward_inputs.pop(transport_key)
+        self._pinned_feature_tensors.extend(
+            tensor.detach() for tensor in output_tensors
+        )
         self._pinned_feature_block_sizes.append(block_size)
         self._pinned_feature_samples += block_size
         if self._pinned_feature_ipc_enabled and (
@@ -302,7 +316,8 @@ class MultiStepRolloutWorker(Worker):
             raise RuntimeError("pinned backbone batch is empty")
         block_sizes = list(self._pinned_feature_block_sizes)
         tensors = list(self._pinned_feature_tensors)
-        if len(tensors) != 2 * len(block_sizes):
+        tensors_per_block = len(self._pinned_feature_output_fields)
+        if len(tensors) != tensors_per_block * len(block_sizes):
             raise RuntimeError("pinned backbone batch tensor count is invalid")
         batch_index = self._pinned_stream_batches
         start_block_index = self._pinned_stream_blocks
@@ -310,7 +325,7 @@ class MultiStepRolloutWorker(Worker):
         offset = self._pinned_feature_samples - batch_samples
         byte_count = sum(tensor.numel() * tensor.element_size() for tensor in tensors)
         metadata = {
-            "schema": 3,
+            "schema": self._pinned_feature_schema,
             "lease_id": lease_id,
             "batch_index": batch_index,
             "start_block_index": start_block_index,
@@ -325,6 +340,10 @@ class MultiStepRolloutWorker(Worker):
             "bytes": byte_count,
             "verify_trajectory": self._pinned_feature_verify_trajectory,
         }
+        if self._pinned_feature_schema == 4:
+            metadata["tensor_keys"] = [
+                output_key for _, output_key in self._pinned_feature_output_fields
+            ]
         wait_start = time.perf_counter()
         try:
             self.send(
@@ -356,7 +375,7 @@ class MultiStepRolloutWorker(Worker):
                 )
             if (
                 not isinstance(ack, dict)
-                or ack.get("schema") != 3
+                or ack.get("schema") != self._pinned_feature_schema
                 or ack.get("status") != "ok"
                 or ack.get("lease_id") != lease_id
                 or int(ack.get("batch_index", -1)) != batch_index
@@ -920,6 +939,7 @@ class MultiStepRolloutWorker(Worker):
                 filter_rollout_backbone_transport(
                     forward_inputs,
                     reuse_enabled=False,
+                    model_type=self._pinned_feature_model_type,
                 )
         return self._build_rollout_result(actions, result, final_obs=final_obs)
 

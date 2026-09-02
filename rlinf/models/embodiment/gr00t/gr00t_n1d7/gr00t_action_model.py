@@ -16,7 +16,7 @@ import json
 import random
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Mapping, Optional, Union
 from unittest.mock import patch
 
 import numpy as np
@@ -43,6 +43,11 @@ from rlinf.models.embodiment.gr00t.utils import (
 )
 from rlinf.models.embodiment.modules.explore_noise_net import ExploreNoiseNet
 from rlinf.models.embodiment.modules.value_head import ValueHead
+from rlinf.utils.backbone_cache import (
+    ROLLOUT_BACKBONE_FEATURE_KEY,
+    ROLLOUT_BACKBONE_IMAGE_MASK_KEY,
+    ROLLOUT_BACKBONE_MASK_KEY,
+)
 from rlinf.utils.logging import get_logger
 
 logger = get_logger()
@@ -929,14 +934,24 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         output = run_bounded_frozen_qwen3_backbone(
             self.backbone,
             backbone_inputs,
-            compute_unused_logits=getattr(
-                self, "compute_unused_backbone_logits", True
-            ),
-            logits_chunk_rows=int(
-                getattr(self, "unused_logits_chunk_rows", 4096)
-            ),
+            compute_unused_logits=getattr(self, "compute_unused_backbone_logits", True),
+            logits_chunk_rows=int(getattr(self, "unused_logits_chunk_rows", 4096)),
         )
         return BatchFeature(data=output)
+
+    def _prepare_action_head_input(
+        self, forward_inputs: Mapping[str, torch.Tensor]
+    ) -> BatchFeature:
+        action_inputs = self.action_head.prepare_input(dict(forward_inputs))
+        for name, value in action_inputs.items():
+            if torch.is_floating_point(value):
+                action_inputs[name] = value.to(
+                    self.device,
+                    dtype=self.action_head.dtype,
+                )
+            else:
+                action_inputs[name] = value.to(self.device)
+        return action_inputs
 
     def default_forward(
         self,
@@ -945,6 +960,7 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         compute_entropy: bool = False,
         compute_values: bool = True,
         use_cache: bool = False,
+        precomputed_backbone: Optional[Mapping[str, torch.Tensor]] = None,
         **kwargs,
     ) -> dict[str, Any]:
         """Actor forward pass: recompute log-probs/values from cached rollouts."""
@@ -954,8 +970,12 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
             getattr(self, "padding_value", 0),
         )
 
-        backbone_inputs, action_inputs = self.prepare_input(normalized_input)
-        backbone_outputs = self._forward_backbone(backbone_inputs)
+        if precomputed_backbone is None:
+            backbone_inputs, action_inputs = self.prepare_input(normalized_input)
+            backbone_outputs = self._forward_backbone(backbone_inputs)
+        else:
+            action_inputs = self._prepare_action_head_input(normalized_input)
+            backbone_outputs = BatchFeature(data=dict(precomputed_backbone))
 
         chains = forward_inputs["chains"]
         denoise_inds = forward_inputs["denoise_inds"]
@@ -1159,6 +1179,21 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
 
         backbone_inputs, action_inputs = self.prepare_input(normalized_input)
         backbone_outputs = self._forward_backbone(backbone_inputs)
+        rollout_backbone_output = None
+        if getattr(self, "capture_rollout_backbone_output", False):
+            # The action head rewrites backbone_features, so retain the exact
+            # frozen-backbone outputs before entering it.
+            rollout_backbone_output = {
+                ROLLOUT_BACKBONE_FEATURE_KEY: backbone_outputs[
+                    "backbone_features"
+                ].detach(),
+                ROLLOUT_BACKBONE_MASK_KEY: backbone_outputs[
+                    "backbone_attention_mask"
+                ].detach(),
+                ROLLOUT_BACKBONE_IMAGE_MASK_KEY: backbone_outputs[
+                    "image_mask"
+                ].detach(),
+            }
         action_head_outputs, rlinf_outputs = self.action_head.get_rl_action(
             backbone_outputs, action_inputs, mode=mode
         )
@@ -1177,6 +1212,8 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
             "denoise_inds": rlinf_outputs["denoise_inds"],
             **stashed_forward_inputs,
         }
+        if rollout_backbone_output is not None:
+            forward_inputs.update(rollout_backbone_output)
         result = {
             "prev_logprobs": rlinf_outputs["prev_logprobs"],
             "prev_values": rlinf_outputs["prev_values"],
