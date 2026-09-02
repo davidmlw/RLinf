@@ -32,6 +32,8 @@ def test_actor_training_exception_clears_cache_and_sample_ids():
         )
 
         def __init__(self):
+            self._rank = 0
+            self.version = 0
             self._pinned_rollout_backbone_cache = Cache()
             self._pinned_backbone_metadata = {"lease_id": "lease-1"}
             self.rollout_batch = {
