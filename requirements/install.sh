@@ -1464,6 +1464,12 @@ install_gr00t_n1d7_model() {
             install_maniskill_libero_env
             install_flash_attn
             ;;
+        isaaclab)
+            install_isaaclab_env
+            # Isaac Lab may update Torch, so install FlashAttention afterwards.
+            install_flash_attn
+            uv pip install numpydantic==1.7.0 pydantic==2.11.7 numpy==1.26.0
+            ;;
         *)
             echo "Environment '$ENV_NAME' is not yet validated for Gr00t N1.7." >&2
             exit 1

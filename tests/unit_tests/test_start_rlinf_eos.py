@@ -603,6 +603,7 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
     extension = (
         ROOT / "toolkits/eos/gr00t_trocar/w68_rlinf_extension.py"
     ).read_text(encoding="utf-8")
+    installer = (ROOT / "requirements/install.sh").read_text(encoding="utf-8")
 
     assert spec["torch_version"] == "2.11.0"
     assert spec["transformers_version"] == "4.57.3"
@@ -640,6 +641,12 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
     assert 'embodiment_id_mapping={"new_embodiment": 10}' in extension
     assert "model.backbone.requires_grad_(False)" in extension
     assert 'str(model_cfg.model_type) == "gr00t_n1d7"' in extension
+    n1d7_installer = installer.split("install_gr00t_n1d7_model()", 1)[1].split(
+        "install_dexbotic_model()", 1
+    )[0]
+    assert "isaaclab)" in n1d7_installer
+    assert "install_isaaclab_env" in n1d7_installer
+    assert "install_flash_attn" in n1d7_installer
 
 
 def test_eos_template_pins_newton_tray_textures() -> None:
