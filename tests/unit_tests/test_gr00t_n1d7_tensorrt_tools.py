@@ -189,6 +189,7 @@ def test_site_validation_and_dry_run(
     loaded = start_official_b1._load(site)
 
     assert loaded["_resolved"]["source_revision"] == loaded["source"]["revision"]
+    assert loaded["_resolved"]["launcher"].endswith("/start_official_b1.py")
     args = argparse.Namespace(site=str(site), dry_run=True, skip_image_hash=False)
     assert start_official_b1._submit(args) == 0
     command = json.loads(capsys.readouterr().out)["command"]

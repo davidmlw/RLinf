@@ -32,6 +32,7 @@ SCHEMA = "rlinf.eos.gr00t-tensorrt-site.v1"
 RESULT_SCHEMA = "rlinf.eos.gr00t-tensorrt-result.v1"
 GIT_OID_RE = re.compile(r"[0-9a-f]{40}")
 HELPERS = ("prepare_builder.py", "model_view.py", "official_b1.py")
+LAUNCHER_NAME = "start_official_b1.py"
 
 
 class WorkflowError(RuntimeError):
@@ -150,7 +151,9 @@ def _load(path: Path, *, verify_image: bool = True) -> dict[str, Any]:
         "image": str(image),
         "dataset": str(dataset),
         "output_root": str(output),
-        "launcher": str((helper_root / Path(__file__).name).resolve(strict=True)),
+        # sbatch executes a copied spool file named ``slurm_script``. Resolve
+        # the versioned launcher from the source contract, not from __file__.
+        "launcher": str((helper_root / LAUNCHER_NAME).resolve(strict=True)),
         "helpers": {
             name: _sha256((helper_root / name).resolve(strict=True)) for name in HELPERS
         },
