@@ -386,6 +386,48 @@ def test_measurement_plan(max_steps: int, expected: object) -> None:
     assert MODULE._measurement_plan(max_steps) == expected
 
 
+def test_training_metric_integrity_accepts_complete_finite_steps(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "training.out"
+    output.write_text(
+        "actor/grad_norm=1.25 actor/policy_loss=-2.5 actor/total_loss=3e-2\n"
+        "actor/grad_norm=0.75 actor/policy_loss=0.5 actor/total_loss=-1e-2\n",
+        encoding="utf-8",
+    )
+
+    result = MODULE._training_metric_integrity(output, 2)
+
+    assert result == {
+        "status": "passed",
+        "expected_steps": 2,
+        "counts": {"grad_norm": 2, "policy_loss": 2, "total_loss": 2},
+        "failures": [],
+    }
+
+
+def test_training_metric_integrity_rejects_nonfinite_and_missing_steps(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "training.out"
+    output.write_text(
+        "actor/grad_norm=nan actor/policy_loss=inf actor/total_loss=0.2\n",
+        encoding="utf-8",
+    )
+
+    result = MODULE._training_metric_integrity(output, 2)
+
+    assert result["status"] == "failed"
+    assert result["counts"] == {
+        "grad_norm": 1,
+        "policy_loss": 1,
+        "total_loss": 1,
+    }
+    assert "actor/grad_norm: nonfinite at steps [0]" in result["failures"]
+    assert "actor/policy_loss: nonfinite at steps [0]" in result["failures"]
+    assert "actor/total_loss: expected 2 values, found 1" in result["failures"]
+
+
 def test_site_rejects_external_provenance_drift(tmp_path: Path) -> None:
     site_path = _site(tmp_path)
     value = json.loads(site_path.read_text(encoding="utf-8"))
