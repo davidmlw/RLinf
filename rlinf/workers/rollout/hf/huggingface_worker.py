@@ -45,10 +45,10 @@ from rlinf.utils.backbone_cache import (
     is_rollout_backbone_ipc_transport,
     rollout_backbone_contract,
 )
+from rlinf.utils.performance_measurement import record_event
 from rlinf.utils.pinned_feature_stream import (
     compute_rollout_backbone_stream_counts,
 )
-from rlinf.utils.performance_measurement import record_event
 from rlinf.utils.placement import HybridComponentPlacement
 
 
@@ -157,21 +157,23 @@ class MultiStepRolloutWorker(Worker):
         self._pinned_feature_ipc_enabled = is_rollout_backbone_ipc_transport(
             feature_transport
         )
-        model_type = SupportedModel(self.model_cfg.model_type)
-        self._pinned_feature_model_type = model_type.value
-        if self._pinned_feature_ipc_enabled and model_type not in {
-            SupportedModel.GR00T,
-            SupportedModel.GR00T_N1D7,
-        }:
-            raise ValueError(
-                "pinned rollout backbone transport supports only GR00T N1.5/N1.7"
-            )
+        self._pinned_feature_model_type = ""
         self._pinned_feature_output_fields = ()
+        self._pinned_feature_schema = 3
         if self._pinned_feature_ipc_enabled:
+            model_type = SupportedModel(self.model_cfg.model_type)
+            if model_type not in {
+                SupportedModel.GR00T,
+                SupportedModel.GR00T_N1D7,
+            }:
+                raise ValueError(
+                    "pinned rollout backbone transport supports only GR00T N1.5/N1.7"
+                )
+            self._pinned_feature_model_type = model_type.value
             self._pinned_feature_output_fields, _ = rollout_backbone_contract(
                 self._pinned_feature_model_type
             )
-        self._pinned_feature_schema = 3 if model_type == SupportedModel.GR00T else 4
+            self._pinned_feature_schema = 3 if model_type == SupportedModel.GR00T else 4
         if self._pinned_feature_ipc_enabled and (
             self.placement.get_world_size("rollout")
             != self.placement.get_world_size("actor")
@@ -940,7 +942,6 @@ class MultiStepRolloutWorker(Worker):
                 filter_rollout_backbone_transport(
                     forward_inputs,
                     reuse_enabled=False,
-                    model_type=self._pinned_feature_model_type,
                 )
         return self._build_rollout_result(actions, result, final_obs=final_obs)
 

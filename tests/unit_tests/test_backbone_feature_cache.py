@@ -138,6 +138,22 @@ def test_incomplete_feature_keeps_raw_inputs_for_fallback():
     assert all(key in forward_inputs for key in ROLLOUT_BACKBONE_INPUT_KEYS)
 
 
+def test_disabled_transport_is_model_agnostic_and_drops_cached_outputs():
+    forward_inputs = {
+        ROLLOUT_BACKBONE_FEATURE_KEY: torch.ones(1),
+        ROLLOUT_BACKBONE_MASK_KEY: torch.ones(1),
+        ROLLOUT_BACKBONE_IMAGE_MASK_KEY: torch.ones(1),
+        "raw_input": torch.ones(1),
+    }
+
+    assert not filter_rollout_backbone_transport(
+        forward_inputs,
+        reuse_enabled=False,
+        model_type="unsupported-model",
+    )
+    assert set(forward_inputs) == {"raw_input"}
+
+
 def test_n1d7_transport_requires_image_mask_and_drops_qwen_inputs():
     output_fields, input_keys = rollout_backbone_contract("gr00t_n1d7")
     assert tuple(key for key, _ in output_fields) == (

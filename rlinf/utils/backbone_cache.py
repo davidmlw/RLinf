@@ -128,13 +128,17 @@ def filter_rollout_backbone_transport(
     model_type: str = "gr00t",
 ) -> bool:
     """Keep either raw model inputs or a complete reusable backbone output."""
-    output_fields, input_keys = rollout_backbone_contract(model_type)
-    output_keys = tuple(transport_key for transport_key, _ in output_fields)
     if not reuse_enabled:
-        for key in output_keys:
+        for key in (
+            ROLLOUT_BACKBONE_FEATURE_KEY,
+            ROLLOUT_BACKBONE_MASK_KEY,
+            ROLLOUT_BACKBONE_IMAGE_MASK_KEY,
+        ):
             forward_inputs.pop(key, None)
         return False
 
+    output_fields, input_keys = rollout_backbone_contract(model_type)
+    output_keys = tuple(transport_key for transport_key, _ in output_fields)
     has_complete_feature = all(key in forward_inputs for key in output_keys)
     if not has_complete_feature:
         for key in output_keys:
