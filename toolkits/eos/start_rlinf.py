@@ -386,6 +386,14 @@ def _workload_contract(config: Path) -> dict[str, object]:
         "pinned_feature_verify_trajectory",
     }
     present_pinned_fields = pinned_fields.intersection(rollout)
+    pinned_timeout = rollout.get("pinned_feature_ipc_timeout_seconds")
+    if pinned_timeout is not None and (
+        isinstance(pinned_timeout, bool)
+        or not isinstance(pinned_timeout, (int, float))
+    ):
+        raise WorkflowError(
+            "rollout.pinned_feature_ipc_timeout_seconds must be numeric"
+        )
 
     if not skip_unused_lm_head and feature_transport is None:
         if present_pinned_fields:
@@ -404,7 +412,7 @@ def _workload_contract(config: Path) -> dict[str, object]:
         skip_unused_lm_head
         and feature_transport == "borrowed_ipc_pinned"
         and rollout.get("pinned_feature_ipc_batch_blocks") == 16
-        and float(rollout.get("pinned_feature_ipc_timeout_seconds", 0.0)) == 300.0
+        and pinned_timeout == 300.0
         and rollout.get("pinned_feature_verify_trajectory") is False
     ):
         optimization = {
@@ -1123,6 +1131,16 @@ def _allocation_deadline(site: Mapping[str, Any]) -> int:
     return requested
 
 
+def _measurement_plan(max_steps: int) -> tuple[int, tuple[int, ...]] | None:
+    """Return warmup and measured steps for an automatically qualified run."""
+
+    if max_steps < 2:
+        return None
+    if max_steps >= 5:
+        return 0, (1, 2, 3, 4)
+    return -1, tuple(range(max_steps))
+
+
 def _allocation_run(args: argparse.Namespace) -> int:
     site = _load_site(Path(args.site))
     job_id, node = _discover_allocation()
@@ -1502,6 +1520,14 @@ def _run_agent(args: argparse.Namespace) -> int:
         raise WorkflowError("deterministic seed preflight failed")
     _ray_stop(python, attempt, "prestop")
     ray_env = _ray_worker_environment(site)
+    measurement_dir = attempt / "measurement" / "events"
+    measurement_dir.mkdir(parents=True)
+    ray_env.update(
+        {
+            "RLINF_PERF_MEASUREMENT_DIR": str(measurement_dir),
+            "RLINF_PERF_RUN_ID": attempt.name,
+        }
+    )
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
     if not slurm_job_id or not slurm_job_id.isdecimal():
         raise WorkflowError("run-agent requires a numeric SLURM_JOB_ID")
@@ -1602,8 +1628,33 @@ def _run_agent(args: argparse.Namespace) -> int:
         if timed_out or child_code != 0:
             _archive_ray_failure_logs(ray_temp, attempt)
         shutil.rmtree(ray_temp, ignore_errors=True)
+    measurement_return_code: int | None = None
+    measurement_receipt: Path | None = None
+    measurement_plan = _measurement_plan(int(experiment["max_steps"]))
+    if not timed_out and child_code == 0 and measurement_plan is not None:
+        warmup_step, measured_steps = measurement_plan
+        measurement_receipt = attempt / "measurement" / "receipt.json"
+        measurement_return_code = _run_command(
+            [
+                python,
+                str(
+                    Path(site["source"]["root"])
+                    / "tests/performance/summarize_measurement.py"
+                ),
+                str(measurement_dir),
+                str(measurement_receipt),
+                "--measured-steps",
+                ",".join(str(step) for step in measured_steps),
+                "--warmup-step",
+                str(warmup_step),
+            ],
+            output=attempt / "logs" / "measurement-summary.out",
+            error=attempt / "logs" / "measurement-summary.err",
+        )
     status = "deadline_reached" if timed_out else "completed"
     if not timed_out and child_code != 0:
+        status = "failed"
+    if measurement_return_code not in {None, 0}:
         status = "failed"
     result = {
         "schema": RESULT_SCHEMA,
@@ -1611,6 +1662,10 @@ def _run_agent(args: argparse.Namespace) -> int:
         "training_return_code": child_code,
         "deadline_reached": timed_out,
         "ray_stop_return_code": ray_stop,
+        "measurement_return_code": measurement_return_code,
+        "measurement_receipt": (
+            str(measurement_receipt) if measurement_receipt is not None else None
+        ),
         "timestamp_unix_s": time.time(),
     }
     _write_new_json(attempt / "run-result.json", result)

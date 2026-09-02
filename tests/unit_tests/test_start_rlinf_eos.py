@@ -352,6 +352,38 @@ def test_site_rejects_partial_feature_reuse_bundle(tmp_path: Path) -> None:
         MODULE._load_site(_site(tmp_path, config=config))
 
 
+def test_site_rejects_non_numeric_feature_timeout(tmp_path: Path) -> None:
+    original = (
+        ROOT / "toolkits/eos/gr00t_trocar/config-feature-reuse-chunk16.yaml"
+    ).read_text(encoding="utf-8")
+    config = tmp_path / "bad-timeout.yaml"
+    config.write_text(
+        original.replace(
+            "  pinned_feature_ipc_timeout_seconds: 300.0\n",
+            "  pinned_feature_ipc_timeout_seconds: invalid\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MODULE.WorkflowError, match="must be numeric"):
+        MODULE._load_site(_site(tmp_path, config=config))
+
+
+@pytest.mark.parametrize(
+    ("max_steps", "expected"),
+    [
+        (1, None),
+        (2, (-1, (0, 1))),
+        (4, (-1, (0, 1, 2, 3))),
+        (5, (0, (1, 2, 3, 4))),
+        (8, (0, (1, 2, 3, 4))),
+    ],
+)
+def test_measurement_plan(max_steps: int, expected: object) -> None:
+    assert MODULE._measurement_plan(max_steps) == expected
+
+
 def test_site_rejects_external_provenance_drift(tmp_path: Path) -> None:
     site_path = _site(tmp_path)
     value = json.loads(site_path.read_text(encoding="utf-8"))
