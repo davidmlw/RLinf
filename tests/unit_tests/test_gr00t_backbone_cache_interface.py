@@ -20,8 +20,11 @@ import torch
 
 def test_gr00t_fresh_and_precomputed_backbone_outputs_match():
     pytest.importorskip("gr00t")
+    from gr00t.data import dataset as gr00t_dataset
     from transformers.feature_extraction_utils import BatchFeature
 
+    if not hasattr(gr00t_dataset, "ModalityConfig"):
+        pytest.skip("GR00T N1.5 runtime is unavailable")
     from rlinf.models.embodiment.gr00t.gr00t_n1d5.gr00t_action_model import (
         GR00T_N1_5_ForRLActionPrediction,
     )
