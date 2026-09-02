@@ -19,6 +19,7 @@
   "isaaclab_revision": "2e44ddb2e19536579140496023b5ccb060bc4152",
   "gr00t_revision": "4af2b622892f7dcb5aae5a3fb70bcb02dc217b96",
   "installer": "requirements/install.sh",
+  "installer_model": "gr00t",
   "installer_arguments": [
     "--no-root",
     "--platform",

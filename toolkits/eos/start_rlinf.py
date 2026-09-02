@@ -515,34 +515,44 @@ def _load_site(
 
     provenance = _validate_provenance(site["provenance"])
 
-    runtime = _exact_dict(
-        site["runtime"],
-        {
-            "python",
-            "env_root",
-            "runtime_spec",
-            "runtime_spec_sha256",
-            "prepare_script",
-            "prepare_script_sha256",
-            "uv_cache",
-            "git_lfs_bin",
-            "git_lfs_bin_sha256",
-            "flash_attn_wheel",
-            "flash_attn_wheel_sha256",
-            "torchcodec_wheel",
-            "torchcodec_wheel_sha256",
-            "healthcare_assets_archive",
-            "healthcare_assets_archive_sha256",
-            "isaaclab_root",
-            "gr00t_root",
-            "model_root",
-            "hf_cache",
-            "task_overlay_root",
-            "sanitized_tray_usd",
-            "python_deps",
-        },
-        "runtime",
-    )
+    runtime_value = site["runtime"]
+    runtime_required = {
+        "python",
+        "env_root",
+        "runtime_spec",
+        "runtime_spec_sha256",
+        "prepare_script",
+        "prepare_script_sha256",
+        "uv_cache",
+        "git_lfs_bin",
+        "git_lfs_bin_sha256",
+        "flash_attn_wheel",
+        "flash_attn_wheel_sha256",
+        "torchcodec_wheel",
+        "torchcodec_wheel_sha256",
+        "healthcare_assets_archive",
+        "healthcare_assets_archive_sha256",
+        "isaaclab_root",
+        "gr00t_root",
+        "model_root",
+        "hf_cache",
+        "task_overlay_root",
+        "sanitized_tray_usd",
+        "python_deps",
+    }
+    runtime_optional = {"backbone_model_root", "trocar_metadata"}
+    if not isinstance(runtime_value, dict):
+        raise WorkflowError("runtime must be an object")
+    missing_runtime = runtime_required - set(runtime_value)
+    unexpected_runtime = set(runtime_value) - runtime_required - runtime_optional
+    if missing_runtime or unexpected_runtime:
+        raise WorkflowError(
+            "runtime fields mismatch: "
+            f"missing={sorted(missing_runtime)} unexpected={sorted(unexpected_runtime)}"
+        )
+    runtime = dict(runtime_value)
+    runtime.setdefault("backbone_model_root", None)
+    runtime.setdefault("trocar_metadata", None)
     python = Path(_string(runtime["python"], "runtime.python"))
     if not python.is_absolute():
         raise WorkflowError("runtime.python must be absolute")
@@ -591,37 +601,53 @@ def _load_site(
         runtime["healthcare_assets_archive_sha256"],
         "runtime.healthcare_assets_archive",
     )
+    backbone_model_root = runtime["backbone_model_root"]
+    if backbone_model_root is not None:
+        _absolute_directory(backbone_model_root, "runtime.backbone_model_root")
+    trocar_metadata = runtime["trocar_metadata"]
+    if trocar_metadata is not None:
+        _absolute_file(trocar_metadata, "runtime.trocar_metadata")
     try:
         runtime_spec_value = json.loads(runtime_spec.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         raise WorkflowError("runtime spec is not valid JSON") from error
-    runtime_spec_value = _exact_dict(
-        runtime_spec_value,
-        {
-            "schema",
-            "system_image_registry_digest",
-            "python_version",
-            "torch_version",
-            "torchvision_version",
-            "torchaudio_version",
-            "torch_backend",
-            "flash_attn_version",
-            "flash_attn_wheel_filename",
-            "flash_attn_wheel_sha256",
-            "torchcodec_version",
-            "torchcodec_backend",
-            "torchcodec_wheel_filename",
-            "torchcodec_wheel_sha256",
-            "hydra_core_version",
-            "numpy_version",
-            "transformers_version",
-            "isaaclab_revision",
-            "gr00t_revision",
-            "installer",
-            "installer_arguments",
-        },
-        "runtime spec",
+    runtime_spec_required = {
+        "schema",
+        "system_image_registry_digest",
+        "python_version",
+        "torch_version",
+        "torchvision_version",
+        "torchaudio_version",
+        "torch_backend",
+        "flash_attn_version",
+        "flash_attn_wheel_filename",
+        "flash_attn_wheel_sha256",
+        "torchcodec_version",
+        "torchcodec_backend",
+        "torchcodec_wheel_filename",
+        "torchcodec_wheel_sha256",
+        "hydra_core_version",
+        "numpy_version",
+        "transformers_version",
+        "isaaclab_revision",
+        "gr00t_revision",
+        "installer",
+        "installer_arguments",
+    }
+    runtime_spec_optional = {"installer_model"}
+    if not isinstance(runtime_spec_value, dict):
+        raise WorkflowError("runtime spec must be an object")
+    missing_spec = runtime_spec_required - set(runtime_spec_value)
+    unexpected_spec = (
+        set(runtime_spec_value) - runtime_spec_required - runtime_spec_optional
     )
+    if missing_spec or unexpected_spec:
+        raise WorkflowError(
+            "runtime spec fields mismatch: "
+            f"missing={sorted(missing_spec)} unexpected={sorted(unexpected_spec)}"
+        )
+    runtime_spec_value = dict(runtime_spec_value)
+    runtime_spec_value.setdefault("installer_model", "gr00t")
     if runtime_spec_value.get("schema") != "rlinf.eos.python-runtime.v1":
         raise WorkflowError("runtime spec schema mismatch")
     if runtime_spec_value.get("system_image_registry_digest") != registry_digest:
@@ -654,6 +680,7 @@ def _load_site(
         "numpy_version",
         "transformers_version",
         "installer",
+        "installer_model",
     ):
         _string(runtime_spec_value[key], f"runtime spec.{key}")
     if flash_attn_wheel.name != runtime_spec_value["flash_attn_wheel_filename"]:
@@ -665,6 +692,13 @@ def _load_site(
         raise WorkflowError("runtime spec and FlashAttention wheel hash disagree")
     if runtime_spec_value["installer"] != "requirements/install.sh":
         raise WorkflowError("runtime spec uses an unsupported installer")
+    if runtime_spec_value["installer_model"] not in {"gr00t", "gr00t_n1d7"}:
+        raise WorkflowError("runtime spec uses an unsupported embodied model")
+    if runtime_spec_value["installer_model"] == "gr00t_n1d7":
+        if runtime["backbone_model_root"] is None:
+            raise WorkflowError("GR00T N1.7 requires runtime.backbone_model_root")
+        if runtime["trocar_metadata"] is None:
+            raise WorkflowError("GR00T N1.7 requires runtime.trocar_metadata")
     if runtime_spec_value["torchcodec_backend"] != "cpu":
         raise WorkflowError("runtime spec uses an unsupported TorchCodec backend")
     if torchcodec_wheel.name != runtime_spec_value["torchcodec_wheel_filename"]:
@@ -685,7 +719,7 @@ def _load_site(
         "--no-flash-attn",
         "embodied",
         "--model",
-        "gr00t",
+        runtime_spec_value["installer_model"],
         "--env",
         "isaaclab",
     ]
@@ -1219,6 +1253,8 @@ def _ray_worker_environment(site: Mapping[str, Any]) -> dict[str, str]:
             "W68_ISAACLAB_SOURCE_ROOT": str(Path(runtime["isaaclab_root"]) / "source"),
             "W68_OVERLAY_ROOT": runtime["task_overlay_root"],
             "W68_SANITIZED_TRAY_USD": runtime["sanitized_tray_usd"],
+            "W77_BACKBONE_MODEL_ROOT": runtime.get("backbone_model_root") or "",
+            "W77_TROCAR_METADATA": runtime.get("trocar_metadata") or "",
             "OMNI_KIT_ACCEPT_EULA": "YES",
             "ACCEPT_EULA": "Y",
             "PRIVACY_CONSENT": "Y",
@@ -1499,6 +1535,8 @@ def _run_agent(args: argparse.Namespace) -> int:
             "W73_ISAACLAB_ROOT": runtime["isaaclab_root"],
             "W73_GROOT_ROOT": runtime["gr00t_root"],
             "W73_MODEL_ROOT": runtime["model_root"],
+            "W77_BACKBONE_MODEL_ROOT": runtime.get("backbone_model_root") or "",
+            "W77_TROCAR_METADATA": runtime.get("trocar_metadata") or "",
             "W73_HF_CACHE": runtime["hf_cache"],
             "W73_TASK_OVERLAY_ROOT": runtime["task_overlay_root"],
             "W73_SANITIZED_TRAY_USD": runtime["sanitized_tray_usd"],

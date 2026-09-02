@@ -589,6 +589,20 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
     script = (ROOT / "toolkits/eos/gr00t_trocar/prepare_runtime.sh").read_text(
         encoding="utf-8"
     )
+    site = json.loads(
+        (ROOT / "toolkits/eos/gr00t_trocar/site.n1d7.eos.template.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    config = (
+        ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-baseline-chunk16.yaml"
+    ).read_text(encoding="utf-8")
+    runner = (ROOT / "toolkits/eos/gr00t_trocar/run_n1d7.sh").read_text(
+        encoding="utf-8"
+    )
+    extension = (
+        ROOT / "toolkits/eos/gr00t_trocar/w68_rlinf_extension.py"
+    ).read_text(encoding="utf-8")
 
     assert spec["torch_version"] == "2.11.0"
     assert spec["transformers_version"] == "4.57.3"
@@ -611,6 +625,21 @@ def test_n1d7_runtime_and_model_contract_are_frozen() -> None:
     assert manifest["backbone"]["files"]["model.safetensors"] == (
         "fa5a6e6ef4fce40216b185cc48a3b24d31637ac3e2ba69c107ed1f389c1e6ede"
     )
+
+    assert site["runtime"]["gr00t_root"].endswith("/inputs/Isaac-GR00T-N1.7")
+    assert site["runtime"]["model_root"].endswith("/inputs/GR00T-N1.7-3B")
+    assert site["runtime"]["backbone_model_root"].endswith(
+        "/inputs/Cosmos-Reason2-2B"
+    )
+    assert site["experiment"]["output_root"].endswith("/runs/W77")
+    assert "model_type: gr00t_n1d7" in config
+    assert config.count("embodiment_tag_id: 10") == 2
+    assert "rollout_backbone_feature_transport" not in config
+    assert "W77_BACKBONE_MODEL_ROOT" in runner
+    assert "W77_TROCAR_METADATA" in runner
+    assert 'embodiment_id_mapping={"new_embodiment": 10}' in extension
+    assert "model.backbone.requires_grad_(False)" in extension
+    assert 'str(model_cfg.model_type) == "gr00t_n1d7"' in extension
 
 
 def test_eos_template_pins_newton_tray_textures() -> None:

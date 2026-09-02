@@ -41,6 +41,7 @@ Usage:
 from __future__ import annotations
 
 import collections.abc
+import json
 import logging
 import os
 import sys
@@ -473,6 +474,159 @@ def _patch_embodiment_tags(cfg: dict) -> None:
     logger.info(f"Added EMBODIMENT_TAG_MAPPING['{embodiment_tag}'] = {tag_id}")
 
 
+def _load_n1d7_trocar_model(model_cfg, torch_dtype: torch.dtype) -> object:
+    """Load GR00T N1.7 with the Trocar modality and normalization contract."""
+    from gr00t.data.types import ModalityConfig
+    from gr00t.model.gr00t_n1d7.processing_gr00t_n1d7 import Gr00tN1d7Processor
+    from omegaconf import OmegaConf
+
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.gr00t_action_model import (
+        GR00T_N1_7_ForRLActionPrediction,
+        redirect_qwen3_backbone_to_local,
+    )
+    from rlinf.models.embodiment.gr00t.utils import replace_dropout_with_identity
+
+    model_path = Path(model_cfg.model_path).expanduser().resolve()
+    if not model_path.is_dir():
+        raise FileNotFoundError(f"Model path does not exist: {model_path}")
+    backbone_path_value = OmegaConf.select(
+        model_cfg, "backbone_model_path", default=None
+    )
+    if not backbone_path_value:
+        raise ValueError("GR00T N1.7 Trocar requires backbone_model_path")
+    backbone_path = Path(backbone_path_value).expanduser().resolve()
+    if not backbone_path.is_dir():
+        raise FileNotFoundError(f"Backbone model path does not exist: {backbone_path}")
+
+    metadata_value = os.environ.get("W77_TROCAR_METADATA", "")
+    if not metadata_value:
+        raise RuntimeError("W77_TROCAR_METADATA is required for GR00T N1.7 Trocar")
+    metadata_path = Path(metadata_value).expanduser().resolve()
+    with metadata_path.open(encoding="utf-8") as handle:
+        metadata = json.load(handle)
+    try:
+        statistics = {
+            "new_embodiment": metadata["new_embodiment"]["statistics"]
+        }
+    except KeyError as error:
+        raise ValueError(
+            "Trocar metadata must contain new_embodiment.statistics"
+        ) from error
+
+    modality_configs = {
+        "new_embodiment": {
+            "video": ModalityConfig(
+                delta_indices=[0],
+                modality_keys=["left_wrist_view", "right_wrist_view", "room_view"],
+            ),
+            "state": ModalityConfig(
+                delta_indices=[0],
+                modality_keys=["left_arm", "right_arm", "left_hand", "right_hand"],
+            ),
+            "action": ModalityConfig(
+                delta_indices=list(range(16)),
+                modality_keys=["left_arm", "right_arm", "left_hand", "right_hand"],
+            ),
+            "language": ModalityConfig(
+                delta_indices=[0],
+                modality_keys=["annotation.human.action.task_description"],
+            ),
+        }
+    }
+
+    from gr00t.configs.model.gr00t_n1d7 import Gr00tN1d7Config
+
+    config = Gr00tN1d7Config.from_pretrained(str(model_path))
+    config.action_dim = int(model_cfg.action_dim)
+    config.tune_llm = False
+    config.tune_visual = False
+    config.tune_top_llm_layers = 0
+    loading_kwargs = {"trust_remote_code": True, "local_files_only": True}
+    with redirect_qwen3_backbone_to_local(config.model_name, str(backbone_path)):
+        processor = Gr00tN1d7Processor(
+            modality_configs=modality_configs,
+            statistics=statistics,
+            use_percentiles=False,
+            image_crop_size=list(config.image_crop_size),
+            image_target_size=list(config.image_target_size),
+            shortest_image_edge=config.shortest_image_edge,
+            crop_fraction=config.crop_fraction,
+            random_rotation_angle=0,
+            color_jitter_params=None,
+            formalize_language=True,
+            model_name=config.model_name,
+            model_type=config.backbone_model_type,
+            max_state_dim=config.max_state_dim,
+            max_action_dim=config.max_action_dim,
+            max_action_horizon=config.action_horizon,
+            apply_sincos_state_encoding=False,
+            use_albumentations=False,
+            use_relative_action=False,
+            # N1.7 reserves projector 10 for custom post-training embodiments.
+            embodiment_id_mapping={"new_embodiment": 10},
+            transformers_loading_kwargs=loading_kwargs,
+            exclude_state=False,
+            state_dropout_prob=0.0,
+            use_mean_std=False,
+            letter_box_transform=False,
+        )
+
+    model = GR00T_N1_7_ForRLActionPrediction.from_pretrained(
+        config=config,
+        local_model_path=str(model_path),
+        pretrained_model_name_or_path=str(model_path),
+        backbone_model_path=str(backbone_path),
+        torch_dtype=torch_dtype,
+        embodiment_tag="new_embodiment",
+        modality_config=modality_configs,
+        modality_transform=processor,
+        denoising_steps=model_cfg.denoising_steps,
+        output_action_chunks=model_cfg.num_action_chunks,
+        obs_converter_type=model_cfg.obs_converter_type,
+        rl_head_config=model_cfg.rl_head_config,
+    )
+
+    # PPO trains the action/value path only. The raw backbone output is the
+    # future feature-reuse boundary, so fail closed unless it is fully frozen.
+    model.backbone.requires_grad_(False)
+    model.backbone.eval()
+    model.to(torch_dtype)
+    if model_cfg.rl_head_config.add_value_head:
+        seed = model_cfg.get("value_head_init_seed", None)
+        if seed is None:
+            model.action_head.value_head._init_weights()
+        else:
+            from rlinf.utils.convergence_seed import (
+                critic_digest,
+                maybe_seeded_value_head_init,
+            )
+
+            maybe_seeded_value_head_init(model.action_head.value_head, seed)
+            logger.info(
+                "RLINF_CRITIC_INIT seed=%d digest=%s",
+                int(seed),
+                critic_digest(model.action_head.value_head),
+            )
+    if model_cfg.rl_head_config.disable_dropout:
+        replace_dropout_with_identity(model)
+
+    trainable_backbone = sum(
+        parameter.numel() for parameter in model.backbone.parameters()
+        if parameter.requires_grad
+    )
+    if trainable_backbone != 0:
+        raise RuntimeError(
+            f"GR00T N1.7 backbone must be frozen, found {trainable_backbone} trainable parameters"
+        )
+    logger.info(
+        "Loaded GR00T N1.7 Trocar model model=%s backbone=%s metadata=%s",
+        model_path,
+        backbone_path,
+        metadata_path,
+    )
+    return model
+
+
 def _patch_gr00t_get_model(cfg: dict) -> None:
     """Monkeypatch RLinf's GR00T ``get_model`` to support custom ``data_config``.
 
@@ -509,6 +663,9 @@ def _patch_gr00t_get_model(cfg: dict) -> None:
         """
         if torch_dtype is None:
             torch_dtype = torch.bfloat16
+
+        if str(model_cfg.model_type) == "gr00t_n1d7":
+            return _load_n1d7_trocar_model(model_cfg, torch_dtype)
 
         # Handle custom embodiment (we only get here if tag was not natively supported)
         from gr00t.experiment.data_config import load_data_config
@@ -623,21 +780,20 @@ def _register_gr00t_converters(cfg: dict) -> None:
         simulation_io.OBS_CONVERSION[obs_converter_type] = _convert_isaaclab_obs_to_gr00t
         logger.info(f"Registered obs converter: {obs_converter_type}")
 
-    # RLinf current main has model-version-specific action registries. Trocar
-    # uses the GR00T-N1.5 checkpoint, while rlinf==0.2 exposed one legacy map.
-    action_conversion = getattr(
-        simulation_io,
-        "ACTION_CONVERSION_N1D5",
-        getattr(simulation_io, "ACTION_CONVERSION", None),
-    )
-    if action_conversion is None:
-        raise RuntimeError(
-            "RLinf simulation_io exposes neither ACTION_CONVERSION_N1D5 nor "
-            "the legacy ACTION_CONVERSION registry"
-        )
-    if obs_converter_type not in action_conversion:
-        action_conversion[obs_converter_type] = _convert_gr00t_to_isaaclab_action
-        logger.info(f"Registered action converter: {obs_converter_type}")
+    action_registries = []
+    for name in ("ACTION_CONVERSION_N1D5", "ACTION_CONVERSION_N1D7"):
+        registry = getattr(simulation_io, name, None)
+        if registry is not None:
+            action_registries.append((name, registry))
+    if not action_registries:
+        legacy = getattr(simulation_io, "ACTION_CONVERSION", None)
+        if legacy is None:
+            raise RuntimeError("RLinf exposes no GR00T action conversion registry")
+        action_registries.append(("ACTION_CONVERSION", legacy))
+    for name, registry in action_registries:
+        if obs_converter_type not in registry:
+            registry[obs_converter_type] = _convert_gr00t_to_isaaclab_action
+            logger.info("Registered %s action converter: %s", name, obs_converter_type)
 
 
 def _convert_isaaclab_obs_to_gr00t(env_obs: dict) -> dict:
