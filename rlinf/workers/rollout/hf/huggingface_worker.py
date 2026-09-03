@@ -468,6 +468,22 @@ class MultiStepRolloutWorker(Worker):
         self.hf_model: BasePolicy = get_model(rollout_model_config)
         self.hf_model.capture_rollout_backbone_output = self._pinned_feature_ipc_enabled
 
+        tensorrt_config = OmegaConf.select(
+            self.cfg, "rollout.model.tensorrt_backbone", default=None
+        )
+        if tensorrt_config is not None and bool(tensorrt_config.get("enabled", False)):
+            if self.enable_offload:
+                raise ValueError(
+                    "TensorRT backbone with compiled online head requires "
+                    "rollout.enable_offload=false"
+                )
+            enable_tensorrt_backbone = getattr(
+                self.hf_model, "enable_tensorrt_backbone", None
+            )
+            if not callable(enable_tensorrt_backbone):
+                raise TypeError("rollout model does not support a TensorRT backbone")
+            enable_tensorrt_backbone(tensorrt_config)
+
         if self.cfg.runner.get("ckpt_path", None):
             model_dict = torch.load(self.cfg.runner.ckpt_path)
             self.hf_model.load_state_dict(model_dict)
@@ -1001,6 +1017,11 @@ class MultiStepRolloutWorker(Worker):
             )
 
         applied_version = await self.weight_syncer.apply(self.hf_model, recv_func)
+        verify_online_update = getattr(
+            self.hf_model, "verify_online_update_contract", None
+        )
+        if callable(verify_online_update):
+            verify_online_update()
         self.version = applied_version
         if self.finished_episodes is None:
             self.finished_episodes = (
@@ -1282,6 +1303,12 @@ class MultiStepRolloutWorker(Worker):
                 train_batch_size=self.per_node_train_batch_size,
                 eval_batch_size=self.per_node_eval_batch_size,
             )
+
+    def _close(self) -> None:
+        model = getattr(self, "hf_model", None)
+        close_hybrid_runtime = getattr(model, "close_hybrid_runtime", None)
+        if callable(close_hybrid_runtime):
+            close_hybrid_runtime()
 
     @staticmethod
     def _infer_env_batch_size(obs_batch: dict[str, Any]) -> int:

@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Compatibility import for the promoted RLinf TensorRT runtime."""
+"""TensorRT runtime helpers used by RLinf hybrid inference backends."""
 
-from rlinf.hybrid_engines.tensorrt import PersistentEngine
+from .persistent_engine import PersistentEngine
 
 __all__ = ["PersistentEngine"]

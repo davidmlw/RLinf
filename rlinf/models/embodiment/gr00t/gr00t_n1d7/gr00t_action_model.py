@@ -929,6 +929,9 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
             raise NotImplementedError
 
     def _forward_backbone(self, backbone_inputs: BatchFeature) -> BatchFeature:
+        tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
+        if tensorrt_backbone is not None:
+            return BatchFeature(data=tensorrt_backbone(backbone_inputs))
         if not getattr(self, "use_bounded_frozen_backbone", False):
             return self.backbone(backbone_inputs)
         output = run_bounded_frozen_qwen3_backbone(
@@ -938,6 +941,91 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
             logits_chunk_rows=int(getattr(self, "unused_logits_chunk_rows", 4096)),
         )
         return BatchFeature(data=output)
+
+    def enable_tensorrt_backbone(self, config: Mapping[str, Any]) -> None:
+        """Replace the frozen eager ViT/LLM with a qualified TensorRT backend."""
+
+        if getattr(self, "_tensorrt_backbone", None) is not None:
+            raise RuntimeError("TensorRT backbone is already enabled")
+        from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_backbone import (
+            TensorRTFrozenBackbone,
+        )
+
+        self._tensorrt_backbone = TensorRTFrozenBackbone(self.backbone, config)
+
+    def enable_torch_compile(
+        self,
+        mode: str = "max-autotune-no-cudagraphs",
+    ) -> None:
+        """Compile only the online-updateable DiT core of the N1.7 action head."""
+
+        if getattr(self, "_compiled_dit_forward", None) is not None:
+            raise RuntimeError("GR00T N1.7 DiT is already compiled")
+        action_model = self.action_head.model
+        self._eager_dit_forward = action_model.forward
+        self._compiled_dit_forward = torch.compile(
+            action_model.forward,
+            mode=mode,
+            dynamic=False,
+        )
+        action_model.forward = self._compiled_dit_forward
+        self._compiled_dit_parameter_contract = {
+            name: (id(parameter), parameter.data_ptr())
+            for name, parameter in action_model.named_parameters()
+        }
+        self._compiled_dit_mode = mode
+
+    def verify_online_update_contract(self) -> None:
+        """Reject weight adoption that replaced a compiled DiT parameter/storage."""
+
+        contract = getattr(self, "_compiled_dit_parameter_contract", None)
+        if contract is None:
+            return
+        actual = {
+            name: (id(parameter), parameter.data_ptr())
+            for name, parameter in self.action_head.model.named_parameters()
+        }
+        if actual != contract:
+            changed = sorted(
+                name
+                for name in set(contract) | set(actual)
+                if contract.get(name) != actual.get(name)
+            )
+            raise RuntimeError(
+                "online head update replaced compiled DiT parameters or storage: "
+                f"{changed[:8]}"
+            )
+
+    def hybrid_runtime_telemetry(self) -> dict[str, Any]:
+        """Return runtime state used by W81 lifecycle receipts."""
+
+        tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
+        compile_enabled = getattr(self, "_compiled_dit_forward", None) is not None
+        unique_graphs = 0
+        if compile_enabled:
+            unique_graphs = int(torch._dynamo.utils.counters["stats"]["unique_graphs"])
+        return {
+            "tensorrt_backbone": (
+                tensorrt_backbone.telemetry()
+                if tensorrt_backbone is not None
+                else None
+            ),
+            "compiled_dit": {
+                "enabled": compile_enabled,
+                "mode": getattr(self, "_compiled_dit_mode", None),
+                "unique_graphs": unique_graphs,
+                "parameter_count": len(
+                    getattr(self, "_compiled_dit_parameter_contract", {})
+                ),
+            },
+        }
+
+    def close_hybrid_runtime(self) -> None:
+        """Release TensorRT resources before the Rollout worker exits."""
+
+        tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
+        if tensorrt_backbone is not None:
+            tensorrt_backbone.close()
 
     def _prepare_action_head_input(
         self, forward_inputs: Mapping[str, torch.Tensor]

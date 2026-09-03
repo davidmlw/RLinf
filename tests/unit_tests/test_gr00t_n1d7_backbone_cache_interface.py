@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -197,3 +199,70 @@ def test_n1d7_rollout_captures_all_raw_backbone_outputs():
     torch.testing.assert_close(captured[ROLLOUT_BACKBONE_FEATURE_KEY], raw_features)
     torch.testing.assert_close(captured[ROLLOUT_BACKBONE_MASK_KEY], attention_mask)
     torch.testing.assert_close(captured[ROLLOUT_BACKBONE_IMAGE_MASK_KEY], image_mask)
+
+
+def test_n1d7_forward_backbone_prefers_installed_tensorrt_backend():
+    pytest.importorskip("gr00t")
+    from transformers.feature_extraction_utils import BatchFeature
+
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.gr00t_action_model import (
+        GR00T_N1_7_ForRLActionPrediction,
+    )
+
+    class FakeBackend:
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, inputs):
+            self.calls += 1
+            return {
+                "backbone_features": inputs["features"] + 1,
+                "backbone_attention_mask": torch.ones(1, 1, dtype=torch.bool),
+                "image_mask": torch.zeros(1, 1, dtype=torch.bool),
+            }
+
+    backend = FakeBackend()
+    policy = SimpleNamespace(_tensorrt_backbone=backend)
+    result = GR00T_N1_7_ForRLActionPrediction._forward_backbone(
+        policy, BatchFeature(data={"features": torch.zeros(1, 1, 2)})
+    )
+
+    assert backend.calls == 1
+    torch.testing.assert_close(result["backbone_features"], torch.ones(1, 1, 2))
+
+
+def test_n1d7_compiled_dit_allows_in_place_weight_update(monkeypatch):
+    pytest.importorskip("gr00t")
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.gr00t_action_model import (
+        GR00T_N1_7_ForRLActionPrediction,
+    )
+
+    model = torch.nn.Linear(2, 2)
+    policy = SimpleNamespace(action_head=SimpleNamespace(model=model))
+    monkeypatch.setattr(torch, "compile", lambda fn, **_kwargs: fn)
+
+    GR00T_N1_7_ForRLActionPrediction.enable_torch_compile(policy)
+    parameter_id = id(model.weight)
+    parameter_pointer = model.weight.data_ptr()
+    with torch.no_grad():
+        model.weight.add_(1)
+    GR00T_N1_7_ForRLActionPrediction.verify_online_update_contract(policy)
+
+    assert id(model.weight) == parameter_id
+    assert model.weight.data_ptr() == parameter_pointer
+
+
+def test_n1d7_compiled_dit_rejects_parameter_replacement(monkeypatch):
+    pytest.importorskip("gr00t")
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.gr00t_action_model import (
+        GR00T_N1_7_ForRLActionPrediction,
+    )
+
+    model = torch.nn.Linear(2, 2)
+    policy = SimpleNamespace(action_head=SimpleNamespace(model=model))
+    monkeypatch.setattr(torch, "compile", lambda fn, **_kwargs: fn)
+    GR00T_N1_7_ForRLActionPrediction.enable_torch_compile(policy)
+    model.weight = torch.nn.Parameter(model.weight.detach().clone())
+
+    with pytest.raises(RuntimeError, match="replaced compiled DiT"):
+        GR00T_N1_7_ForRLActionPrediction.verify_online_update_contract(policy)
