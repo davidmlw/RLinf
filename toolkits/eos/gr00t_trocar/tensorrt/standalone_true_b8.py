@@ -22,6 +22,7 @@ import json
 import math
 import statistics
 import sys
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -58,6 +59,81 @@ def _statistics(values: list[float]) -> dict[str, Any]:
         "sample_std_ms": sample_std,
         "cv": sample_std / mean if mean else None,
     }
+
+
+def _process_rss_bytes() -> int:
+    for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
+        if line.startswith("VmRSS:"):
+            return int(line.split()[1]) * 1024
+    raise RuntimeError("VmRSS is absent from /proc/self/status")
+
+
+def _cuda_memory() -> dict[str, int]:
+    import torch
+
+    return {
+        "allocated_bytes": torch.cuda.memory_allocated(),
+        "reserved_bytes": torch.cuda.memory_reserved(),
+    }
+
+
+def _measure_memory(call: Any, iterations: int) -> dict[str, Any]:
+    """Measure a separate untimed memory probe without polluting latency samples."""
+
+    import torch
+
+    torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
+    cuda_before = _cuda_memory()
+    rss_before = _process_rss_bytes()
+    rss_peak = [rss_before]
+    stop = threading.Event()
+
+    def sample_rss() -> None:
+        while not stop.wait(0.001):
+            rss_peak[0] = max(rss_peak[0], _process_rss_bytes())
+
+    sampler = threading.Thread(target=sample_rss, daemon=True)
+    sampler.start()
+    try:
+        for _ in range(iterations):
+            call()
+        torch.cuda.synchronize()
+    finally:
+        stop.set()
+        sampler.join()
+    rss_after = _process_rss_bytes()
+    rss_peak[0] = max(rss_peak[0], rss_after)
+    return {
+        "iterations": iterations,
+        "host_rss_before_bytes": rss_before,
+        "host_rss_peak_bytes": rss_peak[0],
+        "host_rss_peak_delta_bytes": rss_peak[0] - rss_before,
+        "host_rss_after_bytes": rss_after,
+        "cuda_allocated_before_bytes": cuda_before["allocated_bytes"],
+        "cuda_reserved_before_bytes": cuda_before["reserved_bytes"],
+        "cuda_allocated_after_bytes": torch.cuda.memory_allocated(),
+        "cuda_peak_allocated_bytes": torch.cuda.max_memory_allocated(),
+        "cuda_reserved_after_bytes": torch.cuda.memory_reserved(),
+        "cuda_peak_reserved_bytes": torch.cuda.max_memory_reserved(),
+        "note": "dedicated probe; host RSS sampled every 1 ms",
+    }
+
+
+def _measure_model_memory(policy: Any, inputs: Any, iterations: int) -> dict[str, Any]:
+    import torch
+
+    def call() -> None:
+        with torch.inference_mode():
+            policy.model.get_action(inputs)
+
+    return _measure_memory(call, iterations)
+
+
+def _measure_whole_memory(
+    policy: Any, observation: dict[str, Any], iterations: int
+) -> dict[str, Any]:
+    return _measure_memory(lambda: policy.get_action(observation), iterations)
 
 
 def _raw_observation(raw_path: Path, receipt_path: Path) -> dict[str, Any]:
@@ -160,6 +236,28 @@ def _measure_whole(policy: Any, observation: dict, warmup: int, measured: int) -
     }
 
 
+def _measure_components(
+    policy: Any, observation: dict, warmup: int, measured: int
+) -> dict[str, Any]:
+    from benchmark_inference import benchmark_components  # noqa: PLC0415
+
+    values = benchmark_components(
+        policy, observation, num_iterations=measured, warmup=warmup
+    )
+    raw = {name: samples.tolist() for name, samples in values.items()}
+    raw["constructed_sum"] = (
+        values["data_processing"] + values["backbone"] + values["action_head"]
+    ).tolist()
+    return {
+        "boundary": "upstream benchmark_inference.benchmark_components",
+        "constructed_sum_is_not_measured_e2e": True,
+        "warmup": warmup,
+        "measured": measured,
+        "raw_samples_ms": raw,
+        "statistics": {name: _statistics(samples) for name, samples in raw.items()},
+    }
+
+
 def _load_policy(source: Path, model: Path) -> Any:
     deployment = source / "scripts/deployment"
     sys.path.insert(0, str(deployment))
@@ -190,7 +288,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     inputs = collated["inputs"] if "inputs" in collated else collated
     observation = _raw_observation(raw_path, fixture_receipt)
 
+    eager_load_started = time.perf_counter_ns()
     eager = _load_policy(source, model)
+    torch.cuda.synchronize()
+    eager_load_ms = (time.perf_counter_ns() - eager_load_started) / 1_000_000
     eager_vit = {}
 
     def eager_vit_hook(_module: Any, _args: Any, output_value: Any) -> None:
@@ -201,24 +302,46 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         eager_vit_hook
     )
     try:
+        eager_first_started = time.perf_counter_ns()
         eager_action, eager_backbone, _ = _fixed_model_call(eager, inputs, args.seed)
+        eager_first_ms = (time.perf_counter_ns() - eager_first_started) / 1_000_000
     finally:
         vit_hook.remove()
     eager_public = _public_action(eager, eager_action, observation)
+    eager_resident_memory = {
+        "host_rss_bytes": _process_rss_bytes(),
+        "cuda": _cuda_memory(),
+    }
+    eager_components = _measure_components(
+        eager, observation, args.component_warmup, args.component_measured
+    )
     eager_model_timing = _measure_model(eager, inputs, args.warmup, args.measured)
     eager_whole_timing = _measure_whole(eager, observation, args.warmup, args.measured)
+
+    eager_model_memory = _measure_model_memory(eager, inputs, args.memory_iterations)
+    eager_whole_memory = _measure_whole_memory(
+        eager, observation, args.memory_iterations
+    )
     del eager
     gc.collect()
     torch.cuda.empty_cache()
 
+    hybrid_load_started = time.perf_counter_ns()
     hybrid = _load_policy(source, model)
+    torch.cuda.synchronize()
+    hybrid_load_ms = (time.perf_counter_ns() - hybrid_load_started) / 1_000_000
     deployment = source / "scripts/deployment"
     sys.path.insert(0, str(deployment))
     import trt_model_forward  # noqa: PLC0415
 
     trt_model_forward.Engine = PersistentEngine
+    setup_started = time.perf_counter_ns()
     trt_model_forward.setup_tensorrt_engines(hybrid, str(engines), mode="vit_llm_only")
+    torch.cuda.synchronize()
+    engine_setup_ms = (time.perf_counter_ns() - setup_started) / 1_000_000
+    hybrid_first_started = time.perf_counter_ns()
     hybrid_action, hybrid_backbone, _ = _fixed_model_call(hybrid, inputs, args.seed)
+    hybrid_first_ms = (time.perf_counter_ns() - hybrid_first_started) / 1_000_000
     hybrid_public = _public_action(hybrid, hybrid_action, observation)
     vit_engine = hybrid.model.backbone.vit_engine
     llm_engine = hybrid.model.backbone.llm_engine
@@ -229,13 +352,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     fixed_noise_repeat = _compare_array(
         hybrid_action.float().numpy(), repeat_action.float().numpy()
     )
-    hybrid_model_timing = _measure_model(hybrid, inputs, args.warmup, args.measured)
     allocation_floor = {
         "vit": vit_engine.allocation_count,
         "llm": llm_engine.allocation_count,
     }
+    hybrid_resident_memory = {
+        "host_rss_bytes": _process_rss_bytes(),
+        "cuda": _cuda_memory(),
+    }
+    hybrid_components = _measure_components(
+        hybrid, observation, args.component_warmup, args.component_measured
+    )
+    hybrid_model_timing = _measure_model(hybrid, inputs, args.warmup, args.measured)
     hybrid_whole_timing = _measure_whole(
         hybrid, observation, args.warmup, args.measured
+    )
+
+    hybrid_model_memory = _measure_model_memory(hybrid, inputs, args.memory_iterations)
+    hybrid_whole_memory = _measure_whole_memory(
+        hybrid, observation, args.memory_iterations
     )
     telemetry = {
         "vit": vit_engine.telemetry(),
@@ -297,13 +432,40 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "gates": gates,
         "timing": {
             "eager": {
+                "cold": {
+                    "model_load_ms": eager_load_ms,
+                    "first_fixed_noise_model_call_ms": eager_first_ms,
+                },
+                "components": eager_components,
                 "model_only": eager_model_timing,
                 "whole_call": eager_whole_timing,
             },
             "hybrid": {
+                "cold": {
+                    "model_load_ms": hybrid_load_ms,
+                    "engine_deserialize_context_setup_ms": engine_setup_ms,
+                    "first_fixed_noise_model_call_ms": hybrid_first_ms,
+                },
+                "components": hybrid_components,
                 "model_only": hybrid_model_timing,
                 "whole_call": hybrid_whole_timing,
             },
+        },
+        "memory": {
+            "eager": {
+                "resident_after_first_call": eager_resident_memory,
+                "model_only_probe": eager_model_memory,
+                "whole_call_probe": eager_whole_memory,
+            },
+            "hybrid": {
+                "resident_after_first_call": hybrid_resident_memory,
+                "model_only_probe": hybrid_model_memory,
+                "whole_call_probe": hybrid_whole_memory,
+            },
+            "host_comparison_note": (
+                "arms run sequentially in one process; compare scoped RSS deltas, "
+                "not absolute RSS, because the host allocator may retain storage"
+            ),
         },
         "telemetry": telemetry,
     }
@@ -328,6 +490,9 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=47)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--measured", type=int, default=30)
+    parser.add_argument("--component-warmup", type=int, default=5)
+    parser.add_argument("--component-measured", type=int, default=20)
+    parser.add_argument("--memory-iterations", type=int, default=3)
     args = parser.parse_args()
     try:
         receipt = run(args)
