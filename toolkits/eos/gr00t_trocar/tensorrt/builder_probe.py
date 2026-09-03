@@ -22,6 +22,7 @@ import importlib.metadata
 import importlib.util
 import json
 import os
+import re
 import site
 import subprocess
 import sys
@@ -41,6 +42,7 @@ EXPECTED_DISTRIBUTIONS = {
     "tensorrt-cu12-libs": "10.15.1.29",
     "torchcodec": "0.8.1",
 }
+LDD_ADDRESS_RE = re.compile(r"\s+\(0x[0-9a-fA-F]+\)$")
 
 
 def runtime_library_paths(env_root: Path) -> list[Path]:
@@ -83,10 +85,14 @@ def _ldd(path: Path) -> list[str]:
     completed = subprocess.run(
         ["ldd", str(path)], check=False, capture_output=True, text=True
     )
-    lines = (completed.stdout + completed.stderr).splitlines()
+    lines = _normalize_ldd(completed.stdout + completed.stderr)
     if completed.returncode or any("not found" in line for line in lines):
         raise RuntimeError(f"native dependency resolution failed for {path}: {lines}")
     return lines
+
+
+def _normalize_ldd(output: str) -> list[str]:
+    return [LDD_ADDRESS_RE.sub("", line) for line in output.splitlines()]
 
 
 def _native_linkage(env_root: Path) -> dict[str, dict[str, object]]:
@@ -103,7 +109,7 @@ def _native_linkage(env_root: Path) -> dict[str, dict[str, object]]:
         completed = subprocess.run(
             ["ldd", str(path)], check=False, capture_output=True, text=True
         )
-        lines = (completed.stdout + completed.stderr).splitlines()
+        lines = _normalize_ldd(completed.stdout + completed.stderr)
         linkage[str(path.relative_to(env_root))] = {
             "return_code": completed.returncode,
             "missing": [line.strip() for line in lines if "not found" in line],

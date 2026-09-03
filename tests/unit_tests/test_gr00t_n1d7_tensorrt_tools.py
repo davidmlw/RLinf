@@ -124,6 +124,22 @@ def test_builder_runtime_library_paths_fail_closed(tmp_path: Path) -> None:
         builder_probe.runtime_library_paths(tmp_path / "missing")
 
 
+def test_ldd_normalization_removes_only_aslr_addresses() -> None:
+    output = "\n".join(
+        (
+            "linux-vdso.so.1 (0x00007fff1234)",
+            "libtorch.so => /venv/torch/lib/libtorch.so (0x00007abc5678)",
+            "libmissing.so => not found",
+        )
+    )
+
+    assert builder_probe._normalize_ldd(output) == [
+        "linux-vdso.so.1",
+        "libtorch.so => /venv/torch/lib/libtorch.so",
+        "libmissing.so => not found",
+    ]
+
+
 def test_model_view_preserves_selector_suffix_and_hashes_weights(
     tmp_path: Path,
 ) -> None:
