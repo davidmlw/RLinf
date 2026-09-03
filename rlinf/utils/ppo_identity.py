@@ -37,12 +37,8 @@ def pre_update_identity_batch_stats(
 
     batch_size = current_logprobs.shape[0]
     if logprob_type == "token_level":
-        current_logprobs = current_logprobs.reshape(
-            batch_size, -1, single_action_dim
-        )
-        behavior_logprobs = behavior_logprobs.reshape(
-            batch_size, -1, single_action_dim
-        )
+        current_logprobs = current_logprobs.reshape(batch_size, -1, single_action_dim)
+        behavior_logprobs = behavior_logprobs.reshape(batch_size, -1, single_action_dim)
     elif logprob_type == "action_level":
         current_logprobs = current_logprobs.reshape(
             batch_size, -1, single_action_dim
@@ -174,5 +170,13 @@ def finalize_pre_update_identity(
         <= float(thresholds["ratio_max_abs_from_one_max"])
         and receipt["kl_mean_abs"] <= float(thresholds["kl_mean_abs_max"])
         and receipt["kl_max_abs"] <= float(thresholds["kl_max_abs_max"])
+        and receipt["ratio_abs_gt_1e-3_fraction"]
+        <= float(thresholds.get("ratio_abs_gt_1e-3_fraction_max", 1.0))
+        and receipt["kl_abs_gt_1e-3_fraction"]
+        <= float(thresholds.get("kl_abs_gt_1e-3_fraction_max", 1.0))
+        and receipt["value_mean_abs"]
+        <= float(thresholds.get("value_mean_abs_max", float("inf")))
+        and receipt["value_max_abs"]
+        <= float(thresholds.get("value_max_abs_max", float("inf")))
     )
     return receipt

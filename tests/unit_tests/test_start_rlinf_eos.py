@@ -354,6 +354,23 @@ def test_site_accepts_w81_hybrid_with_feature_reuse_off(tmp_path: Path) -> None:
     assert contract["pinned_feature_ipc_batch_blocks"] is None
 
 
+def test_site_accepts_w81_hybrid_with_feature_reuse(tmp_path: Path) -> None:
+    config = (
+        ROOT / "toolkits/eos/gr00t_trocar/"
+        "config-n1d7-hybrid-trt-eager-reuse-chunk16.yaml"
+    )
+
+    contract = MODULE._load_site(_site(tmp_path, config=config))["_resolved"][
+        "workload_contract"
+    ]
+
+    assert contract["optimization_arm"] == "W81/hybrid-feature-reuse"
+    assert contract["eval_envs"] == 64
+    assert contract["rollout_backbone_feature_transport"] == "borrowed_ipc_pinned"
+    assert contract["pinned_feature_ipc_batch_blocks"] == 16
+    assert contract["pinned_feature_verify_trajectory"] is False
+
+
 def test_site_rejects_w81_eval_batch_that_does_not_match_static_engine(
     tmp_path: Path,
 ) -> None:

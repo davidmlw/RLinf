@@ -352,7 +352,6 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
     is_w81_hybrid = (
         actor_model.get("model_type") == "gr00t_n1d7"
         and "tensorrt_backbone" in rollout_model
-        and actor_model.get("rollout_backbone_feature_transport") is None
     )
     semantic = {
         "reward_type": algorithm.get("reward_type"),
@@ -444,7 +443,9 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
         ):
             optimization = {
                 "optimization_arm": (
-                    "B/debug-verify" if verify_trajectory else "B/bundle"
+                    "B/debug-verify"
+                    if verify_trajectory
+                    else ("W81/hybrid-feature-reuse" if is_w81_hybrid else "B/bundle")
                 ),
                 "skip_unused_lm_head": True,
                 "rollout_backbone_feature_transport": feature_transport,
@@ -454,8 +455,8 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
             }
         else:
             raise WorkflowError(
-                "config optimization arm must be A/base, W81 reuse-off hybrid, or "
-                "the complete unused-logits plus borrowed_ipc_pinned B/bundle"
+                "config optimization arm must be A/base, W81 hybrid, or the "
+                "complete unused-logits plus borrowed_ipc_pinned B/bundle"
             )
 
     return {**actual, **semantic, **optimization}

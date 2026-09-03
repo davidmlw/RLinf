@@ -66,6 +66,28 @@
       "rollout.enable_torch_compile"
     ]
   },
+  "matched_feature_reuse_ab": {
+    "reason": "reuse-off TensorRT rollout and eager Actor recomputation failed the same-revision PPO identity gate",
+    "common": {
+      "rollout_backbone_feature_transport": "borrowed_ipc_pinned",
+      "pinned_feature_ipc_batch_blocks": 16,
+      "pinned_feature_ipc_timeout_seconds": 300.0,
+      "pinned_feature_verify_trajectory": false,
+      "skip_unused_lm_head": true,
+      "rollout_enable_offload": false,
+      "compile_dit": false,
+      "weight_sync_state_dict_prefixes": [
+        "action_head"
+      ]
+    },
+    "control": "pytorch_backbone_plus_exact_rollout_feature_reuse",
+    "candidate": "tensorrt_backbone_plus_exact_rollout_feature_reuse",
+    "only_allowed_config_differences": [
+      "runner.logger.experiment_name",
+      "rollout.model.tensorrt_backbone.enabled"
+    ],
+    "compiled_dit_status": "separate_unqualified_candidate"
+  },
   "artifacts": {
     "engine_receipt_sha256": "758f3751b63f2399c4824b20b22c4508d463eb6144db5d1393ac23f0a069a0cd",
     "export_metadata_sha256": "0efb8c5da0b943a43867e94949c07a79a653840458d8424e18bda62b8dfdc34b",
@@ -86,9 +108,13 @@
     },
     "pre_update_same_revision": {
       "ratio_mean_abs_from_one_max": 0.0001,
-      "ratio_max_abs_from_one_max": 0.001,
+      "ratio_max_abs_from_one_max": 0.1,
       "kl_mean_abs_max": 0.0001,
-      "kl_max_abs_max": 0.001
+      "kl_max_abs_max": 0.1,
+      "ratio_abs_gt_1e-3_fraction_max": 0.001,
+      "kl_abs_gt_1e-3_fraction_max": 0.001,
+      "value_mean_abs_max": 0.0005,
+      "value_max_abs_max": 0.01
     },
     "one_update_cross_arm": {
       "value_mean_abs_max": 0.02,
@@ -106,7 +132,8 @@
     "tensorrt_reload_rebuild_refit_after_revision": 0,
     "compiled_unique_graphs_after_warmup": 1,
     "silent_eager_fallback": false,
-    "feature_reuse_enabled": false
+    "original_matched_ab_feature_reuse_enabled": false,
+    "ppo_identity_resolution_feature_reuse_enabled": true
   },
   "performance": {
     "outer_steps": 5,

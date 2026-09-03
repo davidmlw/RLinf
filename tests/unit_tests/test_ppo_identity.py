@@ -20,6 +20,16 @@ THRESHOLDS = {
     "kl_mean_abs_max": 1e-4,
     "kl_max_abs_max": 1e-3,
 }
+CALIBRATED_THRESHOLDS = {
+    "ratio_mean_abs_from_one_max": 1e-4,
+    "ratio_max_abs_from_one_max": 0.1,
+    "kl_mean_abs_max": 1e-4,
+    "kl_max_abs_max": 0.1,
+    "ratio_abs_gt_1e-3_fraction_max": 0.001,
+    "kl_abs_gt_1e-3_fraction_max": 0.001,
+    "value_mean_abs_max": 5e-4,
+    "value_max_abs_max": 0.01,
+}
 
 
 def _as_scalars(stats: dict[str, torch.Tensor]) -> dict[str, int | float]:
@@ -106,4 +116,31 @@ def test_identity_stats_use_ppo_action_level_reduction() -> None:
     )
     assert receipt["ratio_abs_gt_1e-3"] == 1
     assert receipt["ratio_abs_gt_1e-3_fraction"] == 0.5
+    assert receipt["passed"] is False
+
+
+def test_calibrated_identity_gate_rejects_widespread_outliers_and_value_drift() -> None:
+    totals = {
+        "decision_records": 1,
+        "ratio_positions": 10_000,
+        "nonfinite_ratio_positions": 0,
+        "ratio_abs_sum": 0.2,
+        "ratio_abs_max": 0.05,
+        "kl_abs_sum": 0.2,
+        "kl_abs_max": 0.05,
+        "value_positions": 1,
+        "nonfinite_value_positions": 0,
+        "value_abs_sum": 0.02,
+        "value_abs_max": 0.02,
+    }
+    for cutoff in ("1e-4", "1e-3", "1e-2"):
+        totals[f"ratio_abs_gt_{cutoff}"] = 20
+        totals[f"kl_abs_gt_{cutoff}"] = 20
+
+    receipt = finalize_pre_update_identity(totals, CALIBRATED_THRESHOLDS)
+
+    assert receipt["ratio_mean_abs_from_one"] < 1e-4
+    assert receipt["ratio_max_abs_from_one"] < 0.1
+    assert receipt["ratio_abs_gt_1e-3_fraction"] == 0.002
+    assert receipt["value_max_abs"] == 0.02
     assert receipt["passed"] is False

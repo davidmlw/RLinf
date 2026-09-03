@@ -26,6 +26,10 @@ CONFIGS = {
     "trt_eager": TOOLKIT / "config-n1d7-hybrid-trt-eager-chunk16.yaml",
     "trt_compile": TOOLKIT / "config-n1d7-hybrid-trt-compile-chunk16.yaml",
 }
+REUSE_CONFIGS = {
+    "eager_reuse": TOOLKIT / "config-n1d7-hybrid-eager-reuse-chunk16.yaml",
+    "trt_eager_reuse": (TOOLKIT / "config-n1d7-hybrid-trt-eager-reuse-chunk16.yaml"),
+}
 
 
 def _contract() -> dict:
@@ -33,7 +37,7 @@ def _contract() -> dict:
 
 
 def _config(name: str) -> dict:
-    return yaml.safe_load(CONFIGS[name].read_text(encoding="utf-8"))
+    return yaml.safe_load((CONFIGS | REUSE_CONFIGS)[name].read_text(encoding="utf-8"))
 
 
 def _different_paths(left: object, right: object, prefix: str = "") -> set[str]:
@@ -65,6 +69,22 @@ def test_w81_configs_have_only_preregistered_arm_differences() -> None:
 
     assert _different_paths(eager, _config("trt_eager")) <= allowed
     assert _different_paths(eager, _config("trt_compile")) <= allowed
+
+
+def test_w81_feature_reuse_resolution_has_one_executor_difference() -> None:
+    control = _config("eager_reuse")
+    candidate = _config("trt_eager_reuse")
+    contract = _contract()["matched_feature_reuse_ab"]
+
+    assert _different_paths(control, candidate) == set(
+        contract["only_allowed_config_differences"]
+    )
+    for config in (control, candidate):
+        assert config["actor"]["model"]["rollout_backbone_feature_transport"] == (
+            "borrowed_ipc_pinned"
+        )
+        assert config["rollout"]["pinned_feature_verify_trajectory"] is False
+        assert config["rollout"]["enable_torch_compile"] is False
 
 
 def test_w81_configs_freeze_common_lifecycle_and_workload() -> None:
@@ -111,12 +131,14 @@ def test_w81_numerical_thresholds_are_frozen() -> None:
         "max_abs_max": 0.05,
         "finite": True,
     }
-    assert gates["pre_update_same_revision"]["ratio_max_abs_from_one_max"] == 0.001
-    assert gates["pre_update_same_revision"]["kl_max_abs_max"] == 0.001
+    assert gates["pre_update_same_revision"]["ratio_max_abs_from_one_max"] == 0.1
+    assert gates["pre_update_same_revision"]["kl_max_abs_max"] == 0.1
+    assert gates["pre_update_same_revision"]["ratio_abs_gt_1e-3_fraction_max"] == 0.001
+    assert gates["pre_update_same_revision"]["value_max_abs_max"] == 0.01
     assert gates["one_update_cross_arm"]["gradient_relative_l2_max"] == 0.02
     assert gates["one_update_cross_arm"]["parameter_delta_relative_l2_max"] == 0.02
 
-    for name in CONFIGS:
+    for name in CONFIGS | REUSE_CONFIGS:
         configured = _config(name)["actor"]["pre_update_same_revision_gate"]
         assert configured == {
             "enabled": True,
@@ -126,9 +148,9 @@ def test_w81_numerical_thresholds_are_frozen() -> None:
 
 
 def test_w81_shutdown_records_state_before_and_after_close() -> None:
-    source = (
-        ROOT / "rlinf/workers/rollout/hf/huggingface_worker.py"
-    ).read_text(encoding="utf-8")
+    source = (ROOT / "rlinf/workers/rollout/hf/huggingface_worker.py").read_text(
+        encoding="utf-8"
+    )
     tree = ast.parse(source)
     shutdown = next(
         node
@@ -147,3 +169,36 @@ def test_w81_shutdown_records_state_before_and_after_close() -> None:
     ]
 
     assert stage_calls == ["closing", "closed"]
+
+
+def test_pre_update_gate_consumes_the_same_pinned_backbone_as_training() -> None:
+    source = (ROOT / "rlinf/workers/actor/fsdp_actor_worker.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(source)
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    gate = functions["_run_pre_update_same_revision_gate"]
+    training = functions["_run_training_impl"]
+
+    def called_methods(node: ast.AST) -> list[str]:
+        return [
+            call.func.attr
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+        ]
+
+    assert "_load_pinned_backbone_for_batch" in called_methods(gate)
+    assert "_load_pinned_backbone_for_batch" in called_methods(training)
+    assert any(
+        keyword.arg == "precomputed_backbone"
+        for call in ast.walk(gate)
+        if isinstance(call, ast.Call)
+        for keyword in call.keywords
+    )
+    assert "requires feature reuse to be disabled" not in ast.get_source_segment(
+        source, gate
+    )

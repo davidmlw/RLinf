@@ -1150,9 +1150,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         return model
 
     def get_rollout_state_dict(self) -> dict:
-        state_dict = self.get_model_state_dict(
-            cpu_offload=False, full_state_dict=False
-        )
+        state_dict = self.get_model_state_dict(cpu_offload=False, full_state_dict=False)
         return self.weight_syncer.select_state_dict(state_dict)
 
     @Worker.timer("actor/sync_model_to_rollout")
@@ -1561,6 +1559,43 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             forward_inputs = rollout_batch.get("forward_inputs", {})
             forward_inputs.pop(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None)
 
+    def _load_pinned_backbone_for_batch(
+        self, batch: dict[str, Any]
+    ) -> dict[str, torch.Tensor]:
+        cache = self._pinned_rollout_backbone_cache
+        if cache is None:
+            raise RuntimeError("pinned backbone cache is not available")
+        forward_inputs = batch.get("forward_inputs", {})
+        sample_ids = forward_inputs.pop(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None)
+        if sample_ids is None:
+            raise RuntimeError("batch is missing pinned backbone sample IDs")
+        metadata = self._pinned_backbone_metadata
+        if metadata is None:
+            raise RuntimeError("pinned backbone metadata was released early")
+        local_sample_ids = sample_ids - int(metadata["sample_id_base"])
+        pinned_output = cache.load(local_sample_ids)
+        if bool(metadata.get("verify_trajectory", False)):
+            for transport_key, output_key in self._pinned_feature_output_fields:
+                trajectory_tensor = forward_inputs.get(transport_key)
+                if trajectory_tensor is None:
+                    raise RuntimeError(
+                        "pinned feature transport verification requires "
+                        f"trajectory field {transport_key}"
+                    )
+                reference = trajectory_tensor.to(self.device)
+                if not torch.equal(pinned_output[output_key], reference):
+                    max_diff = (
+                        (pinned_output[output_key].float() - reference.float())
+                        .abs()
+                        .max()
+                    )
+                    raise RuntimeError(
+                        "pinned feature transport mismatch against "
+                        f"trajectory field {output_key}: "
+                        f"max_diff={float(max_diff.item())}"
+                    )
+        return pinned_output
+
     def _run_pre_update_same_revision_gate(
         self, *, reuse_rollout_feature: bool
     ) -> None:
@@ -1570,23 +1605,28 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         steps = [int(step) for step in gate.get("steps", [0])]
         if int(self.version) not in steps:
             return
-        if reuse_rollout_feature:
-            raise RuntimeError(
-                "pre-update identity gate requires feature reuse to be disabled"
-            )
         if SupportedModel(self.cfg.actor.model.model_type) != SupportedModel.GR00T_N1D7:
             raise RuntimeError(
                 "pre-update identity gate currently supports only GR00T N1.7"
             )
 
-        threshold_names = {
+        threshold_names_v1 = {
             "ratio_mean_abs_from_one_max",
             "ratio_max_abs_from_one_max",
             "kl_mean_abs_max",
             "kl_max_abs_max",
         }
+        threshold_names_v2 = threshold_names_v1 | {
+            "ratio_abs_gt_1e-3_fraction_max",
+            "kl_abs_gt_1e-3_fraction_max",
+            "value_mean_abs_max",
+            "value_max_abs_max",
+        }
         thresholds = dict(gate.get("thresholds", {}))
-        if set(thresholds) != threshold_names:
+        if set(thresholds) not in {
+            frozenset(threshold_names_v1),
+            frozenset(threshold_names_v2),
+        }:
             raise RuntimeError(
                 "pre-update identity gate thresholds do not match the frozen contract"
             )
@@ -1608,6 +1648,9 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         max_fields = {"ratio_abs_max", "kl_abs_max", "value_abs_max"}
         with torch.no_grad():
             for batch in batches:
+                precomputed_backbone = None
+                if reuse_rollout_feature:
+                    precomputed_backbone = self._load_pinned_backbone_for_batch(batch)
                 model_batch = put_tensor_device(
                     {
                         "forward_inputs": batch["forward_inputs"],
@@ -1625,6 +1668,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                         compute_values=True,
                         use_cache=False,
                         prev_logprobs=model_batch["prev_logprobs"],
+                        precomputed_backbone=precomputed_backbone,
                     )
                 stats = pre_update_identity_batch_stats(
                     current_logprobs=output["logprobs"],
@@ -1773,48 +1817,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 for idx, batch in enumerate(train_micro_batch):
                     if pinned_rollout_cache is not None:
                         forward_inputs = batch.get("forward_inputs", {})
-                        sample_ids = forward_inputs.pop(
-                            ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None
-                        )
-                        if sample_ids is None:
-                            raise RuntimeError(
-                                "training microbatch is missing pinned backbone sample IDs"
-                            )
-                        metadata = self._pinned_backbone_metadata
-                        if metadata is None:
-                            raise RuntimeError(
-                                "pinned backbone metadata was released early"
-                            )
-                        local_sample_ids = sample_ids - int(metadata["sample_id_base"])
-                        pinned_output = pinned_rollout_cache.load(local_sample_ids)
-                        if bool(metadata.get("verify_trajectory", False)):
-                            for (
-                                transport_key,
-                                output_key,
-                            ) in self._pinned_feature_output_fields:
-                                trajectory_tensor = forward_inputs.get(transport_key)
-                                if trajectory_tensor is None:
-                                    raise RuntimeError(
-                                        "pinned feature transport verification requires "
-                                        f"trajectory field {transport_key}"
-                                    )
-                                reference = trajectory_tensor.to(self.device)
-                                if not torch.equal(
-                                    pinned_output[output_key], reference
-                                ):
-                                    max_diff = (
-                                        (
-                                            pinned_output[output_key].float()
-                                            - reference.float()
-                                        )
-                                        .abs()
-                                        .max()
-                                    )
-                                    raise RuntimeError(
-                                        "pinned feature transport mismatch against "
-                                        f"trajectory field {output_key}: "
-                                        f"max_diff={float(max_diff.item())}"
-                                    )
+                        pinned_output = self._load_pinned_backbone_for_batch(batch)
                         for (
                             transport_key,
                             output_key,

@@ -9,7 +9,7 @@ runner:
   logger:
     log_path: ./outputs/w73-trocar-baseline
     project_name: rlinf
-    experiment_name: w81_n1d7_hybrid_trt_compile
+    experiment_name: w81_n1d7_hybrid_eager_reuse
     logger_backends:
     - tensorboard
   max_epochs: 100000
@@ -209,9 +209,12 @@ rollout:
   mode: colocate
   backend: huggingface
   enable_offload: false
-  enable_torch_compile: true
+  enable_torch_compile: false
   torch_compile_mode: max-autotune-no-cudagraphs
   pipeline_stage_num: 1
+  pinned_feature_ipc_batch_blocks: 16
+  pinned_feature_ipc_timeout_seconds: 300.0
+  pinned_feature_verify_trajectory: false
   model:
     model_path: /models/GR00T-N1.7-3B
     backbone_model_path: ${oc.env:W77_BACKBONE_MODEL_ROOT}
@@ -222,7 +225,7 @@ rollout:
     obs_converter_type: dex3
     embodiment_tag: new_embodiment
     tensorrt_backbone:
-      enabled: true
+      enabled: false
       engine_dir: /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W80/g2-export-build-r1-5967165/engines
       receipt_path: /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W80/g2-export-build-r1-5967165/engines/rlinf-engine-receipt.json
       receipt_sha256: 758f3751b63f2399c4824b20b22c4508d463eb6144db5d1393ac23f0a069a0cd
@@ -272,6 +275,7 @@ actor:
     backbone_model_path: ${oc.env:W77_BACKBONE_MODEL_ROOT}
     bounded_frozen_backbone: true
     skip_unused_lm_head: true
+    rollout_backbone_feature_transport: borrowed_ipc_pinned
     unused_logits_chunk_rows: 4096
     precision: bf16
     trust_remote_code: true

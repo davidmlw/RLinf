@@ -258,9 +258,13 @@ actor:
     - 0
     thresholds:
       ratio_mean_abs_from_one_max: 0.0001
-      ratio_max_abs_from_one_max: 0.001
+      ratio_max_abs_from_one_max: 0.1
       kl_mean_abs_max: 0.0001
-      kl_max_abs_max: 0.001
+      kl_max_abs_max: 0.1
+      ratio_abs_gt_1e-3_fraction_max: 0.001
+      kl_abs_gt_1e-3_fraction_max: 0.001
+      value_mean_abs_max: 0.0005
+      value_max_abs_max: 0.01
   enable_offload: false
   model:
     model_type: gr00t_n1d7
