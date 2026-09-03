@@ -39,6 +39,7 @@ from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
     official_b1,
     persistent_trt,
     prepare_builder,
+    prepare_runtime_overlay,
     promote_b1,
     resident_b1,
     standalone_true_b8,
@@ -63,6 +64,45 @@ OFFICIAL_NUMERICS = """
   L1 Mean Error:     0.000817
   L∞ Max Error:      0.006330
 """
+
+
+def _fake_tensorrt_site_packages(root: Path) -> None:
+    for name in prepare_runtime_overlay.PACKAGE_PATHS:
+        package = root / name
+        package.mkdir(parents=True)
+        (package / "payload").write_text(name, encoding="utf-8")
+
+
+def test_tensorrt_runtime_overlay_is_hardlinked_immutable_and_verifiable(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "site-packages"
+    output = tmp_path / "overlay"
+    _fake_tensorrt_site_packages(source)
+
+    value = prepare_runtime_overlay.materialize(source, output)
+    verified = prepare_runtime_overlay.verify(output)
+
+    assert verified == value
+    assert verified["file_count"] == len(prepare_runtime_overlay.PACKAGE_PATHS)
+    source_payload = source / "tensorrt" / "payload"
+    output_payload = output / "tensorrt" / "payload"
+    assert source_payload.stat().st_ino == output_payload.stat().st_ino
+    assert output.stat().st_mode & 0o222 == 0
+    assert output_payload.stat().st_mode & 0o222 == 0
+
+
+def test_tensorrt_runtime_overlay_verify_rejects_tampering(tmp_path: Path) -> None:
+    source = tmp_path / "site-packages"
+    output = tmp_path / "overlay"
+    _fake_tensorrt_site_packages(source)
+    prepare_runtime_overlay.materialize(source, output)
+    payload = output / "tensorrt" / "payload"
+    payload.chmod(0o644)
+    payload.write_text("tampered", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="inventory differs"):
+        prepare_runtime_overlay.verify(output)
 
 
 def _git_init(root: Path) -> str:

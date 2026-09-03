@@ -14,6 +14,18 @@
 
 """Compatibility import for the promoted RLinf TensorRT runtime."""
 
-from rlinf.hybrid_engines.tensorrt import PersistentEngine
+import importlib.util
+from pathlib import Path
+
+_SOURCE = (
+    Path(__file__).resolve().parents[4]
+    / "rlinf/hybrid_engines/tensorrt/persistent_engine.py"
+)
+_SPEC = importlib.util.spec_from_file_location("_rlinf_persistent_engine", _SOURCE)
+if _SPEC is None or _SPEC.loader is None:
+    raise ImportError(f"cannot load RLinf TensorRT runtime from {_SOURCE}")
+_MODULE = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_MODULE)
+PersistentEngine = _MODULE.PersistentEngine
 
 __all__ = ["PersistentEngine"]

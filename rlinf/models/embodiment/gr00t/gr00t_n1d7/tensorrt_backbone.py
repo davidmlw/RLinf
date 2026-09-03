@@ -123,7 +123,8 @@ def _validate_runtime(config: Mapping[str, Any]) -> dict[str, Any]:
     import tensorrt as trt
 
     expected_version = str(_required(config, "runtime_version"))
-    distribution_version = importlib.metadata.version("tensorrt")
+    distribution_name = str(config.get("runtime_distribution", "tensorrt-cu12"))
+    distribution_version = importlib.metadata.version(distribution_name)
     if trt.__version__ != expected_version or distribution_version != expected_version:
         raise RuntimeError(
             "TensorRT runtime version mismatch: "
@@ -141,6 +142,7 @@ def _validate_runtime(config: Mapping[str, Any]) -> dict[str, Any]:
         )
     return {
         "tensorrt_module": trt.__version__,
+        "tensorrt_distribution_name": distribution_name,
         "tensorrt_distribution": distribution_version,
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
