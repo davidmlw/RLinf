@@ -209,6 +209,18 @@ def test_w81_numerical_thresholds_are_frozen() -> None:
         }
 
 
+def test_hybrid_runner_can_disable_identity_gate_for_qualified_perf_runs() -> None:
+    runner = (
+        ROOT / "toolkits/eos/gr00t_trocar/run_n1d7_hybrid.sh"
+    ).read_text(encoding="utf-8")
+    assert 'case "${W81_DISABLE_PRE_UPDATE_IDENTITY_GATE:-0}" in' in runner
+    assert (
+        "overrides+=(actor.pre_update_same_revision_gate.enabled=false)"
+        in runner
+    )
+    assert "W81_DISABLE_PRE_UPDATE_IDENTITY_GATE must be 0 or 1" in runner
+
+
 def test_w81_standalone_ablation_separates_trt_and_compile() -> None:
     ablation = _contract()["performance"]["standalone_factorial_ablation"]
 

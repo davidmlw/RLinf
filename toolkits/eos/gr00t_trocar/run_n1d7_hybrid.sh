@@ -162,6 +162,17 @@ overrides=(
 if [[ -n "$W73_RESUME_DIR" ]]; then
   overrides+=(runner.resume_dir="$W73_RESUME_DIR")
 fi
+case "${W81_DISABLE_PRE_UPDATE_IDENTITY_GATE:-0}" in
+  0) ;;
+  1)
+    overrides+=(actor.pre_update_same_revision_gate.enabled=false)
+    printf 'W81_DISABLE_PRE_UPDATE_IDENTITY_GATE=1\n'
+    ;;
+  *)
+    printf 'W81_DISABLE_PRE_UPDATE_IDENTITY_GATE must be 0 or 1\n' >&2
+    exit 2
+    ;;
+esac
 printf 'W73_NEWTON_NUM_SUBSTEPS=%s\n' "$W73_NEWTON_NUM_SUBSTEPS"
 cd "$W73_SOURCE_ROOT"
 "$W73_RUNTIME_PYTHON" examples/embodiment/train_embodied_agent.py \
