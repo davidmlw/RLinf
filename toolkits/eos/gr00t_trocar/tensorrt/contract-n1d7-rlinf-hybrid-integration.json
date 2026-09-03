@@ -101,6 +101,16 @@
         "runner.logger.experiment_name",
         "rollout.enable_torch_compile"
       ]
+    },
+    "compile_only_diagnostic": {
+      "config": "config-n1d7-hybrid-eager-compile-reuse-chunk16.yaml",
+      "site_template": "site.n1d7-hybrid-eager-compile-reuse.eos.template.json",
+      "status": "pending",
+      "purpose": "isolate compiled Rollout DiT versus eager Actor on the exact same retained eager-backbone features",
+      "only_allowed_differences_from_eager_reuse": [
+        "runner.logger.experiment_name",
+        "rollout.enable_torch_compile"
+      ]
     }
   },
   "artifacts": {

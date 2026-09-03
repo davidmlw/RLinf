@@ -28,6 +28,9 @@ CONFIGS = {
 }
 REUSE_CONFIGS = {
     "eager_reuse": TOOLKIT / "config-n1d7-hybrid-eager-reuse-chunk16.yaml",
+    "eager_compile_reuse": (
+        TOOLKIT / "config-n1d7-hybrid-eager-compile-reuse-chunk16.yaml"
+    ),
     "trt_eager_reuse": (TOOLKIT / "config-n1d7-hybrid-trt-eager-reuse-chunk16.yaml"),
     "trt_compile_reuse": (
         TOOLKIT / "config-n1d7-hybrid-trt-compile-reuse-chunk16.yaml"
@@ -110,6 +113,21 @@ def test_w81_compiled_dit_reuse_is_an_isolated_diagnostic() -> None:
     )
 
 
+def test_w81_compile_only_diagnostic_uses_exact_eager_features() -> None:
+    eager = _config("eager_reuse")
+    compiled = _config("eager_compile_reuse")
+    diagnostic = _contract()["matched_feature_reuse_ab"]["compile_only_diagnostic"]
+
+    assert _different_paths(eager, compiled) == set(
+        diagnostic["only_allowed_differences_from_eager_reuse"]
+    )
+    assert compiled["rollout"]["enable_torch_compile"] is True
+    assert compiled["rollout"]["model"]["tensorrt_backbone"]["enabled"] is False
+    assert compiled["actor"]["model"]["rollout_backbone_feature_transport"] == (
+        "borrowed_ipc_pinned"
+    )
+
+
 def test_w81_feature_reuse_sites_reference_the_matched_configs() -> None:
     matched = _contract()["matched_feature_reuse_ab"]
     expected = {
@@ -121,6 +139,14 @@ def test_w81_feature_reuse_sites_reference_the_matched_configs() -> None:
         site_path = TOOLKIT / matched["site_templates"][arm]
         site = json.loads(site_path.read_text(encoding="utf-8"))
         assert Path(site["experiment"]["config"]).name == expected_config.name
+
+    diagnostic = matched["compile_only_diagnostic"]
+    site = json.loads(
+        (TOOLKIT / diagnostic["site_template"]).read_text(encoding="utf-8")
+    )
+    assert Path(site["experiment"]["config"]).name == REUSE_CONFIGS[
+        "eager_compile_reuse"
+    ].name
 
 
 def test_w81_configs_freeze_common_lifecycle_and_workload() -> None:
