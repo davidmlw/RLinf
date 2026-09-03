@@ -340,7 +340,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "fixed_noise_action": _action_manifest(compiled_action),
         "vs_eager": _compare_actions(eager_action, compiled_action),
         "whole_call": _whole_call(compiled, observation, 10, 30),
-        "components": _components(api, compiled, observation, 7),
+        "components": _components(api, compiled, observation, 5),
     }
     del compiled
     _release()
@@ -363,7 +363,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "fixed_noise_repeat": _compare_actions(trt_action, repeated_action),
         "vs_eager": _compare_actions(eager_action, trt_action),
         "whole_call": _whole_call(trt_policy, observation, 10, 30),
-        "components": _components(api, trt_policy, observation, 10),
+        "components": _components(api, trt_policy, observation, 5),
     }
     api["close_tensorrt_engines"](trt_policy)
     del trt_policy

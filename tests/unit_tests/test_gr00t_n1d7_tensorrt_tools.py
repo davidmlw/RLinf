@@ -32,6 +32,7 @@ from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
     model_view,
     official_b1,
     prepare_builder,
+    promote_b1,
     resident_b1,
     start_official_b1,
 )
@@ -165,6 +166,60 @@ def test_resident_statistics_retain_raw_distribution() -> None:
     assert statistics["count"] == 4
     assert statistics["p50_ms"] == 2.5
     assert statistics["p95_ms"] == pytest.approx(3.85)
+
+
+def test_promotion_rejects_failed_resident_action_gate(tmp_path: Path) -> None:
+    oracle = tmp_path / "oracle"
+    resident = tmp_path / "resident"
+    oracle.mkdir()
+    resident.mkdir()
+    engines = {
+        name: {"sha256": hashlib.sha256(name.encode()).hexdigest()}
+        for name in promote_b1.ORACLE_ENGINES
+    }
+    (oracle / "qualification.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "engines": engines,
+                "isaac_gr00t_revision": "revision",
+                "numerics": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (oracle / "allocation-result.json").write_text(
+        json.dumps({"status": "passed"}), encoding="utf-8"
+    )
+    (resident / "allocation-result.json").write_text(
+        json.dumps({"status": "passed"}), encoding="utf-8"
+    )
+    component = {"warmup": 5, "measured": 20}
+    whole = {"measured_samples_ms": [1.0] * 30, "warmup_samples_ms": [1.0] * 10}
+    arms = {
+        name: {"components": component, "whole_call": whole}
+        for name in ("eager", "compile", "full_tensorrt")
+    }
+    arms["full_tensorrt"].update(
+        {
+            "vs_eager": {
+                "finite": True,
+                "cosine": 0.998,
+                "mean_abs": 0.001,
+                "max_abs": 0.01,
+            },
+            "fixed_noise_repeat": {"bitwise_equal": True, "max_abs": 0.0},
+        }
+    )
+    (resident / "resident.json").write_text(
+        json.dumps({"status": "passed", "engines": engines, "arms": arms}),
+        encoding="utf-8",
+    )
+    site = tmp_path / "site.json"
+    site.write_text(json.dumps({"source": {"revision": "rlinf"}}), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="final-action gate failed"):
+        promote_b1._validate(oracle, resident, site)
 
 
 def test_model_view_preserves_selector_suffix_and_hashes_weights(
