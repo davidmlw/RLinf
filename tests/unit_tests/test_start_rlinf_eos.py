@@ -349,8 +349,29 @@ def test_site_accepts_w81_hybrid_with_feature_reuse_off(tmp_path: Path) -> None:
 
     assert contract["optimization_arm"] == "W81/hybrid-reuse-off"
     assert contract["skip_unused_lm_head"] is True
+    assert contract["eval_envs"] == 64
     assert contract["rollout_backbone_feature_transport"] is None
     assert contract["pinned_feature_ipc_batch_blocks"] is None
+
+
+def test_site_rejects_w81_eval_batch_that_does_not_match_static_engine(
+    tmp_path: Path,
+) -> None:
+    original = (
+        ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-hybrid-eager-chunk16.yaml"
+    ).read_text(encoding="utf-8")
+    config = tmp_path / "w81-eval-b1.yaml"
+    config.write_text(
+        original.replace(
+            "  eval:\n    env_type: isaaclab\n    total_num_envs: 64\n",
+            "  eval:\n    env_type: isaaclab\n    total_num_envs: 8\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MODULE.WorkflowError, match="config algorithm mismatch"):
+        MODULE._load_site(_site(tmp_path, config=config))
 
 
 def test_site_accepts_debug_feature_transport_verification(tmp_path: Path) -> None:

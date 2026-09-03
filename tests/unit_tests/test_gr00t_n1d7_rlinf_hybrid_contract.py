@@ -89,6 +89,12 @@ def test_w81_configs_freeze_common_lifecycle_and_workload() -> None:
         assert config["actor"]["micro_batch_size"] == 128
         assert config["algorithm"]["update_epoch"] == 4
         assert (
+            config["env"]["eval"]["total_num_envs"]
+            == contract["workload"]["evaluation_global_envs"]
+            == contract["workload"]["rollout_lanes"]
+            * contract["workload"]["evaluation_static_batch_per_lane"]
+        )
+        assert (
             config["actor"]["model"]["rl_head_config"]["padding_value"]
             == contract["workload"]["text_padding_length"]
             == contract["artifacts"]["sequence_length"]

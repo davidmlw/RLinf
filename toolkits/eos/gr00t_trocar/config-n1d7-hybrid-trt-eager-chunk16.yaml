@@ -137,7 +137,7 @@ env:
     rollout_epoch: 8
   eval:
     env_type: isaaclab
-    total_num_envs: 8
+    total_num_envs: 64
     auto_reset: true
     ignore_terminations: true
     use_rel_reward: true

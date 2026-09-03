@@ -23,6 +23,8 @@
     "global_envs": 64,
     "rollout_lanes": 8,
     "static_batch_per_lane": 8,
+    "evaluation_global_envs": 64,
+    "evaluation_static_batch_per_lane": 8,
     "action_chunks": 16,
     "physical_actions_per_outer_step": 65536,
     "policy_decisions_per_outer_step": 4096,

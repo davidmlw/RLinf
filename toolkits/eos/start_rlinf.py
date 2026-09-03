@@ -349,6 +349,11 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
         raise WorkflowError(
             f"config workload mismatch: expected {expected}, found {actual}"
         )
+    is_w81_hybrid = (
+        actor_model.get("model_type") == "gr00t_n1d7"
+        and "tensorrt_backbone" in rollout_model
+        and actor_model.get("rollout_backbone_feature_transport") is None
+    )
     semantic = {
         "reward_type": algorithm.get("reward_type"),
         "logprob_type": algorithm.get("logprob_type"),
@@ -363,7 +368,7 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
         "logprob_type": "action_level",
         "actor_lr": 2e-5,
         "eval_interval": 5,
-        "eval_envs": 8,
+        "eval_envs": 64 if is_w81_hybrid else 8,
         "eval_fixed_resets": True,
         "eval_video": True,
     }:
