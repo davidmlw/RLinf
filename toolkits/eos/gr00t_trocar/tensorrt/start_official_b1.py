@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -512,6 +513,29 @@ def _logged_run(
         raise WorkflowError(f"command failed ({completed.returncode}): {command}")
 
 
+def _retain_builder_receipts(builder_root: Path, attempt: Path) -> None:
+    names = (
+        "rlinf-trt-builder-manifest.json",
+        "rlinf-trt-builder-probe-initial.json",
+        "rlinf-trt-builder-probe-latest.json",
+        "torchcodec-pip-show.txt",
+    )
+    output = attempt / "builder"
+    output.mkdir()
+    inventory = {}
+    for name in names:
+        source = builder_root / name
+        if not source.is_file():
+            raise WorkflowError(f"builder receipt is missing: {source}")
+        destination = output / name
+        shutil.copyfile(source, destination)
+        inventory[name] = {
+            "bytes": destination.stat().st_size,
+            "sha256": _sha256(destination),
+        }
+    _write_new(attempt / "builder-receipts.json", inventory)
+
+
 def _ensure_ffmpeg(attempt: Path) -> None:
     """Install and record the image's distribution FFmpeg in this container."""
     environment = dict(os.environ)
@@ -606,6 +630,7 @@ def _run_agent(args: argparse.Namespace) -> int:
         site["inputs"]["dataset_root"],
     ]
     _logged_run(prepare, attempt / "logs/prepare.out", attempt / "logs/prepare.err")
+    _retain_builder_receipts(Path(builder["env_root"]), attempt)
     run = [
         str(Path(builder["env_root"]) / "bin/python"),
         str(tools / "official_b1.py"),
@@ -669,6 +694,7 @@ def _resident_run_agent(args: argparse.Namespace) -> int:
     ]
     _logged_run(prepare, attempt / "logs/prepare.out", attempt / "logs/prepare.err")
     builder_root = Path(builder["env_root"])
+    _retain_builder_receipts(builder_root, attempt)
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     library_paths = [str(path) for path in runtime_library_paths(builder_root)]

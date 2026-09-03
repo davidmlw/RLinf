@@ -141,6 +141,24 @@ def test_ldd_normalization_removes_only_aslr_addresses() -> None:
     ]
 
 
+def test_probe_contract_normalizes_only_runtime_temp_sys_path() -> None:
+    receipt = {
+        "status": "passed",
+        "python": {"sys_path": ["/venv/site-packages", "/tmp/tmpabc_123"]},
+        "packages": {"torch": "2.9.0"},
+    }
+    repeated = json.loads(json.dumps(receipt))
+    repeated["python"]["sys_path"][-1] = "/tmp/tmpdifferent"
+
+    assert builder_probe.qualification_contract(receipt) == (
+        builder_probe.qualification_contract(repeated)
+    )
+    repeated["python"]["sys_path"][0] = "/other/site-packages"
+    assert builder_probe.qualification_contract(receipt) != (
+        builder_probe.qualification_contract(repeated)
+    )
+
+
 def test_resident_statistics_retain_raw_distribution() -> None:
     statistics = resident_b1._statistics([1.0, 2.0, 3.0, 4.0])
 

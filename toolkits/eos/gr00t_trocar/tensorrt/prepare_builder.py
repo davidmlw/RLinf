@@ -24,7 +24,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from builder_probe import EXPECTED_DISTRIBUTIONS, runtime_library_paths
+from builder_probe import (
+    EXPECTED_DISTRIBUTIONS,
+    qualification_contract,
+    runtime_library_paths,
+)
 
 
 def _sha256(path: Path) -> str:
@@ -33,6 +37,11 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(8 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _json_sha256(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _isolated_environment(
@@ -52,7 +61,7 @@ def _isolated_environment(
 
 
 def _run_probe(env_root: Path, source: Path, dataset: Path) -> dict[str, object]:
-    output = env_root / "rlinf-trt-builder-probe.json"
+    output = env_root / "rlinf-trt-builder-probe-latest.json"
     video = (
         dataset / "videos/chunk-000/observation.images.image/episode_000000.mp4"
     ).resolve(strict=True)
@@ -113,11 +122,15 @@ def prepare(
         probe = _run_probe(env_root, source, dataset)
         if probe.get("packages") != EXPECTED_DISTRIBUTIONS:
             raise RuntimeError("existing TensorRT builder package versions differ")
-        if _sha256(env_root / "rlinf-trt-builder-probe.json") != manifest.get(
-            "probe_sha256"
-        ):
-            raise RuntimeError("existing TensorRT builder probe receipt changed")
-        return manifest
+        contract = qualification_contract(probe)
+        if contract != manifest.get("probe_contract"):
+            raise RuntimeError("existing TensorRT builder probe contract changed")
+        result = dict(manifest)
+        result["revalidation_probe_sha256"] = _sha256(
+            env_root / "rlinf-trt-builder-probe-latest.json"
+        )
+        result["revalidation_contract_sha256"] = _json_sha256(contract)
+        return result
     if env_root.exists():
         raise RuntimeError(
             f"unqualified TensorRT builder environment exists: {env_root}"
@@ -186,12 +199,17 @@ def prepare(
         probe = _run_probe(env_root, source, dataset)
         if probe.get("packages") != EXPECTED_DISTRIBUTIONS:
             raise RuntimeError("TensorRT builder package versions differ")
+        initial_probe = env_root / "rlinf-trt-builder-probe-initial.json"
+        shutil.copyfile(env_root / "rlinf-trt-builder-probe-latest.json", initial_probe)
+        contract = qualification_contract(probe)
         manifest = {
-            "schema": "rlinf.gr00t-n1d7-trt-builder.v2",
+            "schema": "rlinf.gr00t-n1d7-trt-builder.v3",
             "source": str(source),
             "input_hashes": inputs,
             "packages": probe["packages"],
-            "probe_sha256": _sha256(env_root / "rlinf-trt-builder-probe.json"),
+            "initial_probe_sha256": _sha256(initial_probe),
+            "probe_contract": contract,
+            "probe_contract_sha256": _json_sha256(contract),
             "pip_show_sha256": _sha256(pip_show_path),
         }
         manifest_path.write_text(

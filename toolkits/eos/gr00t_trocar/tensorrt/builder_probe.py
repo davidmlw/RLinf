@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import importlib.metadata
 import importlib.util
@@ -43,6 +44,7 @@ EXPECTED_DISTRIBUTIONS = {
     "torchcodec": "0.8.1",
 }
 LDD_ADDRESS_RE = re.compile(r"\s+\(0x[0-9a-fA-F]+\)$")
+RUNTIME_TEMP_RE = re.compile(r"^/tmp/tmp[0-9A-Za-z_.-]+$")
 
 
 def runtime_library_paths(env_root: Path) -> list[Path]:
@@ -93,6 +95,26 @@ def _ldd(path: Path) -> list[str]:
 
 def _normalize_ldd(output: str) -> list[str]:
     return [LDD_ADDRESS_RE.sub("", line) for line in output.splitlines()]
+
+
+def qualification_contract(receipt: dict[str, object]) -> dict[str, object]:
+    """Return the stable, cross-allocation semantics of a successful probe."""
+    if receipt.get("status") != "passed":
+        raise RuntimeError("cannot qualify a failed builder probe")
+    contract = copy.deepcopy(receipt)
+    python = contract.get("python")
+    if not isinstance(python, dict) or not isinstance(python.get("sys_path"), list):
+        raise RuntimeError("builder probe omits python.sys_path")
+    python["sys_path"] = [
+        "<runtime-temp>"
+        if isinstance(path, str) and RUNTIME_TEMP_RE.fullmatch(path)
+        else path
+        for path in python["sys_path"]
+    ]
+    return {
+        "schema": "rlinf.gr00t-n1d7-trt-builder-probe-contract.v1",
+        "probe": contract,
+    }
 
 
 def _native_linkage(env_root: Path) -> dict[str, dict[str, object]]:
