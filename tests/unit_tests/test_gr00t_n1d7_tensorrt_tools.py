@@ -31,6 +31,7 @@ sys.path.insert(0, str(TOOLS))
 from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
     build_true_b8,
     builder_probe,
+    common_boundary_b8,
     correct_b1,
     export_true_b8,
     fixture_b1,
@@ -175,6 +176,12 @@ def test_resident_statistics_retain_raw_distribution() -> None:
     assert statistics["count"] == 4
     assert statistics["p50_ms"] == 2.5
     assert statistics["p95_ms"] == pytest.approx(3.85)
+
+
+def test_common_boundary_module_stays_importable_without_loading_torch() -> None:
+    assert common_boundary_b8.make_explicit_noise_head.__name__ == (
+        "make_explicit_noise_head"
+    )
 
 
 def test_fixture_manifest_aggregate_hash_is_order_independent() -> None:

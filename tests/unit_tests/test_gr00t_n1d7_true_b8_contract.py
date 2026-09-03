@@ -91,3 +91,22 @@ def test_w80_contract_requires_paired_timing_and_hash_chain() -> None:
         contract["artifact"]["required_hash_chain"]
         == "fixture_to_export_to_engine_to_standalone_run"
     )
+
+
+def test_w80_contract_freezes_the_cuda_resident_common_boundary() -> None:
+    boundary = _contract()["common_boundary"]
+
+    assert boundary["input"] == "preloaded_contiguous_cuda_tensors"
+    assert boundary["stochastic_input"] == "explicit_initial_noise_tensor"
+    assert boundary["output"] == "normalized_deployment_action"
+    assert boundary["timing"] == (
+        "one_natural_call_cuda_events_without_intermediate_host_sync"
+    )
+    assert boundary["arms"] == [
+        "pytorch_eager",
+        "tensorrt_backbone_eager_head",
+        "tensorrt_backbone_torch_compile_dit_head",
+    ]
+    assert boundary["official_deployment_equivalence_required"] is True
+    assert boundary["explicit_path_must_not_advance_rng"] is True
+    assert boundary["compile_rebuild_during_measurement_allowed"] is False

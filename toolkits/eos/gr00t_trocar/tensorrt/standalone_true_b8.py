@@ -30,6 +30,14 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+from common_boundary_b8 import (
+    call_with_explicit_noise,
+    cuda_event_call,
+    make_explicit_noise_head,
+    prepare_cuda_inputs,
+    prepared_manifest,
+    tensor_manifest,
+)
 from persistent_trt import PersistentEngine
 from resident_b1 import _compare_actions
 from trocar_b8_model_view import LANGUAGE_KEY, STATE_ACTION_ORDER
@@ -339,6 +347,33 @@ def _fixed_model_call(policy: Any, inputs: Any, seed: int) -> tuple[Any, Any, An
     )
 
 
+def _fixed_model_call_with_captured_noise(
+    policy: Any, inputs: Any, seed: int
+) -> tuple[Any, Any]:
+    """Capture the deployment head's only random tensor outside timed regions."""
+
+    import torch
+
+    original_randn = torch.randn
+    captured = []
+
+    def capture_randn(*args: Any, **kwargs: Any) -> Any:
+        value = original_randn(*args, **kwargs)
+        captured.append(value.detach().clone())
+        return value
+
+    torch.randn = capture_randn
+    try:
+        action, _backbone, _output = _fixed_model_call(policy, inputs, seed)
+    finally:
+        torch.randn = original_randn
+    if len(captured) != 1:
+        raise RuntimeError(
+            f"expected exactly one deployment flow-noise tensor, found {len(captured)}"
+        )
+    return action, captured[0]
+
+
 def _measure_model(policy: Any, inputs: Any, warmup: int, measured: int) -> dict:
     import torch
 
@@ -475,6 +510,63 @@ def _paired_timing(
         "speedup": eager_stats["mean_ms"] / hybrid_stats["mean_ms"],
         "latency_reduction_fraction": (eager_stats["mean_ms"] - hybrid_stats["mean_ms"])
         / eager_stats["mean_ms"],
+    }
+
+
+def _paired_cuda_stage_timing(
+    arms: dict[str, Any],
+    warmup: int,
+    measured: int,
+    boundary: str,
+) -> dict[str, Any]:
+    """Run counterbalanced CUDA-event calls and retain natural stage timings."""
+
+    names = tuple(arms)
+    if len(names) != 2:
+        raise ValueError("paired CUDA timing requires exactly two arms")
+    for index in range(warmup):
+        order = names if index % 2 == 0 else tuple(reversed(names))
+        for name in order:
+            arms[name]()
+
+    orders = []
+    samples = {
+        name: {stage: [] for stage in ("backbone_ms", "action_head_ms", "total_ms")}
+        for name in names
+    }
+    outputs = {}
+    for index in range(measured):
+        order = names if index % 2 == 0 else tuple(reversed(names))
+        orders.append(list(order))
+        for name in order:
+            output, stages = arms[name]()
+            outputs[name] = output.detach()
+            for stage, value in stages.items():
+                samples[name][stage].append(value)
+
+    reference, candidate = names
+    deltas = [
+        left - right
+        for left, right in zip(
+            samples[reference]["total_ms"], samples[candidate]["total_ms"]
+        )
+    ]
+    return {
+        "boundary": boundary,
+        "order_policy": "alternating AB/BA",
+        "orders": orders,
+        "warmup": warmup,
+        "measured": measured,
+        "arms": {
+            name: {stage: _statistics(values) for stage, values in stages.items()}
+            for name, stages in samples.items()
+        },
+        "reference_minus_candidate_ms": _statistics(deltas),
+        "speedup": (
+            statistics.fmean(samples[reference]["total_ms"])
+            / statistics.fmean(samples[candidate]["total_ms"])
+        ),
+        "outputs": outputs,
     }
 
 
@@ -736,6 +828,228 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "counterbalanced cuda_sync; policy.get_action(raw); cuda_sync",
         ),
     )
+
+    common_seed = args.seed + 30_000
+    eager_prepared = prepare_cuda_inputs(paired_eager.model, inputs)
+    hybrid_prepared = prepare_cuda_inputs(hybrid.model, inputs)
+    eager_prepared_manifest = prepared_manifest(*eager_prepared)
+    hybrid_prepared_manifest = prepared_manifest(*hybrid_prepared)
+    if eager_prepared_manifest != hybrid_prepared_manifest:
+        raise RuntimeError("eager and hybrid CUDA-prepared inputs differ")
+
+    eager_explicit_head = make_explicit_noise_head(paired_eager.model.action_head)
+    hybrid_explicit_head = make_explicit_noise_head(hybrid.model.action_head)
+    eager_official_action, initial_actions = _fixed_model_call_with_captured_noise(
+        paired_eager, inputs, common_seed
+    )
+    hybrid_official_action, hybrid_initial_actions = _engine_phase(
+        engine_phases,
+        "common_boundary_official_noise_capture",
+        vit_engine,
+        llm_engine,
+        1,
+        lambda: _fixed_model_call_with_captured_noise(hybrid, inputs, common_seed),
+    )
+    initial_actions_manifest = tensor_manifest(initial_actions)
+    if initial_actions_manifest != tensor_manifest(hybrid_initial_actions):
+        raise RuntimeError("eager and hybrid official calls generated different noise")
+
+    cpu_rng_before = torch.random.get_rng_state().clone()
+    cuda_rng_before = torch.cuda.get_rng_state().clone()
+    eager_explicit_action = call_with_explicit_noise(
+        paired_eager.model,
+        eager_explicit_head,
+        eager_prepared,
+        initial_actions,
+    )
+    torch.cuda.synchronize()
+    hybrid_explicit_action = _engine_phase(
+        engine_phases,
+        "common_boundary_explicit_equivalence",
+        vit_engine,
+        llm_engine,
+        1,
+        lambda: call_with_explicit_noise(
+            hybrid.model,
+            hybrid_explicit_head,
+            hybrid_prepared,
+            initial_actions,
+        ),
+    )
+    torch.cuda.synchronize()
+    explicit_rng_unchanged = bool(
+        torch.equal(cpu_rng_before, torch.random.get_rng_state())
+        and torch.equal(cuda_rng_before, torch.cuda.get_rng_state())
+    )
+    noise_unchanged = initial_actions_manifest == tensor_manifest(initial_actions)
+
+    common_eager_hybrid = _engine_phase(
+        engine_phases,
+        "common_boundary_eager_hybrid_timing",
+        vit_engine,
+        llm_engine,
+        args.common_warmup + args.common_measured,
+        lambda: _paired_cuda_stage_timing(
+            {
+                "pytorch_eager": lambda: cuda_event_call(
+                    paired_eager.model,
+                    eager_explicit_head,
+                    eager_prepared,
+                    initial_actions,
+                ),
+                "tensorrt_backbone_eager_head": lambda: cuda_event_call(
+                    hybrid.model,
+                    hybrid_explicit_head,
+                    hybrid_prepared,
+                    initial_actions,
+                ),
+            },
+            args.common_warmup,
+            args.common_measured,
+            (
+                "preloaded contiguous CUDA tensors + explicit initial noise -> "
+                "normalized action; one natural call with CUDA-event stages"
+            ),
+        ),
+    )
+    common_eager_hybrid_outputs = common_eager_hybrid.pop("outputs")
+
+    action_model = hybrid.model.action_head.model
+    original_action_model_forward = action_model.forward
+    torch._dynamo.reset()
+    compile_started = time.perf_counter_ns()
+    compiled_action_model_forward = torch.compile(
+        original_action_model_forward, mode=args.compile_mode
+    )
+    action_model.forward = compiled_action_model_forward
+    compiled_first_action = _engine_phase(
+        engine_phases,
+        "common_boundary_compile_first_call",
+        vit_engine,
+        llm_engine,
+        1,
+        lambda: call_with_explicit_noise(
+            hybrid.model,
+            hybrid_explicit_head,
+            hybrid_prepared,
+            initial_actions,
+        ),
+    )
+    torch.cuda.synchronize()
+    compile_first_call_wall_ms = (time.perf_counter_ns() - compile_started) / 1_000_000
+    unique_graphs_after_first = int(
+        torch._dynamo.utils.counters["stats"]["unique_graphs"]
+    )
+
+    def hybrid_eager_head_call() -> tuple[Any, dict[str, float]]:
+        action_model.forward = original_action_model_forward
+        return cuda_event_call(
+            hybrid.model,
+            hybrid_explicit_head,
+            hybrid_prepared,
+            initial_actions,
+        )
+
+    def hybrid_compiled_head_call() -> tuple[Any, dict[str, float]]:
+        action_model.forward = compiled_action_model_forward
+        return cuda_event_call(
+            hybrid.model,
+            hybrid_explicit_head,
+            hybrid_prepared,
+            initial_actions,
+        )
+
+    common_head_executor = _engine_phase(
+        engine_phases,
+        "common_boundary_head_executor_timing",
+        vit_engine,
+        llm_engine,
+        2 * (args.common_warmup + args.common_measured),
+        lambda: _paired_cuda_stage_timing(
+            {
+                "tensorrt_backbone_eager_head": hybrid_eager_head_call,
+                "tensorrt_backbone_compile_dit_head": hybrid_compiled_head_call,
+            },
+            args.common_warmup,
+            args.common_measured,
+            (
+                "preloaded contiguous CUDA tensors + explicit initial noise -> "
+                "normalized action; identical TRT backbone; eager versus "
+                "torch.compile DiT forward"
+            ),
+        ),
+    )
+    action_model.forward = original_action_model_forward
+    common_head_executor_outputs = common_head_executor.pop("outputs")
+    unique_graphs_after_measurement = int(
+        torch._dynamo.utils.counters["stats"]["unique_graphs"]
+    )
+
+    common_comparisons = {
+        "eager_official_vs_explicit": _compare_array(
+            eager_official_action.float().numpy(),
+            eager_explicit_action.detach().float().cpu().numpy(),
+        ),
+        "hybrid_official_vs_explicit": _compare_array(
+            hybrid_official_action.float().numpy(),
+            hybrid_explicit_action.detach().float().cpu().numpy(),
+        ),
+        "eager_vs_hybrid_explicit": _compare_array(
+            common_eager_hybrid_outputs["pytorch_eager"].float().cpu().numpy(),
+            common_eager_hybrid_outputs["tensorrt_backbone_eager_head"]
+            .float()
+            .cpu()
+            .numpy(),
+        ),
+        "hybrid_eager_vs_compile_dit": _compare_array(
+            common_head_executor_outputs["tensorrt_backbone_eager_head"]
+            .float()
+            .cpu()
+            .numpy(),
+            common_head_executor_outputs["tensorrt_backbone_compile_dit_head"]
+            .float()
+            .cpu()
+            .numpy(),
+        ),
+        "compile_first_vs_measured": _compare_array(
+            compiled_first_action.detach().float().cpu().numpy(),
+            common_head_executor_outputs["tensorrt_backbone_compile_dit_head"]
+            .float()
+            .cpu()
+            .numpy(),
+        ),
+    }
+    common_gates = {
+        "prepared_cuda_inputs_identical": (
+            eager_prepared_manifest == hybrid_prepared_manifest
+        ),
+        "explicit_noise_shape": initial_actions_manifest["shape"] == [8, 40, 132],
+        "explicit_noise_is_cuda_contiguous": (
+            initial_actions_manifest["device"] == "cuda"
+            and initial_actions_manifest["contiguous"]
+        ),
+        "explicit_path_does_not_advance_rng": explicit_rng_unchanged,
+        "explicit_noise_not_mutated": noise_unchanged,
+        "eager_official_equivalence": common_comparisons["eager_official_vs_explicit"][
+            "bitwise_equal"
+        ],
+        "hybrid_official_equivalence": common_comparisons[
+            "hybrid_official_vs_explicit"
+        ]["bitwise_equal"],
+        "compiled_head_action": (
+            common_comparisons["hybrid_eager_vs_compile_dit"]["finite"]
+            and common_comparisons["hybrid_eager_vs_compile_dit"]["cosine"] >= 0.999
+            and common_comparisons["hybrid_eager_vs_compile_dit"]["mean_abs"] <= 0.005
+            and common_comparisons["hybrid_eager_vs_compile_dit"]["max_abs"] <= 0.05
+        ),
+        "compiled_head_stable": common_comparisons["compile_first_vs_measured"][
+            "bitwise_equal"
+        ],
+        "no_compile_rebuild_during_measurement": (
+            unique_graphs_after_first > 0
+            and unique_graphs_after_measurement == unique_graphs_after_first
+        ),
+    }
     paired_eager = None
     gc.collect()
     telemetry_before_close = {
@@ -811,7 +1125,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             and telemetry_after_close["llm"]["close_event_sync_count"] == 1
         ),
     }
-    status = "passed" if all(gates.values()) else "failed"
+    status = (
+        "passed" if all(gates.values()) and all(common_gates.values()) else "failed"
+    )
     receipt = {
         "schema": "rlinf.gr00t-n1d7-trocar-true-b8-standalone-hybrid.v1",
         "status": status,
@@ -854,6 +1170,33 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "model_only": paired_model_timing,
                 "whole_call": paired_whole_timing,
             },
+            "common_cuda_boundary": {
+                "contract": (
+                    "preloaded contiguous CUDA tensors + explicit initial noise "
+                    "-> normalized deployment action"
+                ),
+                "excludes": [
+                    "raw observation preprocessing",
+                    "CPU-to-GPU input transfer",
+                    "implicit RNG generation",
+                    "public action decode",
+                    "PPO transition noise, logprob, and value",
+                ],
+                "prepared_inputs": eager_prepared_manifest,
+                "initial_actions": initial_actions_manifest,
+                "eager_vs_hybrid": common_eager_hybrid,
+                "head_executor": common_head_executor,
+                "compile": {
+                    "mode": args.compile_mode,
+                    "first_call_wall_ms": compile_first_call_wall_ms,
+                    "unique_graphs_after_first": unique_graphs_after_first,
+                    "unique_graphs_after_measurement": (
+                        unique_graphs_after_measurement
+                    ),
+                },
+                "comparisons": common_comparisons,
+                "gates": common_gates,
+            },
         },
         "memory": {
             "eager": {
@@ -881,7 +1224,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     if status != "passed":
-        raise RuntimeError(f"standalone true-B8 gates failed: {gates}")
+        raise RuntimeError(
+            "standalone true-B8 gates failed: "
+            f"legacy={gates}, common_boundary={common_gates}"
+        )
     return receipt
 
 
@@ -904,6 +1250,9 @@ def main() -> int:
     parser.add_argument("--memory-iterations", type=int, default=3)
     parser.add_argument("--paired-warmup", type=int, default=10)
     parser.add_argument("--paired-measured", type=int, default=30)
+    parser.add_argument("--common-warmup", type=int, default=10)
+    parser.add_argument("--common-measured", type=int, default=30)
+    parser.add_argument("--compile-mode", default="max-autotune")
     args = parser.parse_args()
     try:
         receipt = run(args)

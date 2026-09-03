@@ -126,6 +126,34 @@
     "silent_eager_fallback": false,
     "feature_reuse_enabled": false
   },
+  "common_boundary": {
+    "input": "preloaded_contiguous_cuda_tensors",
+    "stochastic_input": "explicit_initial_noise_tensor",
+    "output": "normalized_deployment_action",
+    "timing": "one_natural_call_cuda_events_without_intermediate_host_sync",
+    "stages": [
+      "backbone",
+      "action_head",
+      "total"
+    ],
+    "arms": [
+      "pytorch_eager",
+      "tensorrt_backbone_eager_head",
+      "tensorrt_backbone_torch_compile_dit_head"
+    ],
+    "paired_order": "alternating_ab_ba",
+    "excluded": [
+      "raw_observation_preprocessing",
+      "cpu_to_gpu_input_transfer",
+      "implicit_rng_generation",
+      "public_action_decode",
+      "ppo_transition_noise_logprob_and_value"
+    ],
+    "official_deployment_equivalence_required": true,
+    "explicit_path_must_not_advance_rng": true,
+    "compile_rebuild_during_measurement_allowed": false,
+    "w14_strict_comparability": "unavailable_until_ppo_stochastic_abi_is_shared"
+  },
   "numeric_gates": {
     "all_tensors_finite": true,
     "vit_cosine_min": 0.997,
