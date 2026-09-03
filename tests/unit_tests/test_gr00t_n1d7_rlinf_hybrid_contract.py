@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import ast
 import json
 from pathlib import Path
 
@@ -114,3 +115,27 @@ def test_w81_numerical_thresholds_are_frozen() -> None:
     assert gates["pre_update_same_revision"]["kl_max_abs_max"] == 0.001
     assert gates["one_update_cross_arm"]["gradient_relative_l2_max"] == 0.02
     assert gates["one_update_cross_arm"]["parameter_delta_relative_l2_max"] == 0.02
+
+
+def test_w81_shutdown_records_state_before_and_after_close() -> None:
+    source = (
+        ROOT / "rlinf/workers/rollout/hf/huggingface_worker.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    shutdown = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "shutdown_hybrid_runtime"
+    )
+    stage_calls = [
+        node.args[0].value
+        for node in ast.walk(shutdown)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_log_hybrid_runtime_telemetry"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+    ]
+
+    assert stage_calls == ["closing", "closed"]

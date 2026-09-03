@@ -1364,6 +1364,7 @@ class MultiStepRolloutWorker(Worker):
         close_hybrid_runtime = getattr(model, "close_hybrid_runtime", None)
         if callable(close_hybrid_runtime):
             close_hybrid_runtime()
+            self._log_hybrid_runtime_telemetry("closed")
 
     @staticmethod
     def _infer_env_batch_size(obs_batch: dict[str, Any]) -> int:
