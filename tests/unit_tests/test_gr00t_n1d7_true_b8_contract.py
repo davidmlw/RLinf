@@ -65,6 +65,10 @@ def test_w80_contract_keeps_only_frozen_backbone_in_tensorrt() -> None:
     assert hybrid["tensorrt_engines"] == ["vit.engine", "llm_bf16.engine"]
     assert hybrid["apply_final_llm_norm"] is False
     assert hybrid["gpu_only_handoff"] is True
+    assert hybrid["input_layout"] == "contiguous_fail_closed"
+    assert hybrid["stream_protocol"] == "single_torch_current_stream_fail_closed"
+    assert hybrid["execution_event_recorded_per_call"] is True
+    assert hybrid["close_waits_for_last_execution_event"] is True
     assert hybrid["silent_eager_fallback"] is False
     assert hybrid["feature_reuse_enabled"] is False
 
@@ -76,3 +80,14 @@ def test_w80_contract_is_python_owned() -> None:
     assert implementation["language"] == "python"
     assert "praxis_runtime" in implementation["forbidden_dependencies"]
     assert "poiesis_runtime" in implementation["forbidden_dependencies"]
+
+
+def test_w80_contract_requires_paired_timing_and_hash_chain() -> None:
+    contract = _contract()
+
+    assert contract["statistics"]["paired_order"] == "alternating_ab_ba"
+    assert contract["statistics"]["paired_measured"] == 30
+    assert (
+        contract["artifact"]["required_hash_chain"]
+        == "fixture_to_export_to_engine_to_standalone_run"
+    )

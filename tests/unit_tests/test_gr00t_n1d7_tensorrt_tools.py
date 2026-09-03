@@ -14,6 +14,7 @@
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import subprocess
@@ -35,6 +36,7 @@ from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
     fixture_b1,
     model_view,
     official_b1,
+    persistent_trt,
     prepare_builder,
     promote_b1,
     resident_b1,
@@ -454,6 +456,148 @@ def test_true_b8_standalone_compares_plain_arrays() -> None:
     assert same["max_abs"] == 0.0
     assert changed["bitwise_equal"] is False
     assert changed["max_abs"] == 0.5
+
+
+def test_persistent_engine_is_fail_closed_for_stream_and_layout() -> None:
+    source = inspect.getsource(persistent_trt.PersistentEngine.__call__)
+
+    assert ".contiguous()" not in source
+    assert "is_contiguous()" in source
+    assert "implicit copies" in source
+    assert "cross-stream output reuse" in source
+    assert "execute_async_v3" in source
+    assert ".synchronize()" not in source
+
+
+def test_counterbalanced_timing_uses_ab_ba_pairs(monkeypatch) -> None:
+    seeds = []
+    monkeypatch.setattr(standalone_true_b8, "_set_seed", seeds.append)
+
+    result = standalone_true_b8._paired_timing(
+        "eager",
+        "hybrid",
+        None,
+        lambda policy, _argument: 10.0 if policy == "eager" else 8.0,
+        warmup=2,
+        measured=4,
+        seed=100,
+        boundary="test",
+    )
+
+    assert result["orders"] == [
+        ["eager", "hybrid"],
+        ["hybrid", "eager"],
+        ["eager", "hybrid"],
+        ["hybrid", "eager"],
+    ]
+    assert result["speedup"] == 1.25
+    assert result["eager_minus_hybrid_ms"]["mean_ms"] == 2.0
+    assert len(seeds) == 12
+
+
+def test_standalone_provenance_chain_rejects_mismatched_input(tmp_path: Path) -> None:
+    source = tmp_path / "Isaac-GR00T"
+    source_revision = _git_init(source)
+    model = tmp_path / "model"
+    export_root = tmp_path / "onnx"
+    engines = tmp_path / "engines"
+    model.mkdir()
+    export_root.mkdir()
+    engines.mkdir()
+    collated = tmp_path / "collated.pt"
+    raw = tmp_path / "raw.npz"
+    collated.write_bytes(b"collated")
+    raw.write_bytes(b"raw")
+    model_receipt = model / "rlinf-model-view.json"
+    model_receipt.write_text("{}\n", encoding="utf-8")
+
+    fixture_path = tmp_path / "fixture.json"
+    fixture = {
+        "schema": "rlinf.gr00t-n1d7-trocar-true-b8-fixture.v1",
+        "status": "passed",
+        "source_revision": source_revision,
+        "batch_size": 8,
+        "b1x8": False,
+        "model_view_receipt_sha256": standalone_true_b8._sha256(model_receipt),
+        "artifacts": {
+            "collated-inputs.pt": {"sha256": standalone_true_b8._sha256(collated)},
+            "raw-observation.npz": {"sha256": standalone_true_b8._sha256(raw)},
+        },
+    }
+    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+
+    for name, content in {
+        "export_metadata.json": b"metadata",
+        "vit_fp32.onnx": b"vit-onnx",
+        "llm_bf16.onnx": b"llm-onnx",
+    }.items():
+        (export_root / name).write_bytes(content)
+    export_path = export_root / "rlinf-export-receipt.json"
+    export = {
+        "schema": "rlinf.gr00t-n1d7-trocar-true-b8-onnx.v1",
+        "status": "passed",
+        "source_revision": source_revision,
+        "batch_size": 8,
+        "b1x8": False,
+        "metadata": {
+            "fixture_receipt_sha256": standalone_true_b8._sha256(fixture_path),
+            "collated_sha256": standalone_true_b8._sha256(collated),
+            "model_view_receipt_sha256": standalone_true_b8._sha256(model_receipt),
+        },
+        "files": {
+            name: {"sha256": standalone_true_b8._sha256(export_root / name)}
+            for name in ("export_metadata.json", "vit_fp32.onnx", "llm_bf16.onnx")
+        },
+    }
+    export_path.write_text(json.dumps(export), encoding="utf-8")
+
+    (engines / "export_metadata.json").write_bytes(
+        (export_root / "export_metadata.json").read_bytes()
+    )
+    (engines / "vit.engine").write_bytes(b"vit-engine")
+    (engines / "llm_bf16.engine").write_bytes(b"llm-engine")
+    engine_path = engines / "rlinf-engine-receipt.json"
+    engine = {
+        "schema": "rlinf.gr00t-n1d7-trocar-true-b8-engines.v1",
+        "status": "passed",
+        "static_batch": 8,
+        "sequence_opt": 208,
+        "silent_fallback": False,
+        "export_metadata_sha256": standalone_true_b8._sha256(
+            export_root / "export_metadata.json"
+        ),
+        "engines": {
+            name: {"sha256": standalone_true_b8._sha256(engines / name)}
+            for name in ("vit.engine", "llm_bf16.engine")
+        },
+    }
+    engine_path.write_text(json.dumps(engine), encoding="utf-8")
+
+    result = standalone_true_b8._verified_provenance(
+        source,
+        model,
+        collated,
+        raw,
+        fixture_path,
+        export_path,
+        engine_path,
+        engines,
+    )
+    assert result["status"] == "passed"
+    assert result["isaac_gr00t_revision"] == source_revision
+
+    raw.write_bytes(b"mismatched")
+    with pytest.raises(RuntimeError, match="raw input SHA-256 mismatch"):
+        standalone_true_b8._verified_provenance(
+            source,
+            model,
+            collated,
+            raw,
+            fixture_path,
+            export_path,
+            engine_path,
+            engines,
+        )
 
 
 def _site(tmp_path: Path) -> Path:

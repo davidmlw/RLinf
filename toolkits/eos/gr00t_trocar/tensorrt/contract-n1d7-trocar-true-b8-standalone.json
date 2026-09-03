@@ -119,6 +119,10 @@
     "apply_final_llm_norm": false,
     "persistent_engine_context_buffers": true,
     "gpu_only_handoff": true,
+    "input_layout": "contiguous_fail_closed",
+    "stream_protocol": "single_torch_current_stream_fail_closed",
+    "execution_event_recorded_per_call": true,
+    "close_waits_for_last_execution_event": true,
     "silent_eager_fallback": false,
     "feature_reuse_enabled": false
   },
@@ -130,13 +134,16 @@
     "public_action_mean_abs_max": 0.005,
     "public_action_max_abs_max": 0.05,
     "fixed_noise_repeat_bitwise": true,
-    "value_and_logprob_threshold_policy": "freeze_from_eager_repeat_floor_before_first_hybrid_result"
+    "standalone_value_and_logprob": "unavailable_deferred_to_w78"
   },
   "statistics": {
     "component_warmup": 5,
     "component_measured": 20,
     "whole_call_warmup": 10,
     "whole_call_measured": 30,
+    "paired_order": "alternating_ab_ba",
+    "paired_warmup": 10,
+    "paired_measured": 30,
     "reported": [
       "raw_samples",
       "p50",
@@ -149,6 +156,7 @@
   "artifact": {
     "attempt_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W80",
     "cache_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/artifacts/W80/tensorrt",
+    "required_hash_chain": "fixture_to_export_to_engine_to_standalone_run",
     "qualification_failure": "startup_reject",
     "git_tracks_large_artifacts": false
   }

@@ -58,11 +58,15 @@ class PersistentEngine:
         self._outputs: dict[tuple[Any, ...], Any] = {}
         self._input_references: list[Any] = []
         self.last_outputs: dict[str, Any] = {}
+        self._stream_handle: int | None = None
+        self._stream_device: int | None = None
+        self._last_execution_event = torch.cuda.Event(blocking=False)
         self.load_count = 1
         self.context_count = 1
         self.allocation_count = 0
         self.execute_count = 0
-        self.stream_sync_count = 0
+        self.event_record_count = 0
+        self.close_event_sync_count = 0
         self.closed = False
 
     def _torch_type(self, dtype: Any) -> Any:
@@ -135,7 +139,11 @@ class PersistentEngine:
                 raise TypeError(
                     f"TensorRT input {name} dtype {value.dtype} does not match {dtype}"
                 )
-            value = value.contiguous()
+            if not value.is_contiguous():
+                raise ValueError(
+                    f"TensorRT input {name} must be contiguous; implicit copies are "
+                    "forbidden in the persistent path"
+                )
             runtime_shape = tuple(self.execution_context.get_tensor_shape(name))
             if runtime_shape != tuple(value.shape):
                 raise ValueError(
@@ -157,8 +165,21 @@ class PersistentEngine:
             self.execution_context.set_tensor_address(name, value.data_ptr())
             outputs[name] = value
         stream = self._torch.cuda.current_stream(device)
+        stream_handle = int(stream.cuda_stream)
+        if self._stream_handle is None:
+            self._stream_handle = stream_handle
+            self._stream_device = device.index
+        elif (
+            stream_handle != self._stream_handle or device.index != self._stream_device
+        ):
+            raise RuntimeError(
+                "PersistentEngine is single-stream: cross-stream output reuse is "
+                "forbidden without an explicit event handoff"
+            )
         if not self.execution_context.execute_async_v3(stream.cuda_stream):
             raise RuntimeError(f"TensorRT execution failed: {self.file}")
+        self._last_execution_event.record(stream)
+        self.event_record_count += 1
         self.execute_count += 1
         self._input_references = references
         self.last_outputs = outputs
@@ -173,17 +194,28 @@ class PersistentEngine:
             "context_count": self.context_count,
             "allocation_count": self.allocation_count,
             "execute_count": self.execute_count,
-            "stream_sync_count": self.stream_sync_count,
+            "submission_api": "execute_async_v3",
+            "stream_protocol": "single_torch_current_stream",
+            "stream_handle": self._stream_handle,
+            "stream_device": self._stream_device,
+            "event_record_count": self.event_record_count,
+            "resident_host_sync_count": 0,
+            "close_event_sync_count": self.close_event_sync_count,
             "output_cache_entries": len(self._outputs),
+            "closed": self.closed,
         }
 
     def close(self) -> None:
         if self.closed:
             return
+        if self.event_record_count:
+            self._last_execution_event.synchronize()
+            self.close_event_sync_count += 1
         self.closed = True
         self._input_references.clear()
         self.last_outputs.clear()
         self._outputs.clear()
+        self._last_execution_event = None
         self.execution_context = None
         self.handle = None
 
