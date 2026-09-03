@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 EXPECTED_DISTRIBUTIONS = {
+    "pip": "25.3",
     "torch": "2.9.0+cu128",
     "torchvision": "0.24.0+cu128",
     "transformers": "4.57.3",

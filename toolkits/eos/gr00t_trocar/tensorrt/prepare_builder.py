@@ -134,7 +134,15 @@ def prepare(
         )
         staging_python = staging / "bin/python"
         subprocess.run(
-            [str(staging_python), "-m", "ensurepip", "--upgrade"],
+            [
+                str(uv),
+                "pip",
+                "install",
+                "--no-cache",
+                "--python",
+                str(staging_python),
+                "pip==25.3",
+            ],
             check=True,
             env=environment,
         )
