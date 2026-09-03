@@ -14,6 +14,8 @@ from collections.abc import Mapping
 
 import torch
 
+_DIAGNOSTIC_CUTOFFS = (1e-4, 1e-3, 1e-2)
+
 
 def pre_update_identity_batch_stats(
     *,
@@ -103,7 +105,7 @@ def pre_update_identity_batch_stats(
     def _max(value: torch.Tensor) -> torch.Tensor:
         return value.double().max() if value.numel() else zero.clone()
 
-    return {
+    stats = {
         "decision_records": torch.tensor(
             batch_size, device=log_ratio.device, dtype=torch.int64
         ),
@@ -122,6 +124,11 @@ def pre_update_identity_batch_stats(
         "value_abs_sum": _sum(finite_value_delta),
         "value_abs_max": _max(finite_value_delta),
     }
+    for cutoff in _DIAGNOSTIC_CUTOFFS:
+        label = f"{cutoff:.0e}".replace("-0", "-")
+        stats[f"ratio_abs_gt_{label}"] = (ratio_abs > cutoff).count_nonzero()
+        stats[f"kl_abs_gt_{label}"] = (kl_abs > cutoff).count_nonzero()
+    return stats
 
 
 def finalize_pre_update_identity(
@@ -148,6 +155,13 @@ def finalize_pre_update_identity(
         "value_mean_abs": float(totals["value_abs_sum"]) / value_positions,
         "value_max_abs": float(totals["value_abs_max"]),
     }
+    for cutoff in _DIAGNOSTIC_CUTOFFS:
+        label = f"{cutoff:.0e}".replace("-0", "-")
+        for prefix in ("ratio_abs_gt", "kl_abs_gt"):
+            key = f"{prefix}_{label}"
+            count = int(totals[key])
+            receipt[key] = count
+            receipt[f"{key}_fraction"] = count / ratio_positions
     receipt["finite"] = (
         receipt["nonfinite_ratio_positions"] == 0
         and receipt["nonfinite_value_positions"] == 0

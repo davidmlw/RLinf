@@ -1647,6 +1647,20 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
         if reduced is None:
             raise RuntimeError("pre-update identity gate produced no statistics")
+        local_totals = {name: value.item() for name, value in reduced.items()}
+        local_receipt = finalize_pre_update_identity(local_totals, thresholds)
+        local_receipt.update(
+            {
+                "schema": "rlinf.pre-update-policy-identity-rank.v1",
+                "outer_step": int(self.version),
+                "actor_rank": int(self._rank),
+                "thresholds": thresholds,
+            }
+        )
+        self.logger.info(
+            "RLINF_PRE_UPDATE_IDENTITY_RANK %s",
+            json.dumps(local_receipt, sort_keys=True, separators=(",", ":")),
+        )
         for name, value in reduced.items():
             op = (
                 torch.distributed.ReduceOp.MAX

@@ -43,6 +43,8 @@ def test_identity_stats_expand_chunk_mask_and_pass_exact_policy() -> None:
     assert receipt["ratio_positions"] == 2
     assert receipt["ratio_mean_abs_from_one"] == 0.0
     assert receipt["kl_max_abs"] == 0.0
+    assert receipt["ratio_abs_gt_1e-3"] == 0
+    assert receipt["kl_abs_gt_1e-3_fraction"] == 0.0
     assert receipt["value_mean_abs"] == 0.0
     assert receipt["passed"] is True
 
@@ -64,6 +66,8 @@ def test_identity_stats_fail_closed_on_threshold_and_nonfinite() -> None:
     assert receipt["nonfinite_ratio_positions"] == 1
     assert receipt["ratio_max_abs_from_one"] > 1e-3
     assert receipt["value_mean_abs"] == pytest.approx(0.2)
+    assert receipt["ratio_abs_gt_1e-3"] == 1
+    assert receipt["kl_abs_gt_1e-3"] == 1
     assert receipt["finite"] is False
     assert receipt["passed"] is False
 
@@ -100,4 +104,6 @@ def test_identity_stats_use_ppo_action_level_reduction() -> None:
     assert receipt["ratio_max_abs_from_one"] == pytest.approx(
         torch.expm1(torch.tensor(1.2e-3)).item()
     )
+    assert receipt["ratio_abs_gt_1e-3"] == 1
+    assert receipt["ratio_abs_gt_1e-3_fraction"] == 0.5
     assert receipt["passed"] is False
