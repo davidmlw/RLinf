@@ -21,6 +21,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -241,6 +242,7 @@ def main() -> int:
     try:
         receipt = run(args)
     except Exception as error:
+        traceback.print_exc()
         print(f"W80 fixture capture failed: {error}", file=sys.stderr)
         return 1
     print(json.dumps(receipt, indent=2, sort_keys=True))
