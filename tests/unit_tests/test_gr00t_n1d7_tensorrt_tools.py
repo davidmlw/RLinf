@@ -29,6 +29,7 @@ sys.path.insert(0, str(TOOLS))
 
 from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
     builder_probe,
+    correct_b1,
     fixture_b1,
     model_view,
     official_b1,
@@ -174,6 +175,12 @@ def test_fixture_manifest_aggregate_hash_is_order_independent() -> None:
     reordered = {"seed": 7, "input": {"dtype": "torch.int64", "shape": [1, 2]}}
 
     assert fixture_b1._aggregate_hash(first) == fixture_b1._aggregate_hash(reordered)
+
+
+def test_correction_reads_executed_source_revision() -> None:
+    request = {"site": {"source_revision": "abc123"}}
+
+    assert correct_b1._source_revision(request) == "abc123"
 
 
 def test_promotion_rejects_failed_resident_action_gate(tmp_path: Path) -> None:
