@@ -141,7 +141,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     torch.randn = capture_randn
     try:
         with torch.inference_mode():
-            prediction = policy.model.get_action(**collated_inputs)
+            prediction, _ = policy.get_action(observation)
         torch.cuda.synchronize()
     finally:
         torch.randn = original_randn
@@ -185,7 +185,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         },
         "rng_state_before_model": rng_before,
         "rng_state_after_model": rng_after,
-        "normalized_prediction": {
+        "public_action": {
             "tensors": action_manifest,
             "aggregate_sha256": _aggregate_hash(action_manifest),
         },
