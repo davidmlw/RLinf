@@ -31,7 +31,8 @@
     "ppo_epochs": 4,
     "optimizer_updates": 8,
     "logprob_type": "action_level",
-    "actor_lr": 0.00002
+    "actor_lr": 0.00002,
+    "text_padding_length": 208
   },
   "matched_ab": {
     "common": {

@@ -67,7 +67,8 @@ def test_w81_configs_have_only_preregistered_arm_differences() -> None:
 
 
 def test_w81_configs_freeze_common_lifecycle_and_workload() -> None:
-    expected_arms = _contract()["matched_ab"]["arms"]
+    contract = _contract()
+    expected_arms = contract["matched_ab"]["arms"]
     for name in CONFIGS:
         config = _config(name)
         model = config["rollout"]["model"]
@@ -87,6 +88,11 @@ def test_w81_configs_freeze_common_lifecycle_and_workload() -> None:
         assert config["actor"]["global_batch_size"] == 2048
         assert config["actor"]["micro_batch_size"] == 128
         assert config["algorithm"]["update_epoch"] == 4
+        assert (
+            config["actor"]["model"]["rl_head_config"]["padding_value"]
+            == contract["workload"]["text_padding_length"]
+            == contract["artifacts"]["sequence_length"]
+        )
 
 
 def test_w81_numerical_thresholds_are_frozen() -> None:

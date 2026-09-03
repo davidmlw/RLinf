@@ -288,7 +288,7 @@ actor:
       disable_dropout: true
       use_vlm_value: false
       value_vlm_mode: mean_token
-      padding_value: 1024
+      padding_value: 208
   optim:
     lr: 2.0e-05
     value_lr: 0.0001
