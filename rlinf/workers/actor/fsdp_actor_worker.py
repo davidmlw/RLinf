@@ -83,11 +83,11 @@ from rlinf.utils.nested_dict_process import (
     put_tensor_device,
     split_dict_to_chunk,
 )
+from rlinf.utils.performance_measurement import record_span
 from rlinf.utils.pinned_feature_stream import (
     compute_rollout_backbone_stream_counts,
     receive_pinned_rollout_backbone_stream,
 )
-from rlinf.utils.performance_measurement import record_span
 from rlinf.utils.pinned_rollout_cache import PinnedRolloutBackboneCache
 from rlinf.utils.placement import (
     HybridComponentPlacement,
@@ -1145,7 +1145,10 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         return model
 
     def get_rollout_state_dict(self) -> dict:
-        return self.get_model_state_dict(cpu_offload=False, full_state_dict=False)
+        state_dict = self.get_model_state_dict(
+            cpu_offload=False, full_state_dict=False
+        )
+        return self.weight_syncer.select_state_dict(state_dict)
 
     @Worker.timer("actor/sync_model_to_rollout")
     async def sync_model_to_rollout(self) -> None:
@@ -1181,11 +1184,15 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             ).async_wait()
 
         if not self.weight_syncer.sender_initialized():
+            param_names_need_sync = self.weight_syncer.select_param_names(
+                self.param_names_need_sync,
+                required_names=self.trainable_param_names,
+            )
             await self.weight_syncer.init_sender(
                 state_dict=state_dict,
                 send=send_func,
                 recv=recv_func,
-                param_names_need_sync=self.param_names_need_sync,
+                param_names_need_sync=param_names_need_sync,
                 is_sender=self._is_weight_sender,
             )
 

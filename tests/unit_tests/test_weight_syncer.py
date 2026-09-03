@@ -1344,6 +1344,93 @@ def test_weight_syncer_factory_builds_patch_and_bucket():
     assert bucket_syncer.comm_options is None
 
 
+def test_weight_syncer_state_dict_view_selects_head_and_required_parameters():
+    config = OmegaConf.create(
+        {
+            "type": "patch",
+            "state_dict_prefixes": ["action_head"],
+            "patch": {
+                "snapshot_device": "cpu",
+                "transport_device": "cpu",
+                "delta_encoding": True,
+                "compression": "none",
+            },
+        }
+    )
+    syncer = WeightSyncer.create(config)
+    state_dict = OrderedDict(
+        {
+            "backbone.weight": torch.ones(2),
+            "action_head.policy.weight": torch.ones(3),
+            "action_head.value.bias": torch.ones(1),
+        }
+    )
+
+    selected = syncer.select_state_dict(state_dict)
+    selected_names = syncer.select_param_names(
+        list(state_dict),
+        required_names=[
+            "action_head.policy.weight",
+            "action_head.value.bias",
+        ],
+    )
+
+    assert syncer.state_dict_prefixes == ("action_head",)
+    assert list(selected) == [
+        "action_head.policy.weight",
+        "action_head.value.bias",
+    ]
+    assert selected_names == list(selected)
+
+
+def test_weight_syncer_state_dict_view_rejects_missing_prefix():
+    config = OmegaConf.create(
+        {
+            "type": "patch",
+            "state_dict_prefixes": ["action_head"],
+            "patch": {"snapshot_device": "cpu", "transport_device": "cpu"},
+        }
+    )
+    syncer = WeightSyncer.create(config)
+
+    with pytest.raises(ValueError, match="did not match any keys"):
+        syncer.select_state_dict({"backbone.weight": torch.ones(1)})
+
+
+def test_weight_syncer_state_dict_view_rejects_excluded_trainable_parameter():
+    config = OmegaConf.create(
+        {
+            "type": "patch",
+            "state_dict_prefixes": ["action_head"],
+            "patch": {"snapshot_device": "cpu", "transport_device": "cpu"},
+        }
+    )
+    syncer = WeightSyncer.create(config)
+
+    with pytest.raises(ValueError, match="excludes trainable parameters"):
+        syncer.select_param_names(
+            ["action_head.weight", "outside_head.weight"],
+            required_names=["action_head.weight", "outside_head.weight"],
+        )
+
+
+@pytest.mark.parametrize(
+    "prefixes",
+    [[], [""], ["action_head", "action_head"]],
+)
+def test_weight_syncer_state_dict_view_rejects_invalid_prefixes(prefixes):
+    config = OmegaConf.create(
+        {
+            "type": "patch",
+            "state_dict_prefixes": prefixes,
+            "patch": {"snapshot_device": "cpu", "transport_device": "cpu"},
+        }
+    )
+
+    with pytest.raises(ValueError, match="state_dict_prefixes"):
+        WeightSyncer.create(config)
+
+
 def test_weight_syncer_factory_builds_shared_comm_options():
     base_patch_cfg = {
         "type": "patch",

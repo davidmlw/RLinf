@@ -991,8 +991,11 @@ class MultiStepRolloutWorker(Worker):
                 ).async_wait()
 
         if not self.weight_syncer.receiver_initialized():
+            state_dict = self.weight_syncer.select_state_dict(
+                self.hf_model.state_dict()
+            )
             await self.weight_syncer.init_receiver(
-                state_dict=self.hf_model.state_dict(),
+                state_dict=state_dict,
                 recv=recv_func,
                 send=send_func,
             )

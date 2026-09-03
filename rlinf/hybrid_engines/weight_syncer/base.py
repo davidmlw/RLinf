@@ -15,7 +15,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Awaitable, Callable, Optional
+from collections.abc import Mapping
+from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -25,6 +26,7 @@ from rlinf.scheduler import CollectiveGroupOptions, Worker
 
 SendFn = Callable[[Any], Awaitable[None]]
 RecvFn = Callable[[], Awaitable[Any]]
+TensorValue = TypeVar("TensorValue")
 
 
 class WeightSyncer(ABC):
@@ -32,6 +34,7 @@ class WeightSyncer(ABC):
         self._sender_initialized: bool = False
         self._receiver_initialized: bool = False
         self._comm_options: Optional[CollectiveGroupOptions] = None
+        self._state_dict_prefixes: tuple[str, ...] | None = None
 
     @property
     def comm_options(self) -> Optional[CollectiveGroupOptions]:
@@ -41,6 +44,75 @@ class WeightSyncer(ABC):
         the weight syncer config; ``None`` if every option is at its default
         (matching the legacy behavior where no options were supplied)."""
         return self._comm_options
+
+    @property
+    def state_dict_prefixes(self) -> tuple[str, ...] | None:
+        """Prefixes defining the model state visible to this syncer."""
+
+        return self._state_dict_prefixes
+
+    @staticmethod
+    def _matches_prefix(name: str, prefix: str) -> bool:
+        return name == prefix or name.startswith(f"{prefix}.")
+
+    def select_state_dict(
+        self, state_dict: Mapping[str, TensorValue]
+    ) -> dict[str, TensorValue]:
+        """Return the configured synchronization view of ``state_dict``.
+
+        A restricted view lets inference replace immutable model components
+        without requiring their state keys to remain present solely for the
+        synchronization handshake. Prefixes are fail-closed: every configured
+        prefix must match at least one key.
+        """
+
+        if self._state_dict_prefixes is None:
+            return dict(state_dict)
+
+        matched = dict.fromkeys(self._state_dict_prefixes, False)
+        selected: dict[str, TensorValue] = {}
+        for name, value in state_dict.items():
+            for prefix in self._state_dict_prefixes:
+                if self._matches_prefix(name, prefix):
+                    matched[prefix] = True
+                    selected[name] = value
+                    break
+        missing = [prefix for prefix, found in matched.items() if not found]
+        if missing:
+            raise ValueError(
+                "Weight sync state_dict prefixes did not match any keys: "
+                f"{missing}"
+            )
+        return selected
+
+    def select_param_names(
+        self,
+        names: list[str],
+        *,
+        required_names: list[str] | None = None,
+    ) -> list[str]:
+        """Filter synchronized names and reject excluded trainable parameters."""
+
+        if self._state_dict_prefixes is None:
+            return list(names)
+        selected = [
+            name
+            for name in names
+            if any(
+                self._matches_prefix(name, prefix)
+                for prefix in self._state_dict_prefixes
+            )
+        ]
+        if not selected:
+            raise ValueError("Weight sync state_dict view selected no parameters")
+        required = set(required_names or ())
+        missing_required = sorted(required - set(selected))
+        if missing_required:
+            raise ValueError(
+                "Weight sync state_dict view excludes trainable parameters: "
+                f"{missing_required[:8]}"
+            )
+        return selected
 
     @abstractmethod
     async def sync(
@@ -137,6 +209,19 @@ class WeightSyncer(ABC):
             )
         else:
             raise ValueError(f"Unsupported weight syncer type: {syncer_type}")
+
+        prefixes = OmegaConf.select(config, "state_dict_prefixes", default=None)
+        if prefixes is not None:
+            prefixes = tuple(str(prefix) for prefix in prefixes)
+            if not prefixes or any(not prefix for prefix in prefixes):
+                raise ValueError(
+                    "weight_syncer.state_dict_prefixes must contain non-empty prefixes"
+                )
+            if len(set(prefixes)) != len(prefixes):
+                raise ValueError(
+                    "weight_syncer.state_dict_prefixes must not contain duplicates"
+                )
+            syncer._state_dict_prefixes = prefixes
 
         syncer._comm_options = cls._build_comm_options(config)
         return syncer

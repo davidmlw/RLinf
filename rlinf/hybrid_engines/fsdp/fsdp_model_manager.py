@@ -109,6 +109,7 @@ class FSDPModelManager:
         self.bucket_capacity = cfg.get("sync_bucket_capacity", 128 * 1024 * 1024)
 
         self.param_names_need_sync: list[str] = None
+        self.trainable_param_names: list[str] = None
 
     def _create_amp_context(self) -> ContextManager:
         """
@@ -284,6 +285,11 @@ class FSDPModelManager:
         # here record the original trainable parameters' names before FSDP wrapping
         # persist buffers' names are also recorded, which will be used for weight syncing.
         self.param_names_need_sync = collect_param_names_need_sync(module)
+        self.trainable_param_names = [
+            name
+            for name, parameter in module.named_parameters(remove_duplicate=False)
+            if parameter.requires_grad
+        ]
 
         # build model, optimizer, lr_scheduler, grad_scaler
         self.model = self._strategy.wrap_model(
