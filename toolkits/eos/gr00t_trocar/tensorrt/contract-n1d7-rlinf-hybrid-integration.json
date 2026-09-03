@@ -86,7 +86,14 @@
       "runner.logger.experiment_name",
       "rollout.model.tensorrt_backbone.enabled"
     ],
-    "compiled_dit_status": "separate_unqualified_candidate"
+    "compiled_dit_diagnostic": {
+      "config": "config-n1d7-hybrid-trt-compile-reuse-chunk16.yaml",
+      "status": "separate_unqualified_candidate",
+      "only_allowed_differences_from_trt_eager_reuse": [
+        "runner.logger.experiment_name",
+        "rollout.enable_torch_compile"
+      ]
+    }
   },
   "artifacts": {
     "engine_receipt_sha256": "758f3751b63f2399c4824b20b22c4508d463eb6144db5d1393ac23f0a069a0cd",

@@ -29,6 +29,9 @@ CONFIGS = {
 REUSE_CONFIGS = {
     "eager_reuse": TOOLKIT / "config-n1d7-hybrid-eager-reuse-chunk16.yaml",
     "trt_eager_reuse": (TOOLKIT / "config-n1d7-hybrid-trt-eager-reuse-chunk16.yaml"),
+    "trt_compile_reuse": (
+        TOOLKIT / "config-n1d7-hybrid-trt-compile-reuse-chunk16.yaml"
+    ),
 }
 
 
@@ -85,6 +88,24 @@ def test_w81_feature_reuse_resolution_has_one_executor_difference() -> None:
         )
         assert config["rollout"]["pinned_feature_verify_trajectory"] is False
         assert config["rollout"]["enable_torch_compile"] is False
+
+
+def test_w81_compiled_dit_reuse_is_an_isolated_diagnostic() -> None:
+    eager_head = _config("trt_eager_reuse")
+    compiled_dit = _config("trt_compile_reuse")
+    diagnostic = _contract()["matched_feature_reuse_ab"][
+        "compiled_dit_diagnostic"
+    ]
+
+    assert _different_paths(eager_head, compiled_dit) == set(
+        diagnostic["only_allowed_differences_from_trt_eager_reuse"]
+    )
+    assert eager_head["rollout"]["enable_torch_compile"] is False
+    assert compiled_dit["rollout"]["enable_torch_compile"] is True
+    assert (
+        compiled_dit["actor"]["model"]["rollout_backbone_feature_transport"]
+        == "borrowed_ipc_pinned"
+    )
 
 
 def test_w81_configs_freeze_common_lifecycle_and_workload() -> None:
