@@ -42,7 +42,7 @@
     "torchcodec_wheel_sha256": "8fc189dcb71739b89230bd56abbc721188f65d9a8c40afcc751b8d2809bbdd4d"
   },
   "experiment": {
-    "name": "W79-official-b1-r4",
+    "name": "W79-official-b1-r5",
     "output_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W79",
     "artifact_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/artifacts/W79/tensorrt"
   }

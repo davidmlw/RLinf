@@ -355,6 +355,7 @@ def _ensure_ffmpeg(attempt: Path) -> None:
             "--no-install-recommends",
             "ffmpeg",
             "libpython3.12",
+            "libpython3.12-dev",
         ],
     )
     with (
@@ -386,6 +387,7 @@ def _ensure_ffmpeg(attempt: Path) -> None:
             "libswresample4",
             "libswscale7",
             "libpython3.12",
+            "libpython3.12-dev",
         ],
         text=True,
     ).splitlines()

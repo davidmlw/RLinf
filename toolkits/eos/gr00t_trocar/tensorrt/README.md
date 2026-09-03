@@ -30,8 +30,9 @@ bugfix wheel, then proves the exact interpreter/import/native-library path and
 decodes a retained LIBERO MP4 through GR00T's CPU utility before ONNX export.
 All model, Torch, Transformers, flash-attn, TensorRT, and export settings remain
 unchanged.
-The allocation also installs the Ubuntu 24.04 FFmpeg 6 runtime into its
-ephemeral container and records exact `dpkg` versions in `ffmpeg.json`.
+The allocation also installs the Ubuntu 24.04 FFmpeg 6 runtime and Python 3.12
+runtime/development libraries into its ephemeral container, then records exact
+`dpkg` versions in `ffmpeg.json`.
 
 ```bash
 python toolkits/eos/gr00t_trocar/tensorrt/start_official_b1.py materialize \
