@@ -37,6 +37,8 @@ from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
     promote_b1,
     resident_b1,
     start_official_b1,
+    trocar_b8_fixture,
+    trocar_b8_model_view,
 )
 
 OFFICIAL_NUMERICS = """
@@ -262,6 +264,95 @@ def test_model_view_preserves_selector_suffix_and_hashes_weights(
     assert (output / "model-00001-of-00001.safetensors").is_symlink()
     generated = json.loads((output / "config.json").read_text(encoding="utf-8"))
     assert generated["model_name"].endswith("nvidia/Cosmos-Reason2-2B")
+
+
+def _trocar_metadata() -> dict:
+    statistics = {
+        key: {
+            "max": [1.0] * 7,
+            "min": [-1.0] * 7,
+            "mean": [0.0] * 7,
+            "std": [1.0] * 7,
+            "q01": [-0.9] * 7,
+            "q99": [0.9] * 7,
+        }
+        for key in trocar_b8_model_view.STATE_ACTION_ORDER
+    }
+    return {
+        "new_embodiment": {
+            "statistics": {
+                "state": statistics,
+                "action": statistics,
+            }
+        }
+    }
+
+
+def test_trocar_model_view_matches_executed_w77_processor_order(
+    tmp_path: Path,
+) -> None:
+    model = tmp_path / "model"
+    backbone = tmp_path / "backbone"
+    output = tmp_path / "view"
+    model.mkdir()
+    backbone.mkdir()
+    (model / "config.json").write_text(
+        json.dumps(
+            {
+                "model_name": "nvidia/Cosmos-Reason2-2B",
+                "image_crop_size": [230, 230],
+                "image_target_size": [256, 256],
+                "shortest_image_edge": 256,
+                "crop_fraction": 0.95,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (model / "processor_config.json").write_text(
+        json.dumps({"processor_kwargs": {"model_name": "old"}}), encoding="utf-8"
+    )
+    (model / "model.safetensors.index.json").write_text("{}", encoding="utf-8")
+    (model / "model-00001-of-00001.safetensors").write_bytes(b"weights")
+    (backbone / "config.json").write_text("{}", encoding="utf-8")
+    metadata = tmp_path / "metadata.json"
+    metadata.write_text(json.dumps(_trocar_metadata()), encoding="utf-8")
+
+    receipt = trocar_b8_model_view.materialize_trocar_model_view(
+        model, backbone, metadata, output
+    )
+
+    processor = json.loads((output / "processor_config.json").read_text())
+    kwargs = processor["processor_kwargs"]
+    modality = kwargs["modality_configs"]["new_embodiment"]
+    assert modality["video"]["modality_keys"] == [
+        "left_wrist_view",
+        "right_wrist_view",
+        "room_view",
+    ]
+    assert modality["action"]["delta_indices"] == list(range(16))
+    assert kwargs["embodiment_id_mapping"] == {"new_embodiment": 10}
+    assert kwargs["use_albumentations"] is False
+    assert receipt["processor_contract"]["public_state_action_dim"] == 28
+
+
+def test_trocar_fixture_rows_and_cameras_are_distinct() -> None:
+    observation = trocar_b8_fixture.raw_observation(
+        _trocar_metadata(), "assemble trocar from tray"
+    )
+    manifest = trocar_b8_fixture._raw_manifest(observation)
+
+    assert manifest["camera_order"] == [
+        "left_wrist_view",
+        "right_wrist_view",
+        "room_view",
+    ]
+    hashes = [
+        digest
+        for camera in manifest["cameras"].values()
+        for digest in camera["row_sha256"]
+    ]
+    assert len(set(hashes)) == 24
+    assert all(value.shape == (8, 1, 7) for value in observation["state"].values())
 
 
 def _site(tmp_path: Path) -> Path:

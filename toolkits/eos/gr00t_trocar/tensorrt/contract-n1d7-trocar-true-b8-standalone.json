@@ -1,0 +1,155 @@
+{
+  "schema": "rlinf.gr00t-n1d7-trocar-true-b8-standalone.v1",
+  "source": {
+    "rlinf_parent": "1c5ca090f83c3bf02d5c3584d8f7d14341302631",
+    "isaac_gr00t": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
+    "model_repository": "nvidia/GR00T-N1.7-3B",
+    "model_revision": "2fc962b973bccdd5d8ce4f67cc63b264d6886495",
+    "backbone_repository": "nvidia/Cosmos-Reason2-2B",
+    "backbone_revision": "9ce19a195e423419c349abfc86fd07178b230561"
+  },
+  "implementation": {
+    "owner": "rlinf",
+    "language": "python",
+    "online_dependencies": [
+      "tensorrt_python",
+      "pytorch"
+    ],
+    "forbidden_dependencies": [
+      "praxis_runtime",
+      "poiesis_runtime",
+      "rust_executor",
+      "aoti_executor"
+    ]
+  },
+  "processor": {
+    "embodiment": "new_embodiment",
+    "embodiment_projector_index": 10,
+    "camera_order": [
+      "left_wrist_view",
+      "right_wrist_view",
+      "room_view"
+    ],
+    "camera_delta_indices": [
+      0
+    ],
+    "state_action_order": [
+      "left_arm",
+      "right_arm",
+      "left_hand",
+      "right_hand"
+    ],
+    "language_key": "annotation.human.action.task_description",
+    "action_delta_indices": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "use_percentiles": false,
+    "use_mean_std": false,
+    "clip_outliers": true,
+    "use_albumentations": false,
+    "use_relative_action": false,
+    "formalize_language": true,
+    "state_dropout_prob": 0.0
+  },
+  "fixture": {
+    "batch_size": 8,
+    "seed": 47,
+    "prompt": "assemble trocar from tray",
+    "camera_height": 224,
+    "camera_width": 224,
+    "raw_patches_per_row": 768,
+    "merged_visual_tokens_per_row": 192,
+    "pixel_values_shape": [
+      6144,
+      1536
+    ],
+    "image_grid_thw_shape": [
+      24,
+      3
+    ],
+    "state_shape": [
+      8,
+      1,
+      132
+    ],
+    "generated_action_shape": [
+      8,
+      40,
+      132
+    ],
+    "public_action_shape": [
+      8,
+      16,
+      28
+    ],
+    "distinct_camera_and_row_hashes": true,
+    "b1x8_allowed": false,
+    "b_squared_capture_allowed": false
+  },
+  "hybrid": {
+    "cut": "vit_llm_only_pre_final_qwen_hidden",
+    "tensorrt_engines": [
+      "vit.engine",
+      "llm_bf16.engine"
+    ],
+    "pytorch_components": [
+      "vlln",
+      "vl_self_attention",
+      "state_encoder",
+      "action_encoder",
+      "dit",
+      "action_decoder",
+      "value_head"
+    ],
+    "apply_final_llm_norm": false,
+    "persistent_engine_context_buffers": true,
+    "gpu_only_handoff": true,
+    "silent_eager_fallback": false,
+    "feature_reuse_enabled": false
+  },
+  "numeric_gates": {
+    "all_tensors_finite": true,
+    "vit_cosine_min": 0.997,
+    "pre_final_hidden_cosine_min": 0.9995,
+    "public_action_cosine_min": 0.999,
+    "public_action_mean_abs_max": 0.005,
+    "public_action_max_abs_max": 0.05,
+    "fixed_noise_repeat_bitwise": true,
+    "value_and_logprob_threshold_policy": "freeze_from_eager_repeat_floor_before_first_hybrid_result"
+  },
+  "statistics": {
+    "component_warmup": 5,
+    "component_measured": 20,
+    "whole_call_warmup": 10,
+    "whole_call_measured": 30,
+    "reported": [
+      "raw_samples",
+      "p50",
+      "p95",
+      "mean",
+      "sample_std",
+      "cv"
+    ]
+  },
+  "artifact": {
+    "attempt_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W80",
+    "cache_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/artifacts/W80/tensorrt",
+    "qualification_failure": "startup_reject",
+    "git_tracks_large_artifacts": false
+  }
+}
