@@ -1270,17 +1270,23 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         rollout_backbone_output = None
         if getattr(self, "capture_rollout_backbone_output", False):
             # The action head rewrites backbone_features, so retain the exact
-            # frozen-backbone outputs before entering it.
+            # frozen-backbone outputs before entering it. Persistent executors
+            # also need independent storage because later calls reuse buffers.
+            backend = getattr(self, "_tensorrt_backbone", None)
+            clone_for_retention = bool(getattr(backend, "reuses_output_buffers", False))
+
+            def retain(value: torch.Tensor) -> torch.Tensor:
+                value = value.detach()
+                return value.clone() if clone_for_retention else value
+
             rollout_backbone_output = {
-                ROLLOUT_BACKBONE_FEATURE_KEY: backbone_outputs[
-                    "backbone_features"
-                ].detach(),
-                ROLLOUT_BACKBONE_MASK_KEY: backbone_outputs[
-                    "backbone_attention_mask"
-                ].detach(),
-                ROLLOUT_BACKBONE_IMAGE_MASK_KEY: backbone_outputs[
-                    "image_mask"
-                ].detach(),
+                ROLLOUT_BACKBONE_FEATURE_KEY: retain(
+                    backbone_outputs["backbone_features"]
+                ),
+                ROLLOUT_BACKBONE_MASK_KEY: retain(
+                    backbone_outputs["backbone_attention_mask"]
+                ),
+                ROLLOUT_BACKBONE_IMAGE_MASK_KEY: retain(backbone_outputs["image_mask"]),
             }
         action_head_outputs, rlinf_outputs = self.action_head.get_rl_action(
             backbone_outputs, action_inputs, mode=mode

@@ -201,6 +201,67 @@ def test_n1d7_rollout_captures_all_raw_backbone_outputs():
     torch.testing.assert_close(captured[ROLLOUT_BACKBONE_IMAGE_MASK_KEY], image_mask)
 
 
+def test_n1d7_rollout_snapshots_reused_backend_outputs():
+    pytest.importorskip("gr00t")
+    from transformers.feature_extraction_utils import BatchFeature
+
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.gr00t_action_model import (
+        GR00T_N1_7_ForRLActionPrediction,
+    )
+    from rlinf.utils.backbone_cache import ROLLOUT_BACKBONE_FEATURE_KEY
+
+    persistent_features = torch.arange(8, dtype=torch.float32).reshape(2, 2, 2)
+
+    class FakeBackend:
+        reuses_output_buffers = True
+
+    class FakeActionHead:
+        @staticmethod
+        def get_rl_action(backbone_outputs, action_inputs, mode):
+            del backbone_outputs, action_inputs, mode
+            return {}, {
+                "actions": torch.zeros(2, 1, 2),
+                "chains": torch.zeros(2, 2, 1, 2),
+                "denoise_inds": torch.zeros(2, 1, dtype=torch.int64),
+                "prev_logprobs": torch.zeros(2, 1, 1, 2),
+                "prev_values": torch.zeros(2, 1),
+            }
+
+    class FakePolicy:
+        capture_rollout_backbone_output = True
+        action_head = FakeActionHead()
+        _tensorrt_backbone = FakeBackend()
+        _finalize_rollout_forward_inputs = (
+            GR00T_N1_7_ForRLActionPrediction._finalize_rollout_forward_inputs
+        )
+
+        @staticmethod
+        def prepare_input(normalized_input):
+            del normalized_input
+            return BatchFeature(data={}), BatchFeature(data={})
+
+        @staticmethod
+        def _forward_backbone(backbone_inputs):
+            del backbone_inputs
+            return BatchFeature(
+                data={
+                    "backbone_features": persistent_features,
+                    "backbone_attention_mask": torch.ones(2, 2, dtype=torch.bool),
+                    "image_mask": torch.zeros(2, 2, dtype=torch.bool),
+                }
+            )
+
+    expected = persistent_features.clone()
+    _, result = GR00T_N1_7_ForRLActionPrediction._get_rl_action(
+        FakePolicy(), _forward_inputs()
+    )
+    captured = result["forward_inputs"][ROLLOUT_BACKBONE_FEATURE_KEY]
+    persistent_features.add_(100)
+
+    torch.testing.assert_close(captured, expected)
+    assert captured.data_ptr() != persistent_features.data_ptr()
+
+
 def test_n1d7_forward_backbone_prefers_installed_tensorrt_backend():
     pytest.importorskip("gr00t")
     from transformers.feature_extraction_utils import BatchFeature

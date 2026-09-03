@@ -154,6 +154,8 @@ def _validate_runtime(config: Mapping[str, Any]) -> dict[str, Any]:
 class TensorRTFrozenBackbone:
     """Own a qualified two-engine backbone and its live CUDA resources."""
 
+    reuses_output_buffers = True
+
     def __init__(self, backbone: torch.nn.Module, config: Mapping[str, Any]):
         self.backbone = backbone
         self.config = dict(config)
