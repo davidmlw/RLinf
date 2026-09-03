@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import sys
 import traceback
 from pathlib import Path
@@ -47,8 +48,9 @@ def _binding_table(path: Path) -> list[dict[str, Any]]:
     for index in range(engine.num_io_tensors):
         name = engine.get_tensor_name(index)
         shape = list(engine.get_tensor_shape(name))
+        mode = str(engine.get_tensor_mode(name)).split(".")[-1].lower()
         profile = None
-        if any(dimension < 0 for dimension in shape):
+        if mode == "input" and any(dimension < 0 for dimension in shape):
             minimum, optimum, maximum = engine.get_tensor_profile_shape(name, 0)
             profile = {
                 "min": list(minimum),
@@ -59,7 +61,7 @@ def _binding_table(path: Path) -> list[dict[str, Any]]:
             {
                 "index": index,
                 "name": name,
-                "mode": str(engine.get_tensor_mode(name)),
+                "mode": mode,
                 "dtype": str(engine.get_tensor_dtype(name)),
                 "shape": shape,
                 "profile": profile,
@@ -70,14 +72,14 @@ def _binding_table(path: Path) -> list[dict[str, Any]]:
 
 def _assert_static_b8(bindings: dict[str, list[dict[str, Any]]]) -> None:
     vit_inputs = {
-        item["name"]: item for item in bindings["vit.engine"] if "INPUT" in item["mode"]
+        item["name"]: item for item in bindings["vit.engine"] if item["mode"] == "input"
     }
     if vit_inputs.get("pixel_values", {}).get("shape") != [6144, 1536]:
         raise RuntimeError(f"ViT is not true static B8: {vit_inputs}")
     llm_inputs = {
         item["name"]: item
         for item in bindings["llm_bf16.engine"]
-        if "INPUT" in item["mode"]
+        if item["mode"] == "input"
     }
     expected_static = {
         "inputs_embeds": [8, -1, 2048],
@@ -106,32 +108,35 @@ def _assert_static_b8(bindings: dict[str, list[dict[str, Any]]]) -> None:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     onnx = args.onnx.resolve(strict=True)
     output = args.output.resolve()
-    if output.exists():
+    if output.exists() and not args.reuse_existing:
         raise RuntimeError(f"output already exists: {output}")
-    output.mkdir(parents=True)
+    output.mkdir(parents=True, exist_ok=args.reuse_existing)
     actual_onnx = {path.name for path in onnx.glob("*.onnx")}
     if actual_onnx != {"vit_fp32.onnx", "llm_bf16.onnx"}:
         raise RuntimeError(f"unexpected ONNX set: {actual_onnx}")
 
     from build_tensorrt_engine import build_full_pipeline  # noqa: PLC0415
 
-    build_full_pipeline(
-        onnx_dir=str(onnx),
-        engine_dir=str(output),
-        precision="bf16",
-        workspace_mb=args.workspace,
-        only=frozenset({"ViT", "LLM"}),
-    )
+    if not args.reuse_existing:
+        build_full_pipeline(
+            onnx_dir=str(onnx),
+            engine_dir=str(output),
+            precision="bf16",
+            workspace_mb=args.workspace,
+            only=frozenset({"ViT", "LLM"}),
+        )
     engine_paths = sorted(output.glob("*.engine"))
     if {path.name for path in engine_paths} != EXPECTED_ENGINES:
         raise RuntimeError("build did not produce the exact two-engine bundle")
     bindings = {path.name: _binding_table(path) for path in engine_paths}
     _assert_static_b8(bindings)
     metadata = onnx / "export_metadata.json"
+    shutil.copyfile(metadata, output / "export_metadata.json")
     receipt = {
         "schema": "rlinf.gr00t-n1d7-trocar-true-b8-engines.v1",
         "status": "passed",
         "workspace_mib": args.workspace,
+        "reused_existing_plans": args.reuse_existing,
         "export_metadata_sha256": _sha256(metadata),
         "engines": {
             path.name: {
@@ -156,6 +161,7 @@ def main() -> int:
     parser.add_argument("--onnx", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workspace", type=int, default=8192)
+    parser.add_argument("--reuse-existing", action="store_true")
     args = parser.parse_args()
     try:
         receipt = run(args)

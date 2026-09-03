@@ -396,7 +396,7 @@ def _true_b8_bindings() -> dict:
         "vit.engine": [
             {
                 "name": "pixel_values",
-                "mode": "TensorIOMode.INPUT",
+                "mode": "input",
                 "shape": [6144, 1536],
                 "profile": None,
             }
@@ -404,7 +404,7 @@ def _true_b8_bindings() -> dict:
         "llm_bf16.engine": [
             {
                 "name": name,
-                "mode": "TensorIOMode.INPUT",
+                "mode": "input",
                 "shape": shape,
                 "profile": (
                     {"min": [1], "opt": [208], "max": [416]} if -1 in shape else None
