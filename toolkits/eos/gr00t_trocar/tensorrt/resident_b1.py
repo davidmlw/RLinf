@@ -215,6 +215,7 @@ def _load_api(source: Path) -> dict[str, Any]:
         LeRobotEpisodeLoader,
         benchmark_components,
         extract_step_data,
+        prepare_model_inputs,
         set_seed,
     )
     from trt_model_forward import (  # noqa: PLC0415
@@ -229,6 +230,7 @@ def _load_api(source: Path) -> dict[str, Any]:
         "benchmark_components": benchmark_components,
         "close_tensorrt_engines": close_tensorrt_engines,
         "extract_step_data": extract_step_data,
+        "prepare_model_inputs": prepare_model_inputs,
         "set_seed": set_seed,
         "setup_tensorrt_engines": setup_tensorrt_engines,
     }

@@ -34,6 +34,7 @@ RESULT_SCHEMA = "rlinf.eos.gr00t-tensorrt-result.v1"
 GIT_OID_RE = re.compile(r"[0-9a-f]{40}")
 HELPERS = (
     "builder_probe.py",
+    "fixture_b1.py",
     "libero-b1-lfs.json",
     "prepare_builder.py",
     "resident_b1.py",
@@ -305,14 +306,16 @@ def _qualified_oracle(path: Path, output_root: Path) -> Path:
     return oracle
 
 
-def _resident_sbatch(site: dict[str, Any], oracle: Path) -> list[str]:
+def _resident_sbatch(
+    site: dict[str, Any], oracle: Path, fixture_only: bool = False
+) -> list[str]:
     slurm = site["slurm"]
     experiment = site["experiment"]
     resolved = site["_resolved"]
     argv = [
         "sbatch",
         "--parsable",
-        f"--job-name={experiment['name']}-resident-r1",
+        f"--job-name={experiment['name']}-{'fixture' if fixture_only else 'resident-r1'}",
         f"--account={slurm['account']}",
         f"--partition={slurm['partition']}",
         f"--constraint={slurm['constraint']}",
@@ -336,6 +339,8 @@ def _resident_sbatch(site: dict[str, Any], oracle: Path) -> list[str]:
             str(oracle),
         ]
     )
+    if fixture_only:
+        argv.append("--fixture-only")
     return argv
 
 
@@ -344,7 +349,7 @@ def _resident_submit(args: argparse.Namespace) -> int:
     oracle = _qualified_oracle(
         Path(args.oracle_attempt), Path(site["_resolved"]["output_root"])
     )
-    command = _resident_sbatch(site, oracle)
+    command = _resident_sbatch(site, oracle, args.fixture_only)
     if args.dry_run:
         print(json.dumps({"command": command, "oracle_attempt": str(oracle)}, indent=2))
         return 0
@@ -358,12 +363,13 @@ def _resident_submit(args: argparse.Namespace) -> int:
         "job_id": job_id,
         "command": command,
         "oracle_attempt": str(oracle),
+        "fixture_only": args.fixture_only,
         "site": site["_resolved"],
     }
     _write_new(
         Path(site["_resolved"]["output_root"])
         / "submissions"
-        / f"{job_id}-resident.json",
+        / f"{job_id}-{'fixture' if args.fixture_only else 'resident'}.json",
         receipt,
     )
     print(json.dumps(receipt, indent=2, sort_keys=True))
@@ -439,9 +445,10 @@ def _resident_allocation_run(args: argparse.Namespace) -> int:
     node = subprocess.check_output(
         ["scontrol", "show", "hostnames", node_list], text=True
     ).splitlines()[0]
+    attempt_kind = "fixture" if args.fixture_only else "resident-r1"
     attempt = (
         Path(site["_resolved"]["output_root"])
-        / f"{site['experiment']['name']}-resident-r1-{job_id}"
+        / f"{site['experiment']['name']}-{attempt_kind}-{job_id}"
     )
     attempt.mkdir(mode=0o700)
     (attempt / "logs").mkdir()
@@ -476,6 +483,8 @@ def _resident_allocation_run(args: argparse.Namespace) -> int:
         "--oracle-attempt",
         str(oracle),
     ]
+    if args.fixture_only:
+        command.append("--fixture-only")
     _write_new(attempt / "srun-command.json", command)
     with (
         (attempt / "logs/srun.out").open("w", encoding="utf-8") as stdout,
@@ -710,9 +719,11 @@ def _resident_run_agent(args: argparse.Namespace) -> int:
             "LD_LIBRARY_PATH": os.pathsep.join(library_paths),
         }
     )
+    program = "fixture_b1.py" if args.fixture_only else "resident_b1.py"
+    output_name = "fixture.json" if args.fixture_only else "resident.json"
     command = [
         str(builder_root / "bin/python"),
-        str(tools / "resident_b1.py"),
+        str(tools / program),
         "--source",
         site["inputs"]["isaac_gr00t_root"],
         "--model",
@@ -722,13 +733,13 @@ def _resident_run_agent(args: argparse.Namespace) -> int:
         "--engines",
         str(oracle / "official/engines"),
         "--output",
-        str(attempt / "resident.json"),
+        str(attempt / output_name),
     ]
-    _write_new(attempt / "resident-command.json", command)
+    _write_new(attempt / f"{output_name.removesuffix('.json')}-command.json", command)
     _logged_run(
         command,
-        attempt / "logs/resident.out",
-        attempt / "logs/resident.err",
+        attempt / f"logs/{output_name.removesuffix('.json')}.out",
+        attempt / f"logs/{output_name.removesuffix('.json')}.err",
         environment,
     )
     return 0
@@ -750,11 +761,13 @@ def main() -> int:
     resident_submit.add_argument("--oracle-attempt", required=True)
     resident_submit.add_argument("--dry-run", action="store_true")
     resident_submit.add_argument("--skip-image-hash", action="store_true")
+    resident_submit.add_argument("--fixture-only", action="store_true")
     allocation = subparsers.add_parser("allocation-run")
     allocation.add_argument("--site", required=True)
     resident_allocation = subparsers.add_parser("resident-allocation-run")
     resident_allocation.add_argument("--site", required=True)
     resident_allocation.add_argument("--oracle-attempt", required=True)
+    resident_allocation.add_argument("--fixture-only", action="store_true")
     agent = subparsers.add_parser("run-agent")
     agent.add_argument("--site", required=True)
     agent.add_argument("--attempt", required=True)
@@ -762,6 +775,7 @@ def main() -> int:
     resident_agent.add_argument("--site", required=True)
     resident_agent.add_argument("--attempt", required=True)
     resident_agent.add_argument("--oracle-attempt", required=True)
+    resident_agent.add_argument("--fixture-only", action="store_true")
     args = parser.parse_args()
     try:
         return {

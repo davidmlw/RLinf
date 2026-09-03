@@ -29,6 +29,7 @@ sys.path.insert(0, str(TOOLS))
 
 from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
     builder_probe,
+    fixture_b1,
     model_view,
     official_b1,
     prepare_builder,
@@ -166,6 +167,13 @@ def test_resident_statistics_retain_raw_distribution() -> None:
     assert statistics["count"] == 4
     assert statistics["p50_ms"] == 2.5
     assert statistics["p95_ms"] == pytest.approx(3.85)
+
+
+def test_fixture_manifest_aggregate_hash_is_order_independent() -> None:
+    first = {"input": {"shape": [1, 2], "dtype": "torch.int64"}, "seed": 7}
+    reordered = {"seed": 7, "input": {"dtype": "torch.int64", "shape": [1, 2]}}
+
+    assert fixture_b1._aggregate_hash(first) == fixture_b1._aggregate_hash(reordered)
 
 
 def test_promotion_rejects_failed_resident_action_gate(tmp_path: Path) -> None:
@@ -423,6 +431,11 @@ def test_resident_submit_requires_qualified_exact_engine_bundle(tmp_path: Path) 
     assert resolved == oracle.resolve()
     assert "resident-allocation-run" in command
     assert str(resolved) in command
+    fixture_command = start_official_b1._resident_sbatch(
+        site, resolved, fixture_only=True
+    )
+    assert "--fixture-only" in fixture_command
+    assert any("-fixture" in value for value in fixture_command)
 
     qualification = json.loads((oracle / "qualification.json").read_text())
     qualification["engines"].pop("vit.engine")
