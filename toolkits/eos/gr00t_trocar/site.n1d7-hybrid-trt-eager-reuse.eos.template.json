@@ -1,0 +1,162 @@
+{
+  "schema": "rlinf.eos.site.v3",
+  "slurm": {
+    "account": "coreai_devtech_all",
+    "partition": "batch",
+    "constraint": "h100",
+    "nodes": 1,
+    "gpus_per_node": 8,
+    "cpus_per_task": 64,
+    "time_limit": "04:00:00",
+    "exclusive": true,
+    "signal_seconds": 600
+  },
+  "container": {
+    "oci_reference": "gitlab-master.nvidia.com:5005/liweim/image/rlinf-eos-system:cuda128-ubuntu2404-be095dc",
+    "registry_digest": "sha256:aab301569e09f60e143ddcb7749b2610fe522503edcdc8538efbb4a446b1a53f",
+    "image": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/images/rlinf-eos-system-cuda128-ubuntu2404-be095dc.sqsh",
+    "image_sha256": "64bbd7bda0f8d65d298073377a3e2331e91a75c49d459893ae5b3096410b022c",
+    "mounts": [
+      "/lustre:/lustre"
+    ],
+    "workdir": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf"
+  },
+  "source": {
+    "root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf",
+    "revision": "AUTO",
+    "base_revision": "0f9ea98c7a6d9e3ade24e8f4846c64d3b135dbcc",
+    "require_clean": true
+  },
+  "provenance": {
+    "git_checkouts": [
+      {
+        "name": "isaaclab",
+        "root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/IsaacLab",
+        "revision": "2e44ddb2e19536579140496023b5ccb060bc4152",
+        "require_clean": true
+      },
+      {
+        "name": "isaac-gr00t",
+        "root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T-N1.7",
+        "revision": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
+        "require_clean": true
+      }
+    ],
+    "files": [
+      {
+        "name": "gr00t-n1d7-model-manifest",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/model-manifest-n1d7.json",
+        "sha256": "0cab5969700e51ae6402f3aa63ba68950fbd7beed6a830965e6f2aa0d06b1469"
+      },
+      {
+        "name": "sanitized-trocar-tray-usd",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/usd/SurgicalTray001-w68-newton.usd",
+        "sha256": "3c4f15feadbf35244e56a964aeef638241f33b46ad71c079c5a44f287a0008ab"
+      },
+      {
+        "name": "trocar-tray-box-base-color-texture",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/usd/texture/T_Box001_BC001.png",
+        "sha256": "43ee84268e161a10ece13fff539388e5fa807f6fffb3e0314366867336c7d092"
+      },
+      {
+        "name": "trocar-tray-box-normal-texture",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/usd/texture/T_Box001_N001.png",
+        "sha256": "742bc21bf7b4fcaec7a7670466a6aa91e6d2910cd2b2449fd1155b958249824e"
+      },
+      {
+        "name": "trocar-tray-box-orm-texture",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/usd/texture/T_Box001_ORM001.png",
+        "sha256": "688701d0450d5f913134f978793d0c3e4423cc7c81d0397aec295a19dfe18bd3"
+      },
+      {
+        "name": "flash-attn-h100-wheel",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl",
+        "sha256": "79e0732cb5d988a96777af7ec63a5af91b557ce8fd1593d6d851f4dd9c42411e"
+      },
+      {
+        "name": "torchcodec-cpu-wheel",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl",
+        "sha256": "6c26e90e7aa982302644d0af8cb706318682bb390f48a80ecbfeab03499acd04"
+      },
+      {
+        "name": "w68-healthcare-assets",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/assets/w68-healthcare-assets.tar",
+        "sha256": "9289b4e37b64a4fbe86f1a030393179dbcb2215f283a5411ca46529f5fe8bf13"
+      },
+      {
+        "name": "w81-tensorrt-overlay-manifest",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/overlays/tensorrt-10.15.1.29-py312/rlinf-tensorrt-overlay.json",
+        "sha256": "dd7d454cf730fa98dfc11446d7cc1e17c66a73ed857c82c35c9a20fd74917e24"
+      },
+      {
+        "name": "w80-true-b8-engine-receipt",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W80/g2-export-build-r1-5967165/engines/rlinf-engine-receipt.json",
+        "sha256": "758f3751b63f2399c4824b20b22c4508d463eb6144db5d1393ac23f0a069a0cd"
+      },
+      {
+        "name": "w80-true-b8-export-metadata",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W80/g2-export-build-r1-5967165/engines/export_metadata.json",
+        "sha256": "0efb8c5da0b943a43867e94949c07a79a653840458d8424e18bda62b8dfdc34b"
+      },
+      {
+        "name": "w80-true-b8-vit-plan",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W80/g2-export-build-r1-5967165/engines/vit.engine",
+        "sha256": "9adc5c00192a09672652971102fc2a10aa2e68af583678ef985525fe412b65d7"
+      },
+      {
+        "name": "w80-true-b8-llm-plan",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W80/g2-export-build-r1-5967165/engines/llm_bf16.engine",
+        "sha256": "5f553de2cc1337fa4abd3b02ccbb2bc6c7062cae24b45f9b2a32752226d03372"
+      },
+      {
+        "name": "git-lfs-client",
+        "path": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/bin/git-lfs",
+        "sha256": "0befea61a3e131a0c150f2f54179c83e7fbefc32a9d5e028dfd31864db42c4f1"
+      }
+    ]
+  },
+  "runtime": {
+    "python": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-n1d7-newton-py312-cu128-v1/bin/python",
+    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-n1d7-newton-py312-cu128-v1",
+    "runtime_spec": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/runtime-spec-n1d7.json",
+    "runtime_spec_sha256": "AUTO",
+    "prepare_script": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/prepare_runtime.sh",
+    "prepare_script_sha256": "AUTO",
+    "uv_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/cache/uv",
+    "git_lfs_bin": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/bin/git-lfs",
+    "git_lfs_bin_sha256": "0befea61a3e131a0c150f2f54179c83e7fbefc32a9d5e028dfd31864db42c4f1",
+    "flash_attn_wheel": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl",
+    "flash_attn_wheel_sha256": "79e0732cb5d988a96777af7ec63a5af91b557ce8fd1593d6d851f4dd9c42411e",
+    "torchcodec_wheel": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl",
+    "torchcodec_wheel_sha256": "6c26e90e7aa982302644d0af8cb706318682bb390f48a80ecbfeab03499acd04",
+    "healthcare_assets_archive": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/assets/w68-healthcare-assets.tar",
+    "healthcare_assets_archive_sha256": "9289b4e37b64a4fbe86f1a030393179dbcb2215f283a5411ca46529f5fe8bf13",
+    "isaaclab_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/IsaacLab",
+    "gr00t_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T-N1.7",
+    "model_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/GR00T-N1.7-3B",
+    "backbone_model_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Cosmos-Reason2-2B",
+    "trocar_metadata": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/models/Assemble_Trocar/experiment_cfg/metadata.json",
+    "hf_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/cache/huggingface",
+    "task_overlay_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar",
+    "sanitized_tray_usd": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/usd/SurgicalTray001-w68-newton.usd",
+    "python_deps": [
+      "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/overlays/tensorrt-10.15.1.29-py312"
+    ]
+  },
+  "experiment": {
+    "name": "W81-hybrid-trt-eager-reuse",
+    "config": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/config-n1d7-hybrid-trt-eager-reuse-chunk16.yaml",
+    "config_sha256": "AUTO",
+    "runner": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/run_n1d7_hybrid.sh",
+    "runner_sha256": "AUTO",
+    "output_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W81",
+    "max_steps": 100000,
+    "val_check_interval": 5,
+    "save_interval": 5,
+    "newton_num_substeps": 2,
+    "resume_dir": null,
+    "debug_nonfinite": false,
+    "workload_seconds": 13200,
+    "shutdown_grace_seconds": 600
+  }
+}

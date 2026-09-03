@@ -82,6 +82,10 @@
     },
     "control": "pytorch_backbone_plus_exact_rollout_feature_reuse",
     "candidate": "tensorrt_backbone_plus_exact_rollout_feature_reuse",
+    "site_templates": {
+      "control": "site.n1d7-hybrid-eager-reuse.eos.template.json",
+      "candidate": "site.n1d7-hybrid-trt-eager-reuse.eos.template.json"
+    },
     "only_allowed_config_differences": [
       "runner.logger.experiment_name",
       "rollout.model.tensorrt_backbone.enabled"

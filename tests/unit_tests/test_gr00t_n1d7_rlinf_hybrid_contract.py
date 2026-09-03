@@ -108,6 +108,19 @@ def test_w81_compiled_dit_reuse_is_an_isolated_diagnostic() -> None:
     )
 
 
+def test_w81_feature_reuse_sites_reference_the_matched_configs() -> None:
+    matched = _contract()["matched_feature_reuse_ab"]
+    expected = {
+        "control": REUSE_CONFIGS["eager_reuse"],
+        "candidate": REUSE_CONFIGS["trt_eager_reuse"],
+    }
+
+    for arm, expected_config in expected.items():
+        site_path = TOOLKIT / matched["site_templates"][arm]
+        site = json.loads(site_path.read_text(encoding="utf-8"))
+        assert Path(site["experiment"]["config"]).name == expected_config.name
+
+
 def test_w81_configs_freeze_common_lifecycle_and_workload() -> None:
     contract = _contract()
     expected_arms = contract["matched_ab"]["arms"]
