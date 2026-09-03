@@ -28,8 +28,10 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(TOOLS))
 
 from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
+    build_true_b8,
     builder_probe,
     correct_b1,
+    export_true_b8,
     fixture_b1,
     model_view,
     official_b1,
@@ -378,6 +380,56 @@ def test_trocar_fixture_rows_and_cameras_are_distinct() -> None:
     ]
     assert len(set(hashes)) == 24
     assert all(value.shape == (8, 1, 7) for value in observation["state"].values())
+
+
+def _true_b8_bindings() -> dict:
+    llm_shapes = {
+        "inputs_embeds": [8, -1, 2048],
+        "attention_mask": [8, -1],
+        "position_ids": [3, 8, -1],
+        "visual_pos_masks": [8, -1],
+        "deepstack_0": [1536, 2048],
+        "deepstack_1": [1536, 2048],
+        "deepstack_2": [1536, 2048],
+    }
+    return {
+        "vit.engine": [
+            {
+                "name": "pixel_values",
+                "mode": "TensorIOMode.INPUT",
+                "shape": [6144, 1536],
+                "profile": None,
+            }
+        ],
+        "llm_bf16.engine": [
+            {
+                "name": name,
+                "mode": "TensorIOMode.INPUT",
+                "shape": shape,
+                "profile": (
+                    {"min": [1], "opt": [208], "max": [416]} if -1 in shape else None
+                ),
+            }
+            for name, shape in llm_shapes.items()
+        ],
+    }
+
+
+def test_true_b8_engine_contract_rejects_b1() -> None:
+    bindings = _true_b8_bindings()
+    build_true_b8._assert_static_b8(bindings)
+    bindings["vit.engine"][0]["shape"] = [768, 1536]
+
+    with pytest.raises(RuntimeError, match="not true static B8"):
+        build_true_b8._assert_static_b8(bindings)
+
+
+def test_true_b8_export_constants_match_fixture_contract() -> None:
+    assert export_true_b8.BATCH_SIZE == 8
+    assert export_true_b8.CAMERA_COUNT == 3
+    assert export_true_b8.PATCHES_PER_ROW == 768
+    assert export_true_b8.VISUAL_TOKENS_PER_ROW == 192
+    assert export_true_b8.EXPECTED_SEQUENCE_LENGTH == 208
 
 
 def _site(tmp_path: Path) -> Path:
