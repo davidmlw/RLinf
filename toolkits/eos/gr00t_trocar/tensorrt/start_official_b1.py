@@ -348,7 +348,14 @@ def _ensure_ffmpeg(attempt: Path) -> None:
     environment["DEBIAN_FRONTEND"] = "noninteractive"
     commands = (
         ["apt-get", "update"],
-        ["apt-get", "install", "-y", "--no-install-recommends", "ffmpeg"],
+        [
+            "apt-get",
+            "install",
+            "-y",
+            "--no-install-recommends",
+            "ffmpeg",
+            "libpython3.12",
+        ],
     )
     with (
         (attempt / "logs/ffmpeg-install.out").open("w", encoding="utf-8") as stdout,
@@ -378,6 +385,7 @@ def _ensure_ffmpeg(attempt: Path) -> None:
             "libavutil58",
             "libswresample4",
             "libswscale7",
+            "libpython3.12",
         ],
         text=True,
     ).splitlines()

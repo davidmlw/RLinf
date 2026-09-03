@@ -42,7 +42,7 @@ python toolkits/eos/gr00t_trocar/tensorrt/start_official_b1.py submit \
   --site /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W79/official-b1-site.json
 ```
 
-The allocation creates `W79-official-b1-r1-<job-id>/` under the attempt root. A
+The allocation creates `W79-official-b1-rN-<job-id>/` under the attempt root. A
 passing attempt contains the builder/video probe, official logs, all seven ONNX
 graphs and engines, and `qualification.json` with package, model, numerical,
 binding and artifact-hash evidence. Failed output stays attempt-local and never

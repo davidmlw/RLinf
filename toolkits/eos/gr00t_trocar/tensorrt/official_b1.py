@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from builder_probe import runtime_library_paths
 from model_view import materialize_local_model_view
 
 EXPECTED_ENGINES = (
@@ -238,12 +239,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
+    library_paths = [
+        str(path) for path in runtime_library_paths(builder_python.parent.parent)
+    ]
+    if environment.get("LD_LIBRARY_PATH"):
+        library_paths.append(environment["LD_LIBRARY_PATH"])
     environment.update(
         {
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONNOUSERSITE": "1",
+            "LD_LIBRARY_PATH": os.pathsep.join(library_paths),
         }
     )
     with (
@@ -265,6 +272,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             name: environment[name]
             for name in (
                 "HF_HUB_OFFLINE",
+                "LD_LIBRARY_PATH",
                 "PYTHONDONTWRITEBYTECODE",
                 "PYTHONNOUSERSITE",
                 "TRANSFORMERS_OFFLINE",

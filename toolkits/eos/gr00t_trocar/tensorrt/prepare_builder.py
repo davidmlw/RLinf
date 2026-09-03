@@ -24,7 +24,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from builder_probe import EXPECTED_DISTRIBUTIONS
+from builder_probe import EXPECTED_DISTRIBUTIONS, runtime_library_paths
 
 
 def _sha256(path: Path) -> str:
@@ -35,11 +35,19 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _isolated_environment(environment: dict[str, str]) -> dict[str, str]:
+def _isolated_environment(
+    environment: dict[str, str], env_root: Path | None = None
+) -> dict[str, str]:
     isolated = dict(environment)
     isolated.pop("PYTHONPATH", None)
     isolated["PYTHONNOUSERSITE"] = "1"
     isolated["PIP_NO_CACHE_DIR"] = "1"
+    if env_root is not None:
+        inherited = isolated.get("LD_LIBRARY_PATH")
+        paths = [str(path) for path in runtime_library_paths(env_root)]
+        if inherited:
+            paths.append(inherited)
+        isolated["LD_LIBRARY_PATH"] = os.pathsep.join(paths)
     return isolated
 
 
@@ -61,7 +69,7 @@ def _run_probe(env_root: Path, source: Path, dataset: Path) -> dict[str, object]
     completed = subprocess.run(
         command,
         cwd=source,
-        env=_isolated_environment(dict(os.environ)),
+        env=_isolated_environment(dict(os.environ), env_root),
         check=False,
         capture_output=True,
         text=True,

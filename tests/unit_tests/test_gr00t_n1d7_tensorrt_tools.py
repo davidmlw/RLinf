@@ -15,6 +15,7 @@
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(TOOLS))
 
 from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
+    builder_probe,
     model_view,
     official_b1,
     prepare_builder,
@@ -94,6 +96,32 @@ def test_builder_python_preserves_virtualenv_symlink(tmp_path: Path) -> None:
     venv_python.symlink_to(target)
 
     assert official_b1._executable(venv_python) == venv_python
+
+
+def test_builder_runtime_library_paths_are_shared_by_probe_and_pipeline(
+    tmp_path: Path,
+) -> None:
+    env_root = tmp_path / "env"
+    site_packages = env_root / "lib/python3.12/site-packages"
+    expected = [site_packages / "torch/lib", site_packages / "torchcodec"]
+    for path in expected:
+        path.mkdir(parents=True)
+
+    assert builder_probe.runtime_library_paths(env_root) == expected
+    environment = prepare_builder._isolated_environment(
+        {"PYTHONPATH": "wrong-prefix", "LD_LIBRARY_PATH": "/system/lib"},
+        env_root,
+    )
+    assert "PYTHONPATH" not in environment
+    assert environment["LD_LIBRARY_PATH"].split(os.pathsep) == [
+        *(str(path) for path in expected),
+        "/system/lib",
+    ]
+
+
+def test_builder_runtime_library_paths_fail_closed(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="expected one builder site-packages"):
+        builder_probe.runtime_library_paths(tmp_path / "missing")
 
 
 def test_model_view_preserves_selector_suffix_and_hashes_weights(

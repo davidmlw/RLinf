@@ -43,6 +43,16 @@ EXPECTED_DISTRIBUTIONS = {
 }
 
 
+def runtime_library_paths(env_root: Path) -> list[Path]:
+    site_packages = list(env_root.glob("lib/python*/site-packages"))
+    if len(site_packages) != 1:
+        raise RuntimeError(f"expected one builder site-packages, found {site_packages}")
+    paths = [site_packages[0] / "torch/lib", site_packages[0] / "torchcodec"]
+    if any(not path.is_dir() for path in paths):
+        raise RuntimeError(f"builder runtime library directory is missing: {paths}")
+    return paths
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -172,6 +182,7 @@ def probe(env_root: Path, video: Path) -> dict[str, object]:
         "environment": {
             "PYTHONNOUSERSITE": os.environ.get("PYTHONNOUSERSITE"),
             "PYTHONPATH_present": "PYTHONPATH" in os.environ,
+            "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH"),
         },
         "packages": packages,
         "torchcodec": {
