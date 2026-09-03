@@ -30,6 +30,9 @@ CAMERA_ORDER = ("left_wrist_view", "right_wrist_view", "room_view")
 STATE_ACTION_ORDER = ("left_arm", "right_arm", "left_hand", "right_hand")
 LANGUAGE_KEY = "annotation.human.action.task_description"
 ACTION_DELTA_INDICES = tuple(range(16))
+TROCAR_GENERATED_FILES = frozenset(
+    {"config.json", "processor_config.json", "statistics.json", "embodiment_id.json"}
+)
 
 
 def _modality_config() -> dict[str, Any]:
@@ -82,6 +85,9 @@ def materialize_trocar_model_view(
     metadata_path = metadata_path.resolve(strict=True)
     metadata = model_view._read_object(metadata_path)
     statistics = _trocar_statistics(metadata)
+    model_root = model_root.resolve(strict=True)
+    all_statistics = model_view._read_object(model_root / "statistics.json")
+    embodiment_ids = model_view._read_object(model_root / "embodiment_id.json")
     receipt = model_view.materialize_local_model_view(
         model_root, backbone_root, output_root
     )
@@ -94,13 +100,11 @@ def materialize_trocar_model_view(
     if not isinstance(processor_kwargs, dict):
         raise ValueError("GR00T processor config omits processor_kwargs")
     modality_configs = processor_kwargs.get("modality_configs")
-    all_statistics = processor_kwargs.get("statistics")
     if not isinstance(modality_configs, dict):
         modality_configs = {}
-    if not isinstance(all_statistics, dict):
-        all_statistics = {}
     modality_configs[EMBODIMENT] = _modality_config()
     all_statistics[EMBODIMENT] = statistics
+    embodiment_ids[EMBODIMENT] = EMBODIMENT_PROJECTOR_INDEX
 
     config.update(
         {
@@ -115,7 +119,6 @@ def materialize_trocar_model_view(
             # AutoModel initialization still consults base embodiment entries.
             # Add Trocar without removing the checkpoint's existing modalities.
             "modality_configs": modality_configs,
-            "statistics": all_statistics,
             "use_percentiles": False,
             "image_crop_size": list(config["image_crop_size"]),
             "image_target_size": list(config["image_target_size"]),
@@ -131,13 +134,21 @@ def materialize_trocar_model_view(
             "apply_sincos_state_encoding": False,
             "use_albumentations": False,
             "use_relative_action": False,
-            "embodiment_id_mapping": {EMBODIMENT: EMBODIMENT_PROJECTOR_INDEX},
             "exclude_state": False,
             "state_dropout_prob": 0.0,
             "use_mean_std": False,
             "letter_box_transform": False,
         }
     )
+    # The official processor loader reads these dedicated files and overrides
+    # any same-named values in processor_config.json.
+    for name, value in (
+        ("statistics.json", all_statistics),
+        ("embodiment_id.json", embodiment_ids),
+    ):
+        path = output_root / name
+        path.unlink()
+        model_view._write_object(path, value)
     model_view._write_object(config_path, config)
     model_view._write_object(processor_path, processor)
 
@@ -162,8 +173,13 @@ def materialize_trocar_model_view(
             },
             "generated_hashes": {
                 name: model_view._sha256(output_root / name)
-                for name in sorted(model_view.GENERATED_FILES)
+                for name in sorted(TROCAR_GENERATED_FILES)
             },
+            "symlinked_entries": [
+                name
+                for name in receipt["symlinked_entries"]
+                if name not in TROCAR_GENERATED_FILES
+            ],
         }
     )
     model_view._write_object(output_root / "rlinf-model-view.json", receipt)

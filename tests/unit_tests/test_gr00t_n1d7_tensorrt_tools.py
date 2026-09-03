@@ -251,8 +251,24 @@ def test_model_view_preserves_selector_suffix_and_hashes_weights(
         json.dumps({"model_name": "nvidia/Cosmos-Reason2-2B"}), encoding="utf-8"
     )
     (model / "processor_config.json").write_text(
-        json.dumps({"processor_kwargs": {"model_name": "old"}}), encoding="utf-8"
+        json.dumps(
+            {
+                "processor_kwargs": {
+                    "model_name": "old",
+                    "modality_configs": {
+                        "base": {
+                            "video": {"delta_indices": [0], "modality_keys": ["image"]}
+                        }
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
     )
+    (model / "statistics.json").write_text(
+        json.dumps({"base": {"state": {}, "action": {}}}), encoding="utf-8"
+    )
+    (model / "embodiment_id.json").write_text(json.dumps({"base": 0}), encoding="utf-8")
     (model / "model.safetensors.index.json").write_text("{}", encoding="utf-8")
     (model / "model-00001-of-00001.safetensors").write_bytes(b"weights")
     (backbone / "config.json").write_text("{}", encoding="utf-8")
@@ -311,6 +327,10 @@ def test_trocar_model_view_matches_executed_w77_processor_order(
     (model / "processor_config.json").write_text(
         json.dumps({"processor_kwargs": {"model_name": "old"}}), encoding="utf-8"
     )
+    (model / "statistics.json").write_text(
+        json.dumps({"base": {"state": {}, "action": {}}}), encoding="utf-8"
+    )
+    (model / "embodiment_id.json").write_text(json.dumps({"base": 0}), encoding="utf-8")
     (model / "model.safetensors.index.json").write_text("{}", encoding="utf-8")
     (model / "model-00001-of-00001.safetensors").write_bytes(b"weights")
     (backbone / "config.json").write_text("{}", encoding="utf-8")
@@ -330,8 +350,13 @@ def test_trocar_model_view_matches_executed_w77_processor_order(
         "room_view",
     ]
     assert modality["action"]["delta_indices"] == list(range(16))
-    assert kwargs["embodiment_id_mapping"] == {"new_embodiment": 10}
     assert kwargs["use_albumentations"] is False
+    saved_statistics = json.loads((output / "statistics.json").read_text())
+    saved_ids = json.loads((output / "embodiment_id.json").read_text())
+    assert set(saved_statistics) == {"base", "new_embodiment"}
+    assert saved_ids == {"base": 0, "new_embodiment": 10}
+    assert not (output / "statistics.json").is_symlink()
+    assert not (output / "embodiment_id.json").is_symlink()
     assert receipt["processor_contract"]["public_state_action_dim"] == 28
 
 
