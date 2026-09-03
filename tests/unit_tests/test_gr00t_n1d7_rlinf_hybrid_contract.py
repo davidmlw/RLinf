@@ -97,6 +97,8 @@ def test_w81_compiled_dit_reuse_is_an_isolated_diagnostic() -> None:
         "compiled_dit_diagnostic"
     ]
 
+    assert diagnostic["status"] == "rejected_for_rlinf_ppo_candidate"
+    assert diagnostic["evidence"]["slurm_job_id"] == "5968817"
     assert _different_paths(eager_head, compiled_dit) == set(
         diagnostic["only_allowed_differences_from_trt_eager_reuse"]
     )

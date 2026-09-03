@@ -92,7 +92,11 @@
     ],
     "compiled_dit_diagnostic": {
       "config": "config-n1d7-hybrid-trt-compile-reuse-chunk16.yaml",
-      "status": "separate_unqualified_candidate",
+      "status": "rejected_for_rlinf_ppo_candidate",
+      "evidence": {
+        "slurm_job_id": "5968817",
+        "reason": "compiled Rollout DiT and eager Actor DiT fail same-revision PPO identity even with identical retained backbone features"
+      },
       "only_allowed_differences_from_trt_eager_reuse": [
         "runner.logger.experiment_name",
         "rollout.enable_torch_compile"
