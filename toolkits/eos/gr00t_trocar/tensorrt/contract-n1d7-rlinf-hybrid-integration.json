@@ -1,0 +1,121 @@
+{
+  "schema": "rlinf.gr00t-n1d7-rlinf-hybrid-integration.v1",
+  "implementation": {
+    "owner": "rlinf",
+    "language": "python",
+    "tensorrt_components": [
+      "vit.engine",
+      "llm_bf16.engine"
+    ],
+    "pytorch_components": [
+      "vl_self_attention",
+      "state_encoder",
+      "action_encoder",
+      "dit",
+      "action_decoder",
+      "value_head"
+    ],
+    "compiled_component": "action_head.model.forward",
+    "apply_final_llm_norm": false
+  },
+  "workload": {
+    "accelerators": "8xH100-SM90",
+    "global_envs": 64,
+    "rollout_lanes": 8,
+    "static_batch_per_lane": 8,
+    "action_chunks": 16,
+    "physical_actions_per_outer_step": 65536,
+    "policy_decisions_per_outer_step": 4096,
+    "global_batch": 2048,
+    "micro_batch": 128,
+    "ppo_epochs": 4,
+    "optimizer_updates": 8,
+    "logprob_type": "action_level",
+    "actor_lr": 0.00002
+  },
+  "matched_ab": {
+    "common": {
+      "rollout_backbone_feature_transport": null,
+      "skip_unused_lm_head": true,
+      "rollout_enable_offload": false,
+      "weight_sync_state_dict_prefixes": [
+        "action_head"
+      ],
+      "tensorrt_python_overlay_loaded": true
+    },
+    "arms": {
+      "eager": {
+        "tensorrt_backbone": false,
+        "compile_dit": false
+      },
+      "trt_eager": {
+        "tensorrt_backbone": true,
+        "compile_dit": false
+      },
+      "trt_compile": {
+        "tensorrt_backbone": true,
+        "compile_dit": true
+      }
+    },
+    "only_allowed_config_differences": [
+      "runner.logger.experiment_name",
+      "rollout.model.tensorrt_backbone.enabled",
+      "rollout.enable_torch_compile"
+    ]
+  },
+  "artifacts": {
+    "engine_receipt_sha256": "758f3751b63f2399c4824b20b22c4508d463eb6144db5d1393ac23f0a069a0cd",
+    "export_metadata_sha256": "0efb8c5da0b943a43867e94949c07a79a653840458d8424e18bda62b8dfdc34b",
+    "vit_engine_sha256": "9adc5c00192a09672652971102fc2a10aa2e68af583678ef985525fe412b65d7",
+    "llm_engine_sha256": "5f553de2cc1337fa4abd3b02ccbb2bc6c7062cae24b45f9b2a32752226d03372",
+    "runtime_overlay_manifest_sha256": "dd7d454cf730fa98dfc11446d7cc1e17c66a73ed857c82c35c9a20fd74917e24",
+    "tensorrt_version": "10.15.1.29",
+    "static_batch": 8,
+    "sequence_length": 208,
+    "silent_fallback": false
+  },
+  "numerical_gates": {
+    "final_action": {
+      "cosine_min": 0.999,
+      "mean_abs_max": 0.005,
+      "max_abs_max": 0.05,
+      "finite": true
+    },
+    "pre_update_same_revision": {
+      "ratio_mean_abs_from_one_max": 0.0001,
+      "ratio_max_abs_from_one_max": 0.001,
+      "kl_mean_abs_max": 0.0001,
+      "kl_max_abs_max": 0.001
+    },
+    "one_update_cross_arm": {
+      "value_mean_abs_max": 0.02,
+      "loss_abs_max": 0.01,
+      "gradient_cosine_min": 0.999,
+      "gradient_relative_l2_max": 0.02,
+      "parameter_delta_cosine_min": 0.999,
+      "parameter_delta_relative_l2_max": 0.02
+    }
+  },
+  "lifecycle_gates": {
+    "head_update": "stable_parameter_and_storage_in_place_copy",
+    "tensorrt_load_count": 1,
+    "tensorrt_context_count": 1,
+    "tensorrt_reload_rebuild_refit_after_revision": 0,
+    "compiled_unique_graphs_after_warmup": 1,
+    "silent_eager_fallback": false,
+    "feature_reuse_enabled": false
+  },
+  "performance": {
+    "outer_steps": 5,
+    "warmup_zero_based_steps": [
+      0
+    ],
+    "measured_zero_based_steps": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "schema": "W71-v1"
+  }
+}
