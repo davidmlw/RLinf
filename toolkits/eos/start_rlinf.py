@@ -418,14 +418,11 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
             "rollout.pinned_feature_ipc_timeout_seconds must be numeric"
         )
 
-    if not actor_skip_unused_logits and feature_transport is None:
-        if present_pinned_fields:
-            raise WorkflowError(
-                "A/base must not configure pinned feature transport fields"
-            )
+    if feature_transport is None and not present_pinned_fields:
+        arm = "W81/hybrid-reuse-off" if actor_skip_unused_logits else "A/base"
         optimization = {
-            "optimization_arm": "A/base",
-            "skip_unused_lm_head": False,
+            "optimization_arm": arm,
+            "skip_unused_lm_head": actor_skip_unused_logits,
             "rollout_backbone_feature_transport": None,
             "pinned_feature_ipc_batch_blocks": None,
             "pinned_feature_ipc_timeout_seconds": None,
@@ -452,8 +449,8 @@ def _baseline_contract(config: Path) -> dict[str, bool | float | int | str]:
             }
         else:
             raise WorkflowError(
-                "config optimization arm must be either feature-free A/base or the "
-                "complete unused-logits plus borrowed_ipc_pinned B/bundle"
+                "config optimization arm must be A/base, W81 reuse-off hybrid, or "
+                "the complete unused-logits plus borrowed_ipc_pinned B/bundle"
             )
 
     return {**actual, **semantic, **optimization}

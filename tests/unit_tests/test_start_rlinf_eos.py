@@ -340,6 +340,19 @@ def test_site_accepts_complete_feature_reuse_bundle(tmp_path: Path) -> None:
     assert contract["pinned_feature_verify_trajectory"] is False
 
 
+def test_site_accepts_w81_hybrid_with_feature_reuse_off(tmp_path: Path) -> None:
+    config = ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-hybrid-eager-chunk16.yaml"
+
+    contract = MODULE._load_site(_site(tmp_path, config=config))["_resolved"][
+        "workload_contract"
+    ]
+
+    assert contract["optimization_arm"] == "W81/hybrid-reuse-off"
+    assert contract["skip_unused_lm_head"] is True
+    assert contract["rollout_backbone_feature_transport"] is None
+    assert contract["pinned_feature_ipc_batch_blocks"] is None
+
+
 def test_site_accepts_debug_feature_transport_verification(tmp_path: Path) -> None:
     config = (
         ROOT / "toolkits/eos/gr00t_trocar/config-n1d7-feature-reuse-verify-chunk16.yaml"
