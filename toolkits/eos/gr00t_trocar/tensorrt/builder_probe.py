@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.metadata
+import importlib.util
 import json
 import os
 import site
@@ -76,6 +77,40 @@ def _ldd(path: Path) -> list[str]:
     if completed.returncode or any("not found" in line for line in lines):
         raise RuntimeError(f"native dependency resolution failed for {path}: {lines}")
     return lines
+
+
+def _native_linkage(env_root: Path) -> dict[str, dict[str, object]]:
+    distribution = importlib.metadata.distribution("torchcodec")
+    libraries = sorted(
+        distribution.locate_file(path).resolve(strict=True)
+        for path in distribution.files or ()
+        if str(path).endswith(".so")
+    )
+    linkage = {}
+    for path in libraries:
+        if not _is_relative_to(path, env_root):
+            raise RuntimeError(f"TorchCodec native library is outside venv: {path}")
+        completed = subprocess.run(
+            ["ldd", str(path)], check=False, capture_output=True, text=True
+        )
+        lines = (completed.stdout + completed.stderr).splitlines()
+        linkage[str(path.relative_to(env_root))] = {
+            "return_code": completed.returncode,
+            "missing": [line.strip() for line in lines if "not found" in line],
+            "output": lines,
+        }
+    return linkage
+
+
+def _failure_diagnostic(env_root: Path) -> dict[str, object]:
+    spec = importlib.util.find_spec("torchcodec")
+    return {
+        "packages": {
+            name: importlib.metadata.version(name) for name in EXPECTED_DISTRIBUTIONS
+        },
+        "torchcodec_module_origin": None if spec is None else spec.origin,
+        "native_linkage": _native_linkage(env_root),
+    }
 
 
 def probe(env_root: Path, video: Path) -> dict[str, object]:
@@ -169,11 +204,26 @@ def main() -> None:
     parser.add_argument("--video", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    receipt = probe(args.env_root, args.video)
-    args.output.write_text(
-        json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    print(json.dumps(receipt, sort_keys=True))
+    try:
+        receipt = probe(args.env_root, args.video)
+    except BaseException as error:
+        receipt = {
+            "schema": "rlinf.gr00t-n1d7-trt-builder-probe.v1",
+            "status": "failed",
+            "error": f"{type(error).__name__}: {error}",
+            **_failure_diagnostic(args.env_root.resolve(strict=True)),
+        }
+        args.output.write_text(
+            json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        print(json.dumps(receipt, sort_keys=True), file=sys.stderr)
+        raise
+    else:
+        receipt["status"] = "passed"
+        args.output.write_text(
+            json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        print(json.dumps(receipt, sort_keys=True))
 
 
 if __name__ == "__main__":

@@ -68,6 +68,8 @@ def _run_probe(env_root: Path, source: Path, dataset: Path) -> dict[str, object]
     )
     if completed.returncode:
         diagnostic = completed.stderr.strip() or completed.stdout.strip()
+        if output.is_file():
+            diagnostic = output.read_text(encoding="utf-8")
         raise RuntimeError(f"builder package/video probe failed: {diagnostic}")
     return json.loads(output.read_text(encoding="utf-8"))
 
