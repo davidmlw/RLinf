@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Materialize an immutable TensorRT-only Python path overlay."""
+"""Materialize a content-addressed TensorRT-only Python path overlay."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ import stat
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "rlinf.eos.tensorrt-runtime-overlay.v1"
+SCHEMA = "rlinf.eos.tensorrt-runtime-overlay.v2"
 VERSION = "10.15.1.29"
 PACKAGE_PATHS = (
     "tensorrt",
@@ -67,6 +67,7 @@ def _manifest(root: Path, source: Path) -> dict[str, Any]:
         "schema": SCHEMA,
         "status": "passed",
         "version": VERSION,
+        "protection": "hash_gated_hardlinks",
         "source_site_packages": str(source),
         "package_paths": list(PACKAGE_PATHS),
         "files": files,
@@ -82,10 +83,17 @@ def _write_manifest(root: Path, value: dict[str, Any]) -> None:
     )
 
 
-def _make_read_only(root: Path) -> None:
-    for path in sorted(root.rglob("*"), reverse=True):
-        mode = path.stat().st_mode
-        path.chmod(mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+def _protect_metadata(root: Path) -> None:
+    # Payload files are hardlinks into the builder environment. Changing their
+    # mode would also mutate the source inode, so integrity is enforced by the
+    # full inventory hash at launch instead.
+    (root / MANIFEST).chmod(
+        (root / MANIFEST).stat().st_mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
+    )
+    for path in sorted(
+        (item for item in root.rglob("*") if item.is_dir()), reverse=True
+    ):
+        path.chmod(path.stat().st_mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
     root.chmod(root.stat().st_mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
 
 
@@ -96,7 +104,9 @@ def materialize(source: Path, output: Path) -> dict[str, Any]:
         raise FileExistsError(f"TensorRT overlay already exists: {output}")
     for name in PACKAGE_PATHS:
         if not (source / name).exists():
-            raise FileNotFoundError(f"TensorRT package path is missing: {source / name}")
+            raise FileNotFoundError(
+                f"TensorRT package path is missing: {source / name}"
+            )
 
     output.parent.mkdir(parents=True, exist_ok=True)
     stage = output.parent / f".{output.name}.stage-{os.getpid()}"
@@ -118,7 +128,7 @@ def materialize(source: Path, output: Path) -> dict[str, Any]:
                 os.link(source_path, destination)
         value = _manifest(stage, source)
         _write_manifest(stage, value)
-        _make_read_only(stage)
+        _protect_metadata(stage)
         stage.rename(output)
     except Exception:
         shutil.rmtree(stage, ignore_errors=True)
@@ -135,13 +145,17 @@ def verify(output: Path) -> dict[str, Any]:
     actual = _manifest(output, Path(expected["source_site_packages"]))
     if actual != expected:
         raise RuntimeError("TensorRT overlay inventory differs from its manifest")
-    writable = [
+    writable_metadata = [
         path.relative_to(output).as_posix()
-        for path in (output, *output.rglob("*"))
+        for path in (output, output / MANIFEST, *output.rglob("*"))
+        if path.is_dir() or path.name == MANIFEST
         if path.stat().st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
     ]
-    if writable:
-        raise RuntimeError(f"TensorRT overlay contains writable paths: {writable[:8]}")
+    if writable_metadata:
+        raise RuntimeError(
+            "TensorRT overlay contains writable metadata paths: "
+            f"{writable_metadata[:8]}"
+        )
     return expected
 
 

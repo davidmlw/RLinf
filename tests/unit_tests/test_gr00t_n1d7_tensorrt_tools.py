@@ -73,7 +73,7 @@ def _fake_tensorrt_site_packages(root: Path) -> None:
         (package / "payload").write_text(name, encoding="utf-8")
 
 
-def test_tensorrt_runtime_overlay_is_hardlinked_immutable_and_verifiable(
+def test_tensorrt_runtime_overlay_is_hardlinked_hash_gated_and_verifiable(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "site-packages"
@@ -84,12 +84,14 @@ def test_tensorrt_runtime_overlay_is_hardlinked_immutable_and_verifiable(
     verified = prepare_runtime_overlay.verify(output)
 
     assert verified == value
+    assert verified["protection"] == "hash_gated_hardlinks"
     assert verified["file_count"] == len(prepare_runtime_overlay.PACKAGE_PATHS)
     source_payload = source / "tensorrt" / "payload"
     output_payload = output / "tensorrt" / "payload"
     assert source_payload.stat().st_ino == output_payload.stat().st_ino
     assert output.stat().st_mode & 0o222 == 0
-    assert output_payload.stat().st_mode & 0o222 == 0
+    assert output_payload.stat().st_mode & 0o200
+    assert source_payload.stat().st_mode & 0o200
 
 
 def test_tensorrt_runtime_overlay_verify_rejects_tampering(tmp_path: Path) -> None:
