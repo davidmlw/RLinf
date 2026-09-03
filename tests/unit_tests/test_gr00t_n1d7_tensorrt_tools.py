@@ -441,6 +441,21 @@ def test_true_b8_standalone_statistics_retain_raw_samples() -> None:
     assert result["p95_ms"] == pytest.approx(3.85)
 
 
+def test_true_b8_standalone_compares_plain_arrays() -> None:
+    import numpy as np
+
+    reference = np.asarray([1.0, 2.0], dtype=np.float32)
+    same = standalone_true_b8._compare_array(reference, reference.copy())
+    changed = standalone_true_b8._compare_array(
+        reference, np.asarray([1.0, 2.5], dtype=np.float32)
+    )
+
+    assert same["bitwise_equal"] is True
+    assert same["max_abs"] == 0.0
+    assert changed["bitwise_equal"] is False
+    assert changed["max_abs"] == 0.5
+
+
 def _site(tmp_path: Path) -> Path:
     source = tmp_path / "RLinf"
     helpers = source / "toolkits/eos/gr00t_trocar/tensorrt"

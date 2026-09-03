@@ -32,6 +32,10 @@ from resident_b1 import _compare_actions
 from trocar_b8_model_view import LANGUAGE_KEY, STATE_ACTION_ORDER
 
 
+def _compare_array(reference: Any, candidate: Any) -> dict[str, Any]:
+    return _compare_actions({"value": reference}, {"value": candidate})
+
+
 def _statistics(values: list[float]) -> dict[str, Any]:
     ordered = sorted(values)
 
@@ -222,7 +226,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     hybrid_vit = vit_engine.last_outputs["image_embeds"].detach().cpu().clone()
 
     repeat_action, _repeat_backbone, _ = _fixed_model_call(hybrid, inputs, args.seed)
-    fixed_noise_repeat = _compare_actions(
+    fixed_noise_repeat = _compare_array(
         hybrid_action.float().numpy(), repeat_action.float().numpy()
     )
     hybrid_model_timing = _measure_model(hybrid, inputs, args.warmup, args.measured)
@@ -240,16 +244,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
 
     comparisons = {
-        "vit_image_embeds": _compare_actions(
+        "vit_image_embeds": _compare_array(
             eager_vit["image_embeds"].float().numpy(), hybrid_vit.float().numpy()
         ),
-        "pre_final_backbone": _compare_actions(
+        "pre_final_backbone": _compare_array(
             eager_backbone.float().numpy(), hybrid_backbone.float().numpy()
         ),
-        "normalized_action": _compare_actions(
+        "normalized_action": _compare_array(
             eager_action.float().numpy(), hybrid_action.float().numpy()
         ),
-        "public_action": _compare_actions(eager_public, hybrid_public),
+        "public_action": _compare_array(eager_public, hybrid_public),
         "fixed_noise_hybrid_repeat": fixed_noise_repeat,
     }
     gates = {
