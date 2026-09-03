@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import time
 from functools import partial
 from typing import Any, Optional
@@ -92,6 +93,10 @@ from rlinf.utils.pinned_rollout_cache import PinnedRolloutBackboneCache
 from rlinf.utils.placement import (
     HybridComponentPlacement,
     ModelParallelComponentPlacement,
+)
+from rlinf.utils.ppo_identity import (
+    finalize_pre_update_identity,
+    pre_update_identity_batch_stats,
 )
 from rlinf.utils.utils import (
     clear_memory,
@@ -1556,6 +1561,120 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             forward_inputs = rollout_batch.get("forward_inputs", {})
             forward_inputs.pop(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None)
 
+    def _run_pre_update_same_revision_gate(
+        self, *, reuse_rollout_feature: bool
+    ) -> None:
+        gate = self.cfg.actor.get("pre_update_same_revision_gate")
+        if gate is None or not bool(gate.get("enabled", False)):
+            return
+        steps = [int(step) for step in gate.get("steps", [0])]
+        if int(self.version) not in steps:
+            return
+        if reuse_rollout_feature:
+            raise RuntimeError(
+                "pre-update identity gate requires feature reuse to be disabled"
+            )
+        if SupportedModel(self.cfg.actor.model.model_type) != SupportedModel.GR00T_N1D7:
+            raise RuntimeError(
+                "pre-update identity gate currently supports only GR00T N1.7"
+            )
+
+        threshold_names = {
+            "ratio_mean_abs_from_one_max",
+            "ratio_max_abs_from_one_max",
+            "kl_mean_abs_max",
+            "kl_max_abs_max",
+        }
+        thresholds = dict(gate.get("thresholds", {}))
+        if set(thresholds) != threshold_names:
+            raise RuntimeError(
+                "pre-update identity gate thresholds do not match the frozen contract"
+            )
+
+        rollout_size = int(
+            self.rollout_batch["prev_logprobs"].shape[0]
+            * self.rollout_batch["prev_logprobs"].shape[1]
+        )
+        micro_batch_size = int(self.cfg.actor.micro_batch_size)
+        if rollout_size % micro_batch_size != 0:
+            raise RuntimeError(
+                "pre-update identity rollout size is not divisible by micro batch size"
+            )
+        identity = torch.arange(rollout_size)
+        flattened = process_nested_dict_for_train(self.rollout_batch, identity)
+        batches = split_dict_to_chunk(flattened, rollout_size // micro_batch_size)
+
+        reduced: dict[str, torch.Tensor] | None = None
+        max_fields = {"ratio_abs_max", "kl_abs_max", "value_abs_max"}
+        with torch.no_grad():
+            for batch in batches:
+                model_batch = put_tensor_device(
+                    {
+                        "forward_inputs": batch["forward_inputs"],
+                        "prev_logprobs": batch["prev_logprobs"],
+                        "prev_values": batch["prev_values"],
+                        "loss_mask": batch.get("loss_mask"),
+                    },
+                    self.device,
+                )
+                with self.amp_context:
+                    output = self.model(
+                        forward_inputs=model_batch["forward_inputs"],
+                        compute_logprobs=True,
+                        compute_entropy=False,
+                        compute_values=True,
+                        use_cache=False,
+                        prev_logprobs=model_batch["prev_logprobs"],
+                    )
+                stats = pre_update_identity_batch_stats(
+                    current_logprobs=output["logprobs"],
+                    behavior_logprobs=output["prev_logprobs"],
+                    current_values=output["values"],
+                    behavior_values=model_batch["prev_values"],
+                    loss_mask=model_batch["loss_mask"],
+                )
+                if reduced is None:
+                    reduced = {name: value.clone() for name, value in stats.items()}
+                else:
+                    for name, value in stats.items():
+                        if name in max_fields:
+                            reduced[name] = torch.maximum(reduced[name], value)
+                        else:
+                            reduced[name] += value
+                del output, model_batch, batch
+
+        if reduced is None:
+            raise RuntimeError("pre-update identity gate produced no statistics")
+        for name, value in reduced.items():
+            op = (
+                torch.distributed.ReduceOp.MAX
+                if name in max_fields
+                else torch.distributed.ReduceOp.SUM
+            )
+            torch.distributed.all_reduce(value, op=op)
+        totals = {name: value.item() for name, value in reduced.items()}
+        receipt = finalize_pre_update_identity(totals, thresholds)
+        receipt.update(
+            {
+                "schema": "rlinf.pre-update-policy-identity.v1",
+                "outer_step": int(self.version),
+                "actor_world_size": int(self._world_size),
+                "thresholds": thresholds,
+            }
+        )
+        if self._rank == 0:
+            self.log_info(
+                "RLINF_PRE_UPDATE_IDENTITY "
+                + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            )
+        del flattened, batches, reduced
+        self.torch_platform.empty_cache()
+        if not receipt["passed"]:
+            raise RuntimeError(
+                "pre-update same-revision policy identity gate failed: "
+                + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            )
+
     def run_training(self) -> None:
         with record_span(
             owner="actor",
@@ -1587,6 +1706,9 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         if self._pinned_feature_ipc_enabled and not reuse_rollout_feature:
             raise RuntimeError("pinned backbone transport requires feature reuse")
         self._reuse_feature_fallbacks = 0
+        self._run_pre_update_same_revision_gate(
+            reuse_rollout_feature=reuse_rollout_feature
+        )
         rollout_size = (
             self.rollout_batch["prev_logprobs"].shape[0]
             * self.rollout_batch["prev_logprobs"].shape[1]

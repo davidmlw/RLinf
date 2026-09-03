@@ -116,6 +116,14 @@ def test_w81_numerical_thresholds_are_frozen() -> None:
     assert gates["one_update_cross_arm"]["gradient_relative_l2_max"] == 0.02
     assert gates["one_update_cross_arm"]["parameter_delta_relative_l2_max"] == 0.02
 
+    for name in CONFIGS:
+        configured = _config(name)["actor"]["pre_update_same_revision_gate"]
+        assert configured == {
+            "enabled": True,
+            "steps": [0],
+            "thresholds": gates["pre_update_same_revision"],
+        }
+
 
 def test_w81_shutdown_records_state_before_and_after_close() -> None:
     source = (
