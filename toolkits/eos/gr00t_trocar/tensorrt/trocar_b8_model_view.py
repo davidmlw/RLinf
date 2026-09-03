@@ -93,6 +93,14 @@ def materialize_trocar_model_view(
     processor_kwargs = processor.get("processor_kwargs")
     if not isinstance(processor_kwargs, dict):
         raise ValueError("GR00T processor config omits processor_kwargs")
+    modality_configs = processor_kwargs.get("modality_configs")
+    all_statistics = processor_kwargs.get("statistics")
+    if not isinstance(modality_configs, dict):
+        modality_configs = {}
+    if not isinstance(all_statistics, dict):
+        all_statistics = {}
+    modality_configs[EMBODIMENT] = _modality_config()
+    all_statistics[EMBODIMENT] = statistics
 
     config.update(
         {
@@ -104,8 +112,10 @@ def materialize_trocar_model_view(
     )
     processor_kwargs.update(
         {
-            "modality_configs": {EMBODIMENT: _modality_config()},
-            "statistics": {EMBODIMENT: statistics},
+            # AutoModel initialization still consults base embodiment entries.
+            # Add Trocar without removing the checkpoint's existing modalities.
+            "modality_configs": modality_configs,
+            "statistics": all_statistics,
             "use_percentiles": False,
             "image_crop_size": list(config["image_crop_size"]),
             "image_target_size": list(config["image_target_size"]),
