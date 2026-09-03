@@ -34,6 +34,8 @@ def test_identity_stats_expand_chunk_mask_and_pass_exact_policy() -> None:
         current_values=torch.tensor([[0.5]]),
         behavior_values=torch.tensor([0.5]),
         loss_mask=torch.tensor([[[True], [False]]]),
+        logprob_type="token_level",
+        single_action_dim=2,
     )
     receipt = finalize_pre_update_identity(_as_scalars(stats), THRESHOLDS)
 
@@ -54,6 +56,8 @@ def test_identity_stats_fail_closed_on_threshold_and_nonfinite() -> None:
         current_values=torch.tensor([0.7]),
         behavior_values=torch.tensor([0.5]),
         loss_mask=None,
+        logprob_type="token_level",
+        single_action_dim=2,
     )
     receipt = finalize_pre_update_identity(_as_scalars(stats), THRESHOLDS)
 
@@ -72,4 +76,28 @@ def test_identity_stats_reject_mismatched_shapes() -> None:
             current_values=torch.zeros(2),
             behavior_values=torch.zeros(2),
             loss_mask=None,
+            logprob_type="action_level",
+            single_action_dim=2,
         )
+
+
+def test_identity_stats_use_ppo_action_level_reduction() -> None:
+    behavior = torch.zeros((1, 2, 2))
+    current = torch.tensor([[[6e-4, 6e-4], [4e-4, -4e-4]]])
+    stats = pre_update_identity_batch_stats(
+        current_logprobs=current,
+        behavior_logprobs=behavior,
+        current_values=torch.zeros(1),
+        behavior_values=torch.zeros(1),
+        loss_mask=torch.ones((1, 2), dtype=torch.bool),
+        logprob_type="action_level",
+        single_action_dim=2,
+    )
+    receipt = finalize_pre_update_identity(_as_scalars(stats), THRESHOLDS)
+
+    assert receipt["decision_records"] == 1
+    assert receipt["ratio_positions"] == 2
+    assert receipt["ratio_max_abs_from_one"] == pytest.approx(
+        torch.expm1(torch.tensor(1.2e-3)).item()
+    )
+    assert receipt["passed"] is False

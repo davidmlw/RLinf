@@ -1632,6 +1632,8 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                     current_values=output["values"],
                     behavior_values=model_batch["prev_values"],
                     loss_mask=model_batch["loss_mask"],
+                    logprob_type=str(self.cfg.algorithm.logprob_type),
+                    single_action_dim=int(self.cfg.actor.model.action_dim),
                 )
                 if reduced is None:
                     reduced = {name: value.clone() for name, value in stats.items()}

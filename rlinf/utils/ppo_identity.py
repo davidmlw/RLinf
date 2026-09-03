@@ -22,6 +22,8 @@ def pre_update_identity_batch_stats(
     current_values: torch.Tensor,
     behavior_values: torch.Tensor,
     loss_mask: torch.Tensor | None,
+    logprob_type: str,
+    single_action_dim: int,
 ) -> dict[str, torch.Tensor]:
     """Return additive/max statistics without hiding non-finite values."""
 
@@ -30,6 +32,31 @@ def pre_update_identity_batch_stats(
             "current and behavior log-probability shapes differ: "
             f"{tuple(current_logprobs.shape)} != {tuple(behavior_logprobs.shape)}"
         )
+
+    batch_size = current_logprobs.shape[0]
+    if logprob_type == "token_level":
+        current_logprobs = current_logprobs.reshape(
+            batch_size, -1, single_action_dim
+        )
+        behavior_logprobs = behavior_logprobs.reshape(
+            batch_size, -1, single_action_dim
+        )
+    elif logprob_type == "action_level":
+        current_logprobs = current_logprobs.reshape(
+            batch_size, -1, single_action_dim
+        ).sum(dim=-1)
+        behavior_logprobs = behavior_logprobs.reshape(
+            batch_size, -1, single_action_dim
+        ).sum(dim=-1)
+    elif logprob_type == "chunk_level":
+        current_logprobs = current_logprobs.reshape(
+            batch_size, -1, single_action_dim
+        ).sum(dim=(1, 2))
+        behavior_logprobs = behavior_logprobs.reshape(
+            batch_size, -1, single_action_dim
+        ).sum(dim=(1, 2))
+    else:
+        raise ValueError(f"unsupported log-probability type: {logprob_type!r}")
 
     log_ratio = current_logprobs.float() - behavior_logprobs.float()
     if loss_mask is None:
@@ -78,7 +105,7 @@ def pre_update_identity_batch_stats(
 
     return {
         "decision_records": torch.tensor(
-            current_logprobs.shape[0], device=log_ratio.device, dtype=torch.int64
+            batch_size, device=log_ratio.device, dtype=torch.int64
         ),
         "ratio_positions": ratio_count.to(dtype=torch.int64),
         "nonfinite_ratio_positions": (ratio_count - ratio_finite_count).to(
