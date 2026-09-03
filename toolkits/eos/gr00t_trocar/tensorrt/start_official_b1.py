@@ -177,7 +177,9 @@ def _load(path: Path, *, verify_image: bool = True) -> dict[str, Any]:
     gr00t = _directory(inputs["isaac_gr00t_root"], "inputs.isaac_gr00t_root")
     if _git(gr00t, "rev-parse", "HEAD") != inputs["isaac_gr00t_revision"]:
         raise WorkflowError("Isaac-GR00T revision mismatch")
-    if _git(gr00t, "status", "--porcelain"):
+    # Materialized Git-LFS fixtures are qualified separately by OID and content
+    # hash. Keep the source check independent of git-lfs availability on nodes.
+    if _git(gr00t, "status", "--porcelain", "--", ".", ":(exclude)demo_data"):
         raise WorkflowError("Isaac-GR00T source must be clean")
     dataset = _directory(inputs["dataset_root"], "inputs.dataset_root")
     pointers = []

@@ -330,6 +330,19 @@ def test_site_rejects_dataset_content_hash_mismatch(tmp_path: Path) -> None:
         start_official_b1._load(site)
 
 
+def test_site_checks_source_cleanliness_without_gr00t_demo_data(tmp_path: Path) -> None:
+    site = _site(tmp_path)
+    value = json.loads(site.read_text(encoding="utf-8"))
+    gr00t = Path(value["inputs"]["isaac_gr00t_root"])
+    (gr00t / "demo_data").mkdir()
+    (gr00t / "demo_data/materialized.bin").write_bytes(b"fixture")
+
+    start_official_b1._load(site)
+    (gr00t / "dirty_source.py").write_text("dirty\n", encoding="utf-8")
+    with pytest.raises(start_official_b1.WorkflowError, match="source must be clean"):
+        start_official_b1._load(site)
+
+
 def test_resident_submit_requires_qualified_exact_engine_bundle(tmp_path: Path) -> None:
     site_path = _site(tmp_path)
     site = start_official_b1._load(site_path)
