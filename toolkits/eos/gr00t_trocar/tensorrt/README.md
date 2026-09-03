@@ -43,6 +43,15 @@ python toolkits/eos/gr00t_trocar/tensorrt/start_official_b1.py submit \
   --site /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W79/official-b1-site.json
 ```
 
+After the official attempt passes, record the independent component arrays and
+resident public whole-call boundary without rebuilding the plans:
+
+```bash
+python toolkits/eos/gr00t_trocar/tensorrt/start_official_b1.py resident-submit \
+  --site /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W79/official-b1-resident-site.json \
+  --oracle-attempt /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W79/W79-official-b1-r6-JOB_ID
+```
+
 The allocation creates `W79-official-b1-rN-<job-id>/` under the attempt root. A
 passing attempt contains the builder/video probe, official logs, all seven ONNX
 graphs and engines, and `qualification.json` with package, model, numerical,

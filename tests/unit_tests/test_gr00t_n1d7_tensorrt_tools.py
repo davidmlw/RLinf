@@ -32,6 +32,7 @@ from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
     model_view,
     official_b1,
     prepare_builder,
+    resident_b1,
     start_official_b1,
 )
 
@@ -138,6 +139,14 @@ def test_ldd_normalization_removes_only_aslr_addresses() -> None:
         "libtorch.so => /venv/torch/lib/libtorch.so",
         "libmissing.so => not found",
     ]
+
+
+def test_resident_statistics_retain_raw_distribution() -> None:
+    statistics = resident_b1._statistics([1.0, 2.0, 3.0, 4.0])
+
+    assert statistics["count"] == 4
+    assert statistics["p50_ms"] == 2.5
+    assert statistics["p95_ms"] == pytest.approx(3.85)
 
 
 def test_model_view_preserves_selector_suffix_and_hashes_weights(
@@ -301,6 +310,41 @@ def test_site_rejects_dataset_content_hash_mismatch(tmp_path: Path) -> None:
 
     with pytest.raises(start_official_b1.WorkflowError, match="SHA-256 mismatch"):
         start_official_b1._load(site)
+
+
+def test_resident_submit_requires_qualified_exact_engine_bundle(tmp_path: Path) -> None:
+    site_path = _site(tmp_path)
+    site = start_official_b1._load(site_path)
+    output = Path(site["_resolved"]["output_root"])
+    oracle = output / "oracle"
+    oracle.mkdir()
+    (oracle / "qualification.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "engines": {name: {} for name in start_official_b1.ORACLE_ENGINES},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (oracle / "allocation-result.json").write_text(
+        json.dumps({"status": "passed"}), encoding="utf-8"
+    )
+
+    resolved = start_official_b1._qualified_oracle(oracle, output)
+    command = start_official_b1._resident_sbatch(site, resolved)
+
+    assert resolved == oracle.resolve()
+    assert "resident-allocation-run" in command
+    assert str(resolved) in command
+
+    qualification = json.loads((oracle / "qualification.json").read_text())
+    qualification["engines"].pop("vit.engine")
+    (oracle / "qualification.json").write_text(
+        json.dumps(qualification), encoding="utf-8"
+    )
+    with pytest.raises(start_official_b1.WorkflowError, match="exact seven engines"):
+        start_official_b1._qualified_oracle(oracle, output)
 
 
 def test_builder_environment_removes_python_path_and_user_site() -> None:
