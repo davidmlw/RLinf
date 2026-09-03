@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from persistent_trt import PersistentEngine
-from resident_b1 import _comparison
+from resident_b1 import _compare_actions
 from trocar_b8_model_view import LANGUAGE_KEY, STATE_ACTION_ORDER
 
 
@@ -222,7 +222,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     hybrid_vit = vit_engine.last_outputs["image_embeds"].detach().cpu().clone()
 
     repeat_action, _repeat_backbone, _ = _fixed_model_call(hybrid, inputs, args.seed)
-    fixed_noise_repeat = _comparison(hybrid_action.numpy(), repeat_action.numpy())
+    fixed_noise_repeat = _compare_actions(hybrid_action.numpy(), repeat_action.numpy())
     hybrid_model_timing = _measure_model(hybrid, inputs, args.warmup, args.measured)
     allocation_floor = {
         "vit": vit_engine.allocation_count,
@@ -238,16 +238,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
 
     comparisons = {
-        "vit_image_embeds": _comparison(
+        "vit_image_embeds": _compare_actions(
             eager_vit["image_embeds"].float().numpy(), hybrid_vit.float().numpy()
         ),
-        "pre_final_backbone": _comparison(
+        "pre_final_backbone": _compare_actions(
             eager_backbone.float().numpy(), hybrid_backbone.float().numpy()
         ),
-        "normalized_action": _comparison(
+        "normalized_action": _compare_actions(
             eager_action.float().numpy(), hybrid_action.float().numpy()
         ),
-        "public_action": _comparison(eager_public, hybrid_public),
+        "public_action": _compare_actions(eager_public, hybrid_public),
         "fixed_noise_hybrid_repeat": fixed_noise_repeat,
     }
     gates = {

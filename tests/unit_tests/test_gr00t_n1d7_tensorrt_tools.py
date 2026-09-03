@@ -38,6 +38,7 @@ from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
     prepare_builder,
     promote_b1,
     resident_b1,
+    standalone_true_b8,
     start_official_b1,
     trocar_b8_fixture,
     trocar_b8_model_view,
@@ -430,6 +431,14 @@ def test_true_b8_export_constants_match_fixture_contract() -> None:
     assert export_true_b8.PATCHES_PER_ROW == 768
     assert export_true_b8.VISUAL_TOKENS_PER_ROW == 192
     assert export_true_b8.EXPECTED_SEQUENCE_LENGTH == 208
+
+
+def test_true_b8_standalone_statistics_retain_raw_samples() -> None:
+    result = standalone_true_b8._statistics([1.0, 2.0, 3.0, 4.0])
+
+    assert result["samples_ms"] == [1.0, 2.0, 3.0, 4.0]
+    assert result["p50_ms"] == 2.5
+    assert result["p95_ms"] == pytest.approx(3.85)
 
 
 def _site(tmp_path: Path) -> Path:
