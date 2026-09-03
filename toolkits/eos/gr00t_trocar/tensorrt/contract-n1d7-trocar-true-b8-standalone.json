@@ -137,22 +137,31 @@
       "total"
     ],
     "arms": [
-      "pytorch_eager",
+      "eager_backbone_eager_head",
       "tensorrt_backbone_eager_head",
+      "eager_backbone_torch_compile_dit_head",
       "tensorrt_backbone_torch_compile_dit_head"
     ],
     "paired_order": "alternating_ab_ba",
     "required_direct_pairs": [
       [
-        "pytorch_eager",
+        "eager_backbone_eager_head",
         "tensorrt_backbone_eager_head"
+      ],
+      [
+        "eager_backbone_eager_head",
+        "eager_backbone_torch_compile_dit_head"
       ],
       [
         "tensorrt_backbone_eager_head",
         "tensorrt_backbone_torch_compile_dit_head"
       ],
       [
-        "pytorch_eager",
+        "eager_backbone_eager_head",
+        "tensorrt_backbone_torch_compile_dit_head"
+      ],
+      [
+        "eager_backbone_torch_compile_dit_head",
         "tensorrt_backbone_torch_compile_dit_head"
       ]
     ],

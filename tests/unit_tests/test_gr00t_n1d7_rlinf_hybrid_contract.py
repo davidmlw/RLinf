@@ -183,6 +183,21 @@ def test_w81_numerical_thresholds_are_frozen() -> None:
         }
 
 
+def test_w81_standalone_ablation_separates_trt_and_compile() -> None:
+    ablation = _contract()["performance"]["standalone_factorial_ablation"]
+
+    assert set(ablation["arms"]) == {"E/E", "T/E", "E/C", "T/C"}
+    assert ablation["direct_effects"] == {
+        "tensorrt": "T/E versus E/E and T/C versus E/C",
+        "compile": "E/C versus E/E and T/C versus T/E",
+        "combined": "T/C versus E/E",
+    }
+    assert ablation["compiled_arms_are_deployable"] is False
+    assert "feature reuse disabled" in ablation["ppo_authority_diagnostics"][
+        "tensorrt_only"
+    ]
+
+
 def test_w81_shutdown_records_state_before_and_after_close() -> None:
     source = (ROOT / "rlinf/workers/rollout/hf/huggingface_worker.py").read_text(
         encoding="utf-8"

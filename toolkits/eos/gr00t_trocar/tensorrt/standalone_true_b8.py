@@ -914,15 +914,36 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     common_eager_hybrid_outputs = common_eager_hybrid.pop("outputs")
 
-    action_model = hybrid.model.action_head.model
-    original_action_model_forward = action_model.forward
+    eager_action_model = paired_eager.model.action_head.model
+    hybrid_action_model = hybrid.model.action_head.model
+    original_eager_action_model_forward = eager_action_model.forward
+    original_hybrid_action_model_forward = hybrid_action_model.forward
     torch._dynamo.reset()
-    compile_started = time.perf_counter_ns()
-    compiled_action_model_forward = torch.compile(
-        original_action_model_forward, mode=args.compile_mode
+    eager_compile_started = time.perf_counter_ns()
+    compiled_eager_action_model_forward = torch.compile(
+        original_eager_action_model_forward, mode=args.compile_mode
     )
-    action_model.forward = compiled_action_model_forward
-    compiled_first_action = _engine_phase(
+    eager_action_model.forward = compiled_eager_action_model_forward
+    eager_compiled_first_action = call_with_explicit_noise(
+        paired_eager.model,
+        eager_explicit_head,
+        eager_prepared,
+        initial_actions,
+    )
+    torch.cuda.synchronize()
+    eager_compile_first_call_wall_ms = (
+        time.perf_counter_ns() - eager_compile_started
+    ) / 1_000_000
+    unique_graphs_after_eager_first = int(
+        torch._dynamo.utils.counters["stats"]["unique_graphs"]
+    )
+
+    hybrid_compile_started = time.perf_counter_ns()
+    compiled_hybrid_action_model_forward = torch.compile(
+        original_hybrid_action_model_forward, mode=args.compile_mode
+    )
+    hybrid_action_model.forward = compiled_hybrid_action_model_forward
+    hybrid_compiled_first_action = _engine_phase(
         engine_phases,
         "common_boundary_compile_first_call",
         vit_engine,
@@ -936,13 +957,33 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         ),
     )
     torch.cuda.synchronize()
-    compile_first_call_wall_ms = (time.perf_counter_ns() - compile_started) / 1_000_000
-    unique_graphs_after_first = int(
+    hybrid_compile_first_call_wall_ms = (
+        time.perf_counter_ns() - hybrid_compile_started
+    ) / 1_000_000
+    unique_graphs_after_both_first = int(
         torch._dynamo.utils.counters["stats"]["unique_graphs"]
     )
 
+    def eager_eager_head_call() -> tuple[Any, dict[str, float]]:
+        eager_action_model.forward = original_eager_action_model_forward
+        return cuda_event_call(
+            paired_eager.model,
+            eager_explicit_head,
+            eager_prepared,
+            initial_actions,
+        )
+
+    def eager_compiled_head_call() -> tuple[Any, dict[str, float]]:
+        eager_action_model.forward = compiled_eager_action_model_forward
+        return cuda_event_call(
+            paired_eager.model,
+            eager_explicit_head,
+            eager_prepared,
+            initial_actions,
+        )
+
     def hybrid_eager_head_call() -> tuple[Any, dict[str, float]]:
-        action_model.forward = original_action_model_forward
+        hybrid_action_model.forward = original_hybrid_action_model_forward
         return cuda_event_call(
             hybrid.model,
             hybrid_explicit_head,
@@ -951,13 +992,28 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     def hybrid_compiled_head_call() -> tuple[Any, dict[str, float]]:
-        action_model.forward = compiled_action_model_forward
+        hybrid_action_model.forward = compiled_hybrid_action_model_forward
         return cuda_event_call(
             hybrid.model,
             hybrid_explicit_head,
             hybrid_prepared,
             initial_actions,
         )
+
+    common_eager_head_executor = _paired_cuda_stage_timing(
+        {
+            "eager_backbone_eager_head": eager_eager_head_call,
+            "eager_backbone_compile_dit_head": eager_compiled_head_call,
+        },
+        args.common_warmup,
+        args.common_measured,
+        (
+            "preloaded contiguous CUDA tensors + explicit initial noise -> "
+            "normalized action; identical eager backbone; eager versus "
+            "torch.compile DiT forward"
+        ),
+    )
+    common_eager_head_executor_outputs = common_eager_head_executor.pop("outputs")
 
     common_head_executor = _engine_phase(
         engine_phases,
@@ -989,12 +1045,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         args.common_warmup + args.common_measured,
         lambda: _paired_cuda_stage_timing(
             {
-                "pytorch_eager": lambda: cuda_event_call(
-                    paired_eager.model,
-                    eager_explicit_head,
-                    eager_prepared,
-                    initial_actions,
-                ),
+                "pytorch_eager": eager_eager_head_call,
                 "tensorrt_backbone_compile_dit_head": (hybrid_compiled_head_call),
             },
             args.common_warmup,
@@ -1006,8 +1057,33 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             ),
         ),
     )
-    action_model.forward = original_action_model_forward
     common_combined_executor_outputs = common_combined_executor.pop("outputs")
+
+    common_compiled_backbone_executor = _engine_phase(
+        engine_phases,
+        "common_boundary_compiled_backbone_timing",
+        vit_engine,
+        llm_engine,
+        args.common_warmup + args.common_measured,
+        lambda: _paired_cuda_stage_timing(
+            {
+                "eager_backbone_compile_dit_head": eager_compiled_head_call,
+                "tensorrt_backbone_compile_dit_head": hybrid_compiled_head_call,
+            },
+            args.common_warmup,
+            args.common_measured,
+            (
+                "preloaded contiguous CUDA tensors + explicit initial noise -> "
+                "normalized action; identical compiled DiT; eager versus "
+                "TensorRT backbone"
+            ),
+        ),
+    )
+    common_compiled_backbone_executor_outputs = common_compiled_backbone_executor.pop(
+        "outputs"
+    )
+    eager_action_model.forward = original_eager_action_model_forward
+    hybrid_action_model.forward = original_hybrid_action_model_forward
     unique_graphs_after_measurement = int(
         torch._dynamo.utils.counters["stats"]["unique_graphs"]
     )
@@ -1038,6 +1114,30 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             .cpu()
             .numpy(),
         ),
+        "eager_eager_vs_compile_dit": _compare_array(
+            common_eager_head_executor_outputs["eager_backbone_eager_head"]
+            .float()
+            .cpu()
+            .numpy(),
+            common_eager_head_executor_outputs["eager_backbone_compile_dit_head"]
+            .float()
+            .cpu()
+            .numpy(),
+        ),
+        "compiled_dit_eager_vs_trt_backbone": _compare_array(
+            common_compiled_backbone_executor_outputs[
+                "eager_backbone_compile_dit_head"
+            ]
+            .float()
+            .cpu()
+            .numpy(),
+            common_compiled_backbone_executor_outputs[
+                "tensorrt_backbone_compile_dit_head"
+            ]
+            .float()
+            .cpu()
+            .numpy(),
+        ),
         "eager_vs_hybrid_compile_dit": _compare_array(
             common_combined_executor_outputs["pytorch_eager"].float().cpu().numpy(),
             common_combined_executor_outputs["tensorrt_backbone_compile_dit_head"]
@@ -1045,8 +1145,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             .cpu()
             .numpy(),
         ),
-        "compile_first_vs_measured": _compare_array(
-            compiled_first_action.detach().float().cpu().numpy(),
+        "eager_compile_first_vs_measured": _compare_array(
+            eager_compiled_first_action.detach().float().cpu().numpy(),
+            common_eager_head_executor_outputs["eager_backbone_compile_dit_head"]
+            .float()
+            .cpu()
+            .numpy(),
+        ),
+        "hybrid_compile_first_vs_measured": _compare_array(
+            hybrid_compiled_first_action.detach().float().cpu().numpy(),
             common_head_executor_outputs["tensorrt_backbone_compile_dit_head"]
             .float()
             .cpu()
@@ -1082,12 +1189,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             and common_comparisons["eager_vs_hybrid_compile_dit"]["mean_abs"] <= 0.005
             and common_comparisons["eager_vs_hybrid_compile_dit"]["max_abs"] <= 0.05
         ),
-        "compiled_head_stable": common_comparisons["compile_first_vs_measured"][
-            "bitwise_equal"
-        ],
+        "compiled_head_stable": (
+            common_comparisons["eager_compile_first_vs_measured"]["bitwise_equal"]
+            and common_comparisons["hybrid_compile_first_vs_measured"][
+                "bitwise_equal"
+            ]
+        ),
         "no_compile_rebuild_during_measurement": (
-            unique_graphs_after_first > 0
-            and unique_graphs_after_measurement == unique_graphs_after_first
+            unique_graphs_after_eager_first > 0
+            and unique_graphs_after_both_first >= unique_graphs_after_eager_first
+            and unique_graphs_after_measurement == unique_graphs_after_both_first
         ),
     }
     paired_eager = None
@@ -1225,12 +1336,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "prepared_inputs": eager_prepared_manifest,
                 "initial_actions": initial_actions_manifest,
                 "eager_vs_hybrid": common_eager_hybrid,
+                "eager_head_executor": common_eager_head_executor,
                 "head_executor": common_head_executor,
                 "combined_executor": common_combined_executor,
+                "compiled_backbone_executor": common_compiled_backbone_executor,
                 "compile": {
                     "mode": args.compile_mode,
-                    "first_call_wall_ms": compile_first_call_wall_ms,
-                    "unique_graphs_after_first": unique_graphs_after_first,
+                    "eager_first_call_wall_ms": eager_compile_first_call_wall_ms,
+                    "hybrid_first_call_wall_ms": hybrid_compile_first_call_wall_ms,
+                    "unique_graphs_after_eager_first": unique_graphs_after_eager_first,
+                    "unique_graphs_after_both_first": unique_graphs_after_both_first,
                     "unique_graphs_after_measurement": (
                         unique_graphs_after_measurement
                     ),

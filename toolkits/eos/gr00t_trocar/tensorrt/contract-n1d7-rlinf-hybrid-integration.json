@@ -161,6 +161,29 @@
       3,
       4
     ],
-    "schema": "W71-v1"
+    "schema": "W71-v1",
+    "standalone_factorial_ablation": {
+      "boundary": "preloaded CUDA inputs and explicit initial noise to normalized deployment action",
+      "arms": {
+        "E/E": "eager backbone plus eager DiT",
+        "T/E": "TensorRT backbone plus eager DiT",
+        "E/C": "eager backbone plus compiled DiT",
+        "T/C": "TensorRT backbone plus compiled DiT"
+      },
+      "direct_effects": {
+        "tensorrt": "T/E versus E/E and T/C versus E/C",
+        "compile": "E/C versus E/E and T/C versus T/E",
+        "combined": "T/C versus E/E"
+      },
+      "numerics": [
+        "backbone feature",
+        "normalized action"
+      ],
+      "ppo_authority_diagnostics": {
+        "tensorrt_only": "TensorRT Rollout versus eager Actor recomputation with feature reuse disabled",
+        "compile_only": "compiled-DiT Rollout versus eager Actor with a common backbone representation"
+      },
+      "compiled_arms_are_deployable": false
+    }
   }
 }

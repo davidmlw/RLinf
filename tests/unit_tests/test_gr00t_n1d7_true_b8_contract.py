@@ -103,17 +103,29 @@ def test_w80_contract_freezes_the_cuda_resident_common_boundary() -> None:
         "one_natural_call_cuda_events_without_intermediate_host_sync"
     )
     assert boundary["arms"] == [
-        "pytorch_eager",
+        "eager_backbone_eager_head",
         "tensorrt_backbone_eager_head",
+        "eager_backbone_torch_compile_dit_head",
         "tensorrt_backbone_torch_compile_dit_head",
     ]
     assert boundary["required_direct_pairs"] == [
-        ["pytorch_eager", "tensorrt_backbone_eager_head"],
+        ["eager_backbone_eager_head", "tensorrt_backbone_eager_head"],
+        [
+            "eager_backbone_eager_head",
+            "eager_backbone_torch_compile_dit_head",
+        ],
         [
             "tensorrt_backbone_eager_head",
             "tensorrt_backbone_torch_compile_dit_head",
         ],
-        ["pytorch_eager", "tensorrt_backbone_torch_compile_dit_head"],
+        [
+            "eager_backbone_eager_head",
+            "tensorrt_backbone_torch_compile_dit_head",
+        ],
+        [
+            "eager_backbone_torch_compile_dit_head",
+            "tensorrt_backbone_torch_compile_dit_head",
+        ],
     ]
     assert boundary["official_deployment_equivalence_required"] is True
     assert boundary["explicit_path_must_not_advance_rng"] is True
