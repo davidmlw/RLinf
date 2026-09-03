@@ -1,13 +1,14 @@
-# GR00T N1.7 Official TensorRT Oracle
+# GR00T N1.7 TensorRT Qualification
 
 This directory first qualifies the official GR00T N1.7 full-TensorRT B1 LIBERO
 pipeline for W79. Praxis and Poiesis are read-only design references and are not
 runtime, build, or artifact dependencies.
 
-W79 only reproduces the official seven-engine pipeline at Isaac-GR00T commit
-`51d4c89f72fda44cbf77285c6a8114b52676b8a1`. The true-static-B8 Trocar hybrid,
-RLInf integration, PPO correctness and performance A/B remain separate W78
-work after this oracle passes.
+W79 reproduces the official seven-engine B1 LIBERO pipeline at Isaac-GR00T
+commit `51d4c89f72fda44cbf77285c6a8114b52676b8a1`. W80 then qualifies the
+true-static-B8 Trocar hybrid with TensorRT ViT/LLM and a resident PyTorch action
+head. RLInf Rollout integration, revision adoption, PPO statistics and learning
+correctness remain W78 work after these standalone gates pass.
 
 Large ONNX and TensorRT artifacts are not stored in Git. Unqualified build
 outputs remain under the attempt directory. A bundle is promoted to the EOS
@@ -57,3 +58,32 @@ passing attempt contains the builder/video probe, official logs, all seven ONNX
 graphs and engines, and `qualification.json` with package, model, numerical,
 binding and artifact-hash evidence. Failed output stays attempt-local and never
 overwrites a qualified receipt.
+
+## True-B8 Trocar Hybrid
+
+The W80 path is split into reproducible stages:
+
+- `trocar_b8_model_view.py` creates the immutable Trocar model view.
+- `trocar_b8_fixture.py` captures one distinct-row, distinct-camera B8 input.
+- `export_true_b8.py` exports ViT and LLM ONNX graphs from that exact fixture.
+- `build_true_b8.py` builds and qualifies static-B8 `vit.engine` and
+  `llm_bf16.engine`.
+- `standalone_true_b8.py` verifies the provenance chain, numerical agreement,
+  persistent engine lifecycle and resident performance.
+
+The standalone runner records both the official CPU-collated entry point and a
+common CUDA-resident boundary. The common boundary starts with preloaded
+contiguous CUDA tensors and one explicit initial flow-noise tensor, and ends at
+the normalized deployment action. It measures these direct, alternating AB/BA
+pairs with CUDA events:
+
+1. PyTorch eager versus TensorRT backbone plus eager head.
+2. TensorRT backbone plus eager head versus the same backbone with compiled DiT.
+3. PyTorch eager versus TensorRT backbone plus compiled DiT.
+
+Raw preprocessing, H2D transfer, implicit RNG generation, public action decode,
+and PPO transition noise/logprob/value are intentionally outside this boundary.
+Compile time and graph creation are lifecycle metrics, not resident inference.
+The runner fails if the explicit-noise path differs from the official deployment
+path, advances RNG, recompiles during measurement, or executes a different
+number of TensorRT calls than the phase contract requires.
