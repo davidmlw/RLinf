@@ -222,7 +222,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     hybrid_vit = vit_engine.last_outputs["image_embeds"].detach().cpu().clone()
 
     repeat_action, _repeat_backbone, _ = _fixed_model_call(hybrid, inputs, args.seed)
-    fixed_noise_repeat = _compare_actions(hybrid_action.numpy(), repeat_action.numpy())
+    fixed_noise_repeat = _compare_actions(
+        hybrid_action.float().numpy(), repeat_action.float().numpy()
+    )
     hybrid_model_timing = _measure_model(hybrid, inputs, args.warmup, args.measured)
     allocation_floor = {
         "vit": vit_engine.allocation_count,
