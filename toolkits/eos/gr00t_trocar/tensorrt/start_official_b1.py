@@ -28,8 +28,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from builder_probe import runtime_library_paths
-
 SCHEMA = "rlinf.eos.gr00t-tensorrt-site.v1"
 RESULT_SCHEMA = "rlinf.eos.gr00t-tensorrt-result.v1"
 GIT_OID_RE = re.compile(r"[0-9a-f]{40}")
@@ -649,6 +647,9 @@ def _resident_run_agent(args: argparse.Namespace) -> int:
 
     source = Path(site["_resolved"]["source_root"])
     tools = source / "toolkits/eos/gr00t_trocar/tensorrt"
+    sys.path.insert(0, str(tools))
+    from builder_probe import runtime_library_paths  # noqa: PLC0415
+
     builder = site["builder"]
     prepare = [
         "python3",
