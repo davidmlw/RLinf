@@ -979,8 +979,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             ),
         ),
     )
-    action_model.forward = original_action_model_forward
     common_head_executor_outputs = common_head_executor.pop("outputs")
+
+    common_combined_executor = _engine_phase(
+        engine_phases,
+        "common_boundary_combined_executor_timing",
+        vit_engine,
+        llm_engine,
+        args.common_warmup + args.common_measured,
+        lambda: _paired_cuda_stage_timing(
+            {
+                "pytorch_eager": lambda: cuda_event_call(
+                    paired_eager.model,
+                    eager_explicit_head,
+                    eager_prepared,
+                    initial_actions,
+                ),
+                "tensorrt_backbone_compile_dit_head": (hybrid_compiled_head_call),
+            },
+            args.common_warmup,
+            args.common_measured,
+            (
+                "preloaded contiguous CUDA tensors + explicit initial noise -> "
+                "normalized action; PyTorch eager versus TensorRT backbone plus "
+                "torch.compile DiT forward"
+            ),
+        ),
+    )
+    action_model.forward = original_action_model_forward
+    common_combined_executor_outputs = common_combined_executor.pop("outputs")
     unique_graphs_after_measurement = int(
         torch._dynamo.utils.counters["stats"]["unique_graphs"]
     )
@@ -1007,6 +1034,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             .cpu()
             .numpy(),
             common_head_executor_outputs["tensorrt_backbone_compile_dit_head"]
+            .float()
+            .cpu()
+            .numpy(),
+        ),
+        "eager_vs_hybrid_compile_dit": _compare_array(
+            common_combined_executor_outputs["pytorch_eager"].float().cpu().numpy(),
+            common_combined_executor_outputs["tensorrt_backbone_compile_dit_head"]
             .float()
             .cpu()
             .numpy(),
@@ -1041,6 +1075,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             and common_comparisons["hybrid_eager_vs_compile_dit"]["cosine"] >= 0.999
             and common_comparisons["hybrid_eager_vs_compile_dit"]["mean_abs"] <= 0.005
             and common_comparisons["hybrid_eager_vs_compile_dit"]["max_abs"] <= 0.05
+        ),
+        "combined_candidate_action": (
+            common_comparisons["eager_vs_hybrid_compile_dit"]["finite"]
+            and common_comparisons["eager_vs_hybrid_compile_dit"]["cosine"] >= 0.999
+            and common_comparisons["eager_vs_hybrid_compile_dit"]["mean_abs"] <= 0.005
+            and common_comparisons["eager_vs_hybrid_compile_dit"]["max_abs"] <= 0.05
         ),
         "compiled_head_stable": common_comparisons["compile_first_vs_measured"][
             "bitwise_equal"
@@ -1186,6 +1226,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "initial_actions": initial_actions_manifest,
                 "eager_vs_hybrid": common_eager_hybrid,
                 "head_executor": common_head_executor,
+                "combined_executor": common_combined_executor,
                 "compile": {
                     "mode": args.compile_mode,
                     "first_call_wall_ms": compile_first_call_wall_ms,

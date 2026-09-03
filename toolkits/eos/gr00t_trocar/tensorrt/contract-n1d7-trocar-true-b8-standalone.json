@@ -142,6 +142,20 @@
       "tensorrt_backbone_torch_compile_dit_head"
     ],
     "paired_order": "alternating_ab_ba",
+    "required_direct_pairs": [
+      [
+        "pytorch_eager",
+        "tensorrt_backbone_eager_head"
+      ],
+      [
+        "tensorrt_backbone_eager_head",
+        "tensorrt_backbone_torch_compile_dit_head"
+      ],
+      [
+        "pytorch_eager",
+        "tensorrt_backbone_torch_compile_dit_head"
+      ]
+    ],
     "excluded": [
       "raw_observation_preprocessing",
       "cpu_to_gpu_input_transfer",
