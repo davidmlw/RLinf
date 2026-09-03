@@ -1334,7 +1334,12 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
             else nullcontext()
         )
         with torch.inference_mode(), autocast_context:
-            model_pred = self.get_action(normalized_input)
+            backbone_inputs, action_inputs = self.prepare_input(normalized_input)
+            backbone_outputs = self._forward_backbone(backbone_inputs)
+            model_pred = self.action_head.get_action(
+                backbone_outputs,
+                action_inputs,
+            )
 
         normalized_action = model_pred["action_pred"].float()
         return normalized_action

@@ -231,6 +231,60 @@ def test_n1d7_forward_backbone_prefers_installed_tensorrt_backend():
     torch.testing.assert_close(result["backbone_features"], torch.ones(1, 1, 2))
 
 
+def test_n1d7_eval_action_uses_backend_neutral_backbone():
+    pytest.importorskip("gr00t")
+    from transformers.feature_extraction_utils import BatchFeature
+
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.gr00t_action_model import (
+        GR00T_N1_7_ForRLActionPrediction,
+    )
+
+    class FakeActionHead:
+        def __init__(self):
+            self.calls = 0
+
+        def get_action(self, backbone_outputs, action_inputs):
+            self.calls += 1
+            torch.testing.assert_close(action_inputs["state"], torch.ones(1, 1, 2))
+            return BatchFeature(
+                data={"action_pred": backbone_outputs["backbone_features"] + 1}
+            )
+
+    class FakePolicy:
+        device = torch.device("cpu")
+        compute_dtype = torch.float32
+
+        def __init__(self):
+            self.action_head = FakeActionHead()
+            self.backbone_calls = 0
+
+        @staticmethod
+        def prepare_input(normalized_input):
+            return (
+                BatchFeature(data={"features": normalized_input["features"]}),
+                BatchFeature(data={"state": normalized_input["state"]}),
+            )
+
+        def _forward_backbone(self, backbone_inputs):
+            self.backbone_calls += 1
+            return BatchFeature(
+                data={"backbone_features": backbone_inputs["features"] * 2}
+            )
+
+    policy = FakePolicy()
+    result = GR00T_N1_7_ForRLActionPrediction._get_action_from_normalized_input(
+        policy,
+        {
+            "features": torch.ones(1, 1, 2),
+            "state": torch.ones(1, 1, 2),
+        },
+    )
+
+    assert policy.backbone_calls == 1
+    assert policy.action_head.calls == 1
+    torch.testing.assert_close(result, torch.full((1, 1, 2), 3.0))
+
+
 def test_n1d7_compiled_dit_allows_in_place_weight_update(monkeypatch):
     pytest.importorskip("gr00t")
     from rlinf.models.embodiment.gr00t.gr00t_n1d7.gr00t_action_model import (
