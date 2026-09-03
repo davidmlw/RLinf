@@ -31,7 +31,13 @@ from typing import Any
 SCHEMA = "rlinf.eos.gr00t-tensorrt-site.v1"
 RESULT_SCHEMA = "rlinf.eos.gr00t-tensorrt-result.v1"
 GIT_OID_RE = re.compile(r"[0-9a-f]{40}")
-HELPERS = ("prepare_builder.py", "model_view.py", "official_b1.py")
+HELPERS = (
+    "builder_probe.py",
+    "libero-b1-lfs.json",
+    "prepare_builder.py",
+    "model_view.py",
+    "official_b1.py",
+)
 LAUNCHER_NAME = "start_official_b1.py"
 
 
@@ -79,6 +85,41 @@ def _file(value: object, label: str) -> Path:
     if not path.is_absolute() or not path.is_file() or path.is_symlink():
         raise WorkflowError(f"{label} must be an absolute regular file")
     return path.resolve(strict=True)
+
+
+def _validate_dataset_manifest(dataset: Path, manifest_path: Path) -> dict[str, Any]:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema") != "rlinf.gr00t-n1d7-libero-b1-lfs.v1":
+        raise WorkflowError("dataset LFS manifest has the wrong schema")
+    objects = manifest.get("objects")
+    if not isinstance(objects, list) or len(objects) != 15:
+        raise WorkflowError("dataset LFS manifest must contain exactly 15 objects")
+    observed = []
+    for entry in objects:
+        if not isinstance(entry, dict) or set(entry) != {"path", "lfs_oid", "sha256"}:
+            raise WorkflowError("dataset LFS manifest contains an invalid entry")
+        relative = Path(entry["path"])
+        if relative.is_absolute() or ".." in relative.parts:
+            raise WorkflowError(f"invalid dataset-relative path: {relative}")
+        expected = entry["sha256"]
+        if entry["lfs_oid"] != f"sha256:{expected}":
+            raise WorkflowError(
+                f"LFS OID/content hash mismatch in manifest: {relative}"
+            )
+        path = (dataset / relative).resolve(strict=True)
+        if not path.is_file() or not path.is_relative_to(dataset):
+            raise WorkflowError(
+                f"dataset object is not a regular in-tree file: {relative}"
+            )
+        actual = _sha256(path)
+        if actual != expected:
+            raise WorkflowError(
+                f"dataset object SHA-256 mismatch: {relative}: {actual} != {expected}"
+            )
+        observed.append(
+            {"path": str(relative), "bytes": path.stat().st_size, "sha256": actual}
+        )
+    return {"manifest": str(manifest_path), "objects": observed}
 
 
 def _load(path: Path, *, verify_image: bool = True) -> dict[str, Any]:
@@ -135,6 +176,12 @@ def _load(path: Path, *, verify_image: bool = True) -> dict[str, Any]:
                 pointers.append(str(candidate))
     if pointers:
         raise WorkflowError(f"dataset contains Git LFS pointers: {pointers[:3]}")
+    dataset_manifest = _file(
+        inputs["dataset_lfs_manifest"], "inputs.dataset_lfs_manifest"
+    )
+    if _sha256(dataset_manifest) != inputs["dataset_lfs_manifest_sha256"]:
+        raise WorkflowError("dataset LFS manifest SHA-256 mismatch")
+    dataset_receipt = _validate_dataset_manifest(dataset, dataset_manifest)
     _directory(inputs["model_root"], "inputs.model_root")
     _directory(inputs["backbone_root"], "inputs.backbone_root")
     _file(value["builder"]["uv"], "builder.uv")
@@ -155,6 +202,7 @@ def _load(path: Path, *, verify_image: bool = True) -> dict[str, Any]:
         "source_revision": revision,
         "image": str(image),
         "dataset": str(dataset),
+        "dataset_receipt": dataset_receipt,
         "output_root": str(output),
         # sbatch executes a copied spool file named ``slurm_script``. Resolve
         # the versioned launcher from the source contract, not from __file__.
@@ -374,6 +422,8 @@ def _run_agent(args: argparse.Namespace) -> int:
         builder["uv_cache"],
         "--torchcodec-wheel",
         builder["torchcodec_wheel"],
+        "--dataset",
+        site["inputs"]["dataset_root"],
     ]
     _logged_run(prepare, attempt / "logs/prepare.out", attempt / "logs/prepare.err")
     run = [
@@ -422,7 +472,7 @@ def main() -> int:
             "run-agent": _run_agent,
         }[args.action](args)
     except Exception as error:
-        print(f"W78 TensorRT workflow failed: {error}", file=sys.stderr)
+        print(f"W79 TensorRT workflow failed: {error}", file=sys.stderr)
         return 1
 
 

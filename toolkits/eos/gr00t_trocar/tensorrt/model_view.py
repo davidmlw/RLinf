@@ -45,6 +45,17 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _file_inventory(root: Path) -> dict[str, dict[str, int | str]]:
+    return {
+        str(path.relative_to(root)): {
+            "bytes": path.stat().st_size,
+            "sha256": _sha256(path),
+        }
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and ".cache" not in path.relative_to(root).parts
+    }
+
+
 def materialize_local_model_view(
     model_root: Path, backbone_root: Path, output_root: Path
 ) -> dict[str, Any]:
@@ -89,24 +100,20 @@ def materialize_local_model_view(
 
     _write_object(output_root / "config.json", model_config)
     _write_object(output_root / "processor_config.json", processor_config)
-    source_files = {
-        path.name: {
-            "bytes": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
-        for path in sorted(model_root.iterdir(), key=lambda path: path.name)
-        if path.is_file()
-    }
+    source_files = _file_inventory(model_root)
+    backbone_files = _file_inventory(backbone_root)
     receipt = {
         "schema": "rlinf.gr00t-n1d7-local-model-view.v1",
         "model_root": str(model_root),
         "backbone_root": str(backbone_root),
+        "resolved_backbone_root": str(backbone_root.resolve(strict=True)),
         "backbone_selector": str(selector),
         "selector_preserves_repository_suffix": str(selector).endswith(
             BACKBONE_REPOSITORY_SUFFIX
         ),
         "original_model_name": original_model_name,
         "source_files": source_files,
+        "backbone_files": backbone_files,
         "generated_hashes": {
             name: _sha256(output_root / name) for name in sorted(GENERATED_FILES)
         },

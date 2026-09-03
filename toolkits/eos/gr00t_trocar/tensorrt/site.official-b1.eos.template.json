@@ -30,18 +30,20 @@
     "model_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/GR00T-N1.7-LIBERO/libero_10",
     "model_revision": "2ea293aa20ba7cf5bbf3ba17a5fbcb1a01cbfe21",
     "backbone_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Cosmos-Reason2-2B",
-    "dataset_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T-N1.7/demo_data/libero_demo"
+    "dataset_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/Isaac-GR00T-N1.7/demo_data/libero_demo",
+    "dataset_lfs_manifest": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/RLinf/toolkits/eos/gr00t_trocar/tensorrt/libero-b1-lfs.json",
+    "dataset_lfs_manifest_sha256": "8029230362d0d9cb26ea4183a5dae22685863c9b2b376e134ed20daddff7e671"
   },
   "builder": {
-    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-n1d7-trt-builder-py312-cu128-v2",
+    "env_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-n1d7-trt-builder-py312-cu128-v3",
     "uv": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/gr00t-n1d7-newton-py312-cu128-v1/bin/uv",
     "uv_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/cache/uv",
     "torchcodec_wheel": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/inputs/wheels/torchcodec-0.8.1-cp312-cp312-manylinux_2_28_x86_64.whl",
     "torchcodec_wheel_sha256": "8fc189dcb71739b89230bd56abbc721188f65d9a8c40afcc751b8d2809bbdd4d"
   },
   "experiment": {
-    "name": "W78-official-b1",
-    "output_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W78",
-    "artifact_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/artifacts/W78/tensorrt"
+    "name": "W79-official-b1-r1",
+    "output_root": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W79",
+    "artifact_cache": "/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/artifacts/W79/tensorrt"
   }
 }

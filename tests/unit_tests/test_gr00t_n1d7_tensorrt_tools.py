@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -28,6 +29,7 @@ sys.path.insert(0, str(TOOLS))
 from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
     model_view,
     official_b1,
+    prepare_builder,
     start_official_b1,
 )
 
@@ -125,8 +127,27 @@ def _site(tmp_path: Path) -> Path:
     source = tmp_path / "RLinf"
     helpers = source / "toolkits/eos/gr00t_trocar/tensorrt"
     helpers.mkdir(parents=True)
+    dataset_objects = [
+        (f"objects/object-{index:02d}.bin", f"object-{index}\n".encode())
+        for index in range(15)
+    ]
     for name in (*start_official_b1.HELPERS, "start_official_b1.py"):
+        if name == "libero-b1-lfs.json":
+            continue
         (helpers / name).write_text(f"# {name}\n", encoding="utf-8")
+    lfs_manifest = {
+        "schema": "rlinf.gr00t-n1d7-libero-b1-lfs.v1",
+        "objects": [
+            {
+                "path": path,
+                "lfs_oid": f"sha256:{hashlib.sha256(content).hexdigest()}",
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+            for path, content in dataset_objects
+        ],
+    }
+    lfs_manifest_path = helpers / "libero-b1-lfs.json"
+    lfs_manifest_path.write_text(json.dumps(lfs_manifest), encoding="utf-8")
     revision = _git_init(source)
     gr00t = tmp_path / "Isaac-GR00T"
     (gr00t / "demo").mkdir(parents=True)
@@ -138,7 +159,10 @@ def _site(tmp_path: Path) -> Path:
     cache = tmp_path / "artifacts"
     for root in (model, backbone, dataset, output, cache):
         root.mkdir()
-    (dataset / "episode.parquet").write_bytes(b"materialized" * 100)
+    for relative, content in dataset_objects:
+        path = dataset / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
     image = tmp_path / "image.sqsh"
     image.write_bytes(b"image")
     uv = tmp_path / "uv"
@@ -177,6 +201,8 @@ def _site(tmp_path: Path) -> Path:
             "model_revision": "model-revision",
             "backbone_root": str(backbone),
             "dataset_root": str(dataset),
+            "dataset_lfs_manifest": str(lfs_manifest_path),
+            "dataset_lfs_manifest_sha256": start_official_b1._sha256(lfs_manifest_path),
         },
         "builder": {
             "env_root": str(tmp_path / "env"),
@@ -186,7 +212,7 @@ def _site(tmp_path: Path) -> Path:
             "torchcodec_wheel_sha256": start_official_b1._sha256(torchcodec_wheel),
         },
         "experiment": {
-            "name": "W78-test",
+            "name": "W79-test",
             "output_root": str(output),
             "artifact_cache": str(cache),
         },
@@ -221,3 +247,34 @@ def test_site_rejects_git_lfs_pointer(tmp_path: Path) -> None:
 
     with pytest.raises(start_official_b1.WorkflowError, match="Git LFS pointers"):
         start_official_b1._load(site)
+
+
+def test_site_rejects_dataset_content_hash_mismatch(tmp_path: Path) -> None:
+    site = _site(tmp_path)
+    value = json.loads(site.read_text(encoding="utf-8"))
+    dataset = Path(value["inputs"]["dataset_root"])
+    (dataset / "objects/object-00.bin").write_bytes(b"changed")
+
+    with pytest.raises(start_official_b1.WorkflowError, match="SHA-256 mismatch"):
+        start_official_b1._load(site)
+
+
+def test_builder_environment_removes_python_path_and_user_site() -> None:
+    environment = prepare_builder._isolated_environment(
+        {"PYTHONPATH": "/wrong/prefix", "KEEP": "value"}
+    )
+
+    assert "PYTHONPATH" not in environment
+    assert environment["PYTHONNOUSERSITE"] == "1"
+    assert environment["PIP_NO_CACHE_DIR"] == "1"
+    assert environment["KEEP"] == "value"
+
+
+def test_shipped_libero_manifest_binds_fifteen_lfs_objects() -> None:
+    value = json.loads((TOOLS / "libero-b1-lfs.json").read_text(encoding="utf-8"))
+
+    assert value["schema"] == "rlinf.gr00t-n1d7-libero-b1-lfs.v1"
+    assert len(value["objects"]) == 15
+    assert all(
+        entry["lfs_oid"] == f"sha256:{entry['sha256']}" for entry in value["objects"]
+    )

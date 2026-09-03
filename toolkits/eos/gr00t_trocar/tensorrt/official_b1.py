@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -83,6 +84,9 @@ def _artifact_inventory(root: Path, names: tuple[str, ...]) -> dict[str, Any]:
 def _engine_inventory(root: Path) -> dict[str, Any]:
     import tensorrt as trt
 
+    present = {path.name for path in root.glob("*.engine") if path.is_file()}
+    if present != set(EXPECTED_ENGINES):
+        raise RuntimeError(f"official pipeline engine set differs: {sorted(present)}")
     inventory = _artifact_inventory(root, EXPECTED_ENGINES)
     runtime = trt.Runtime(trt.Logger(trt.Logger.ERROR))
     for name, artifact in inventory.items():
@@ -151,6 +155,12 @@ def _parse_numerics(log: str) -> dict[str, dict[str, float]]:
         )
     if any(value["cosine"] < 0.999 for value in results.values()):
         raise RuntimeError(f"official TensorRT component cosine gate failed: {results}")
+    if not all(
+        math.isfinite(number) for value in results.values() for number in value.values()
+    ):
+        raise RuntimeError(
+            f"official TensorRT numerical result is non-finite: {results}"
+        )
     final = results["final_action_output_comparison"]
     if final["mean_abs"] > 0.005 or final["max_abs"] > 0.05:
         raise RuntimeError(f"official TensorRT final action gate failed: {final}")
@@ -158,17 +168,30 @@ def _parse_numerics(log: str) -> dict[str, dict[str, float]]:
 
 
 def _runtime_packages() -> dict[str, str]:
+    import importlib.metadata
+
     import flash_attn
+    import onnx
+    import onnxscript
     import tensorrt
     import torch
+    import torchcodec
+    import torchvision
     import transformers
 
     return {
+        "python": sys.version,
         "torch": torch.__version__,
+        "torchvision": torchvision.__version__,
         "transformers": transformers.__version__,
         "flash_attn": flash_attn.__version__,
+        "onnx": onnx.__version__,
+        "onnxscript": onnxscript.__version__,
         "tensorrt": tensorrt.__version__,
-        "torchcodec": __import__("torchcodec").__version__,
+        "tensorrt-cu12": importlib.metadata.version("tensorrt-cu12"),
+        "tensorrt-cu12-bindings": importlib.metadata.version("tensorrt-cu12-bindings"),
+        "tensorrt-cu12-libs": importlib.metadata.version("tensorrt-cu12-libs"),
+        "torchcodec": torchcodec.__version__,
     }
 
 
@@ -214,12 +237,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         json.dumps(command, indent=2) + "\n", encoding="utf-8"
     )
     environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
     environment.update(
         {
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONPATH": str(source),
+            "PYTHONNOUSERSITE": "1",
         }
     )
     with (
@@ -234,13 +258,32 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             stderr=stderr,
             check=False,
         )
+    execution = {
+        "command": command,
+        "cwd": str(source),
+        "environment": {
+            name: environment[name]
+            for name in (
+                "HF_HUB_OFFLINE",
+                "PYTHONDONTWRITEBYTECODE",
+                "PYTHONNOUSERSITE",
+                "TRANSFORMERS_OFFLINE",
+            )
+        },
+        "return_code": completed.returncode,
+        "stdout": str(attempt / "logs" / "pipeline.out"),
+        "stderr": str(attempt / "logs" / "pipeline.err"),
+    }
+    (attempt / "pipeline-execution.json").write_text(
+        json.dumps(execution, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     if completed.returncode != 0:
         raise RuntimeError(f"official TensorRT pipeline exited {completed.returncode}")
 
     pipeline_log = output / "pipeline.log"
     numerics = _parse_numerics(pipeline_log.read_text(encoding="utf-8"))
     receipt = {
-        "schema": "rlinf.gr00t-n1d7-official-b1-qualification.v1",
+        "schema": "rlinf.gr00t-n1d7-official-b1-qualification.v2",
         "status": "passed",
         "command": command,
         "isaac_gr00t_revision": subprocess.check_output(
@@ -251,9 +294,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "numerics": numerics,
         "engines": _engine_inventory(output / "engines"),
         "onnx": _onnx_inventory(output / "onnx"),
+        "engine_precision": {
+            "vit.engine": "fp32",
+            **{name: "bf16" for name in EXPECTED_ENGINES if name != "vit.engine"},
+        },
         "export_metadata": json.loads(
             (output / "engines" / "export_metadata.json").read_text(encoding="utf-8")
         ),
+        "export_metadata_sha256": _sha256(output / "engines" / "export_metadata.json"),
     }
     receipt_path = attempt / "qualification.json"
     receipt_path.write_text(
@@ -274,7 +322,7 @@ def main() -> int:
     try:
         receipt = run(args)
     except Exception as error:
-        print(f"W78 official B1 failed: {error}", file=sys.stderr)
+        print(f"W79 official B1 failed: {error}", file=sys.stderr)
         return 1
     print(json.dumps(receipt, indent=2, sort_keys=True))
     return 0

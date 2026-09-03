@@ -1,0 +1,20 @@
+{
+  "schema": "rlinf.gr00t-n1d7-libero-b1-lfs.v1",
+  "objects": [
+    {"path": "data/chunk-000/episode_000000.parquet", "lfs_oid": "sha256:2a593521d58a1e6b3c27d6d91641c2d4c8a12422cc4534d9bfab49b01e532e68", "sha256": "2a593521d58a1e6b3c27d6d91641c2d4c8a12422cc4534d9bfab49b01e532e68"},
+    {"path": "data/chunk-000/episode_000001.parquet", "lfs_oid": "sha256:d02255b7218f7a89db07eea56477d8c283cc3c0afb996a8bf4553b2682fda75d", "sha256": "d02255b7218f7a89db07eea56477d8c283cc3c0afb996a8bf4553b2682fda75d"},
+    {"path": "data/chunk-000/episode_000002.parquet", "lfs_oid": "sha256:60ec6beaaf6b541d4321596758bfb69c96e2b9df8757fc2c9d70db32792790c9", "sha256": "60ec6beaaf6b541d4321596758bfb69c96e2b9df8757fc2c9d70db32792790c9"},
+    {"path": "data/chunk-000/episode_000003.parquet", "lfs_oid": "sha256:21eed03b65778058696f14e676bf6a9d921bd7d128c6b6b2db749fdca1cea0f7", "sha256": "21eed03b65778058696f14e676bf6a9d921bd7d128c6b6b2db749fdca1cea0f7"},
+    {"path": "data/chunk-000/episode_000004.parquet", "lfs_oid": "sha256:8e263ac6c3a1abb853a29d89c99d54c9e6a41a63d8a0acc5b31294804dd74a48", "sha256": "8e263ac6c3a1abb853a29d89c99d54c9e6a41a63d8a0acc5b31294804dd74a48"},
+    {"path": "videos/chunk-000/observation.images.image/episode_000000.mp4", "lfs_oid": "sha256:c931377658e4dc3fd1412bf3fdf1034cae3f3314975d13769fe1e6afa4d63400", "sha256": "c931377658e4dc3fd1412bf3fdf1034cae3f3314975d13769fe1e6afa4d63400"},
+    {"path": "videos/chunk-000/observation.images.image/episode_000001.mp4", "lfs_oid": "sha256:39a8a52b6cd0d6b6782bf5b0379d794cbb3fb1591ccfb58fee2fadec2521a61f", "sha256": "39a8a52b6cd0d6b6782bf5b0379d794cbb3fb1591ccfb58fee2fadec2521a61f"},
+    {"path": "videos/chunk-000/observation.images.image/episode_000002.mp4", "lfs_oid": "sha256:78a3e51504a08559e3491a3ccf4b5813511c23c6b92c1b63fe421a4a8ef4dee7", "sha256": "78a3e51504a08559e3491a3ccf4b5813511c23c6b92c1b63fe421a4a8ef4dee7"},
+    {"path": "videos/chunk-000/observation.images.image/episode_000003.mp4", "lfs_oid": "sha256:21012088a511afc32c0b290651852b193204cd6e7f8aaa1d2b6ecc03b90a9dc3", "sha256": "21012088a511afc32c0b290651852b193204cd6e7f8aaa1d2b6ecc03b90a9dc3"},
+    {"path": "videos/chunk-000/observation.images.image/episode_000004.mp4", "lfs_oid": "sha256:1628ead60e38bcaaac3aa54f80fb3a2dbd65dcd57b2aeca3567f8b0bc026df0a", "sha256": "1628ead60e38bcaaac3aa54f80fb3a2dbd65dcd57b2aeca3567f8b0bc026df0a"},
+    {"path": "videos/chunk-000/observation.images.wrist_image/episode_000000.mp4", "lfs_oid": "sha256:fbc756399adbd9a61f2e27d45a0be71f7761e27cc862cfd13303e318be290c30", "sha256": "fbc756399adbd9a61f2e27d45a0be71f7761e27cc862cfd13303e318be290c30"},
+    {"path": "videos/chunk-000/observation.images.wrist_image/episode_000001.mp4", "lfs_oid": "sha256:ba29005129c92ecbac7db91bbcc089b6eb3e9072a8a72255aa353d9f0c6c74dd", "sha256": "ba29005129c92ecbac7db91bbcc089b6eb3e9072a8a72255aa353d9f0c6c74dd"},
+    {"path": "videos/chunk-000/observation.images.wrist_image/episode_000002.mp4", "lfs_oid": "sha256:86dfa08a45a3330adf4bcbbaa0555f9950d945ea5ab516db0c7464296504fd77", "sha256": "86dfa08a45a3330adf4bcbbaa0555f9950d945ea5ab516db0c7464296504fd77"},
+    {"path": "videos/chunk-000/observation.images.wrist_image/episode_000003.mp4", "lfs_oid": "sha256:3014e9283eb3923ff5396de35e2d0c3ed0c59e74b1885ac043df3d3e6b9de26c", "sha256": "3014e9283eb3923ff5396de35e2d0c3ed0c59e74b1885ac043df3d3e6b9de26c"},
+    {"path": "videos/chunk-000/observation.images.wrist_image/episode_000004.mp4", "lfs_oid": "sha256:74fb454476943866d9d5fb0792d28f99b04c68d7c2a855ef52e263d465ed2eb7", "sha256": "74fb454476943866d9d5fb0792d28f99b04c68d7c2a855ef52e263d465ed2eb7"}
+  ]
+}

@@ -24,13 +24,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-EXPECTED = {
-    "torch": "2.9.0+cu128",
-    "transformers": "4.57.3",
-    "flash_attn": "2.8.3",
-    "tensorrt": "10.15.1.29",
-    "torchcodec": "0.8.1",
-}
+from builder_probe import EXPECTED_DISTRIBUTIONS
 
 
 def _sha256(path: Path) -> str:
@@ -41,22 +35,41 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _probe(python: Path) -> dict[str, str]:
-    script = (
-        "import json, torch, transformers, flash_attn, tensorrt, torchcodec; "
-        "print(json.dumps({'torch': torch.__version__, "
-        "'transformers': transformers.__version__, "
-        "'flash_attn': flash_attn.__version__, "
-        "'tensorrt': tensorrt.__version__, "
-        "'torchcodec': torchcodec.__version__}, sort_keys=True))"
-    )
+def _isolated_environment(environment: dict[str, str]) -> dict[str, str]:
+    isolated = dict(environment)
+    isolated.pop("PYTHONPATH", None)
+    isolated["PYTHONNOUSERSITE"] = "1"
+    isolated["PIP_NO_CACHE_DIR"] = "1"
+    return isolated
+
+
+def _run_probe(env_root: Path, source: Path, dataset: Path) -> dict[str, object]:
+    output = env_root / "rlinf-trt-builder-probe.json"
+    video = (
+        dataset / "videos/chunk-000/observation.images.image/episode_000000.mp4"
+    ).resolve(strict=True)
+    command = [
+        str(env_root / "bin/python"),
+        str(Path(__file__).with_name("builder_probe.py")),
+        "--env-root",
+        str(env_root),
+        "--video",
+        str(video),
+        "--output",
+        str(output),
+    ]
     completed = subprocess.run(
-        [str(python), "-c", script], check=False, capture_output=True, text=True
+        command,
+        cwd=source,
+        env=_isolated_environment(dict(os.environ)),
+        check=False,
+        capture_output=True,
+        text=True,
     )
     if completed.returncode:
         diagnostic = completed.stderr.strip() or completed.stdout.strip()
-        raise RuntimeError(f"builder package probe failed: {diagnostic}")
-    return json.loads(completed.stdout)
+        raise RuntimeError(f"builder package/video probe failed: {diagnostic}")
+    return json.loads(output.read_text(encoding="utf-8"))
 
 
 def prepare(
@@ -65,8 +78,10 @@ def prepare(
     uv: Path,
     uv_cache: Path,
     torchcodec_wheel: Path,
+    dataset: Path,
 ) -> dict[str, object]:
     source = source.resolve(strict=True)
+    dataset = dataset.resolve(strict=True)
     uv = uv.resolve(strict=True)
     for name in ("pyproject.toml", "uv.lock"):
         if not (source / name).is_file():
@@ -74,14 +89,24 @@ def prepare(
     torchcodec_wheel = torchcodec_wheel.resolve(strict=True)
     inputs = {name: _sha256(source / name) for name in ("pyproject.toml", "uv.lock")}
     inputs["torchcodec_wheel"] = _sha256(torchcodec_wheel)
+    inputs["builder_probe"] = _sha256(Path(__file__).with_name("builder_probe.py"))
+    decode_video = (
+        dataset / "videos/chunk-000/observation.images.image/episode_000000.mp4"
+    ).resolve(strict=True)
+    inputs["decode_video"] = _sha256(decode_video)
     manifest_path = env_root / "rlinf-trt-builder-manifest.json"
     python = env_root / "bin" / "python"
     if manifest_path.is_file() and python.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest.get("input_hashes") != inputs:
             raise RuntimeError("existing TensorRT builder input hashes differ")
-        if _probe(python) != EXPECTED:
+        probe = _run_probe(env_root, source, dataset)
+        if probe.get("packages") != EXPECTED_DISTRIBUTIONS:
             raise RuntimeError("existing TensorRT builder package versions differ")
+        if _sha256(env_root / "rlinf-trt-builder-probe.json") != manifest.get(
+            "probe_sha256"
+        ):
+            raise RuntimeError("existing TensorRT builder probe receipt changed")
         return manifest
     if env_root.exists():
         raise RuntimeError(
@@ -92,7 +117,7 @@ def prepare(
     if staging.exists():
         raise RuntimeError(f"builder staging path already exists: {staging}")
     uv_cache.mkdir(parents=True, exist_ok=True)
-    environment = dict(os.environ)
+    environment = _isolated_environment(dict(os.environ))
     environment.update(
         {
             "UV_PROJECT_ENVIRONMENT": str(staging),
@@ -100,48 +125,66 @@ def prepare(
             "UV_LINK_MODE": "copy",
         }
     )
+    promoted = False
     try:
         subprocess.run(
             [str(uv), "sync", "--frozen", "--no-dev", "--project", str(source)],
             check=True,
             env=environment,
         )
-        # TorchCodec 0.8.1 is the Torch 2.9-compatible bugfix that removes the
-        # 0.8.0 hard dependency on libnvcuvid. The offline LIBERO fixture uses
-        # its CPU fallback on H100 compute containers.
+        staging_python = staging / "bin/python"
+        subprocess.run(
+            [str(staging_python), "-m", "ensurepip", "--upgrade"],
+            check=True,
+            env=environment,
+        )
+        # Keep uv for the frozen project environment, but use the target
+        # interpreter's pip for the one reviewed compatibility overlay.
         subprocess.run(
             [
-                str(uv),
+                str(staging_python),
+                "-m",
                 "pip",
                 "install",
-                "--no-cache",
-                "--python",
-                str(staging / "bin" / "python"),
-                "--reinstall",
+                "--no-deps",
+                "--force-reinstall",
+                "--no-cache-dir",
                 str(torchcodec_wheel),
             ],
             check=True,
             env=environment,
         )
-        packages = _probe(staging / "bin" / "python")
-        if packages != EXPECTED:
-            raise RuntimeError(
-                f"TensorRT builder package versions differ: {packages} != {EXPECTED}"
-            )
+        staging.rename(env_root)
+        promoted = True
+        pip_show = subprocess.run(
+            [str(env_root / "bin/python"), "-m", "pip", "show", "-f", "torchcodec"],
+            check=True,
+            env=environment,
+            capture_output=True,
+            text=True,
+        )
+        pip_show_path = env_root / "torchcodec-pip-show.txt"
+        pip_show_path.write_text(pip_show.stdout, encoding="utf-8")
+        probe = _run_probe(env_root, source, dataset)
+        if probe.get("packages") != EXPECTED_DISTRIBUTIONS:
+            raise RuntimeError("TensorRT builder package versions differ")
         manifest = {
-            "schema": "rlinf.gr00t-n1d7-trt-builder.v1",
+            "schema": "rlinf.gr00t-n1d7-trt-builder.v2",
             "source": str(source),
             "input_hashes": inputs,
-            "packages": packages,
+            "packages": probe["packages"],
+            "probe_sha256": _sha256(env_root / "rlinf-trt-builder-probe.json"),
+            "pip_show_sha256": _sha256(pip_show_path),
         }
-        (staging / "rlinf-trt-builder-manifest.json").write_text(
+        manifest_path.write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        staging.rename(env_root)
         return manifest
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
+        if promoted and not manifest_path.is_file():
+            shutil.rmtree(env_root, ignore_errors=True)
         raise
 
 
@@ -152,6 +195,7 @@ def main() -> None:
     parser.add_argument("--uv", type=Path, required=True)
     parser.add_argument("--uv-cache", type=Path, required=True)
     parser.add_argument("--torchcodec-wheel", type=Path, required=True)
+    parser.add_argument("--dataset", type=Path, required=True)
     args = parser.parse_args()
     print(
         json.dumps(
@@ -161,6 +205,7 @@ def main() -> None:
                 args.uv,
                 args.uv_cache,
                 args.torchcodec_wheel,
+                args.dataset,
             ),
             indent=2,
             sort_keys=True,
