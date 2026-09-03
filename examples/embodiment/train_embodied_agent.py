@@ -125,8 +125,11 @@ def main(cfg) -> None:
         reward=reward_group,
     )
 
-    runner.init_workers()
-    runner.run()
+    try:
+        runner.init_workers()
+        runner.run()
+    finally:
+        rollout_group.shutdown_hybrid_runtime().wait()
 
 
 if __name__ == "__main__":

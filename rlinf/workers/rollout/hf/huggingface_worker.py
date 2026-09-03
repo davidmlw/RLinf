@@ -1355,7 +1355,9 @@ class MultiStepRolloutWorker(Worker):
                 eval_batch_size=self.per_node_eval_batch_size,
             )
 
-    def _close(self) -> None:
+    def shutdown_hybrid_runtime(self) -> None:
+        """Release optional hybrid inference resources before worker teardown."""
+
         model = getattr(self, "hf_model", None)
         if model is not None:
             self._log_hybrid_runtime_telemetry("closing")
