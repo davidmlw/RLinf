@@ -15,6 +15,7 @@
 import asyncio
 import copy
 import gc
+import json
 import time
 from typing import Any, Callable, Literal, Optional
 
@@ -459,6 +460,52 @@ class MultiStepRolloutWorker(Worker):
             "rollout/pinned_feature_wait_seconds": self._pinned_stream_wait_seconds,
         }
 
+    def _log_hybrid_runtime_telemetry(self, stage: str) -> None:
+        provider = getattr(self.hf_model, "hybrid_runtime_telemetry", None)
+        if not callable(provider):
+            return
+        telemetry = provider()
+        backbone = telemetry["tensorrt_backbone"]
+        payload = {
+            "stage": stage,
+            "rank": self._rank,
+            "revision": int(self.version),
+            "compiled_dit": telemetry["compiled_dit"],
+            "tensorrt_backbone": None,
+        }
+        if backbone is not None:
+            payload["tensorrt_backbone"] = {
+                "receipt_sha256": backbone["artifacts"]["receipt_sha256"],
+                "runtime": backbone["runtime"],
+                "structure": backbone["structure"],
+                "closed": backbone["closed"],
+                "vit": {
+                    key: backbone["vit"][key]
+                    for key in (
+                        "load_count",
+                        "context_count",
+                        "allocation_count",
+                        "execute_count",
+                        "event_record_count",
+                        "resident_host_sync_count",
+                        "close_event_sync_count",
+                    )
+                },
+                "llm": {
+                    key: backbone["llm"][key]
+                    for key in (
+                        "load_count",
+                        "context_count",
+                        "allocation_count",
+                        "execute_count",
+                        "event_record_count",
+                        "resident_host_sync_count",
+                        "close_event_sync_count",
+                    )
+                },
+            }
+        self.log_info(f"RLINF_HYBRID_RUNTIME {json.dumps(payload, sort_keys=True)}")
+
     def init_worker(self):
         rollout_model_config = copy.deepcopy(self.model_cfg)
         with open_dict(rollout_model_config):
@@ -520,6 +567,7 @@ class MultiStepRolloutWorker(Worker):
                 "torch_compile_mode", "max-autotune-no-cudagraphs"
             )
             self.hf_model.enable_torch_compile(mode=mode)
+        self._log_hybrid_runtime_telemetry("initialized")
         if self.enable_cuda_graph and not self.enable_offload:
             self.hf_model.capture_cuda_graph(
                 train_batch_size=self.per_node_train_batch_size,
@@ -1029,6 +1077,7 @@ class MultiStepRolloutWorker(Worker):
             )
         if hasattr(self.hf_model, "set_global_step"):
             self.hf_model.set_global_step(applied_version)
+        self._log_hybrid_runtime_telemetry("revision_adopted")
 
         gc.collect()
         self.torch_platform.empty_cache()
@@ -1205,6 +1254,8 @@ class MultiStepRolloutWorker(Worker):
             self._measurement_epoch = epoch
             await self.generate_one_epoch(input_channel, output_channel)
 
+        self._log_hybrid_runtime_telemetry("rollout_complete")
+
         if self.enable_offload:
             self.offload_model()
 
@@ -1306,6 +1357,8 @@ class MultiStepRolloutWorker(Worker):
 
     def _close(self) -> None:
         model = getattr(self, "hf_model", None)
+        if model is not None:
+            self._log_hybrid_runtime_telemetry("closing")
         close_hybrid_runtime = getattr(model, "close_hybrid_runtime", None)
         if callable(close_hybrid_runtime):
             close_hybrid_runtime()
