@@ -483,3 +483,40 @@ def test_refittable_dit_binding_gate_rejects_dynamic_batch() -> None:
 
     with pytest.raises(RuntimeError, match="DiT binding mismatch"):
         build_gate._validate_bindings(bindings)
+
+
+def test_refitter_inventory_allows_recorded_graph_constants(monkeypatch) -> None:
+    mapping = {
+        "dit_refit": {
+            "entries": [
+                {
+                    "initializer": "dit.linear.bias",
+                    "parameter_count": 3,
+                }
+            ]
+        }
+    }
+    inventory = {
+        "named_weights": [
+            {"name": "dit.linear.bias", "count": 3, "dtype": "BF16"},
+            {"name": "/dit/Constant_7_output_0", "count": 1, "dtype": "INT64"},
+        ]
+    }
+    monkeypatch.setattr(build_gate, "EXPECTED_REFIT_WEIGHTS", 1)
+    value = build_gate._validate_refitter_against_map(inventory, mapping)
+
+    assert value["mapped_trainable_count"] == 1
+    assert value["derived_constant_count"] == 1
+    assert value["derived_constants_policy"] == "retain_plan_value_not_updated"
+
+
+def test_refitter_inventory_rejects_missing_trainable_weight(monkeypatch) -> None:
+    mapping = {
+        "dit_refit": {
+            "entries": [{"initializer": "dit.linear.bias", "parameter_count": 3}]
+        }
+    }
+
+    monkeypatch.setattr(build_gate, "EXPECTED_REFIT_WEIGHTS", 1)
+    with pytest.raises(RuntimeError, match="does not expose every trainable"):
+        build_gate._validate_refitter_against_map({"named_weights": []}, mapping)

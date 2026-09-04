@@ -112,7 +112,6 @@ def _refitter_inventory(refitter: Any) -> dict[str, Any]:
                 "dtype": _dtype_name(prototype.dtype),
                 "count": int(prototype.size),
                 "nbytes": int(prototype.nbytes),
-                "location": _dtype_name(refitter.get_weights_location(name)),
             }
         )
     layer_names, roles = refitter.get_all()
@@ -139,14 +138,17 @@ def _refitter_inventory(refitter: Any) -> dict[str, Any]:
 
 def _validate_refitter_against_map(
     inventory: dict[str, Any], mapping: dict[str, Any]
-) -> None:
+) -> dict[str, Any]:
     mapped = {entry["initializer"]: entry for entry in mapping["dit_refit"]["entries"]}
     actual = {entry["name"]: entry for entry in inventory["named_weights"]}
-    if set(actual) != set(mapped):
+    if len(mapped) != EXPECTED_REFIT_WEIGHTS:
+        raise RuntimeError(f"unexpected mapped trainable weight count: {len(mapped)}")
+    missing = sorted(set(mapped) - set(actual))
+    extras = sorted(set(actual) - set(mapped))
+    if missing:
         raise RuntimeError(
-            "TensorRT refitter inventory differs from the frozen ONNX map: "
-            f"missing={sorted(set(mapped) - set(actual))[:8]}, "
-            f"extra={sorted(set(actual) - set(mapped))[:8]}"
+            "TensorRT refitter does not expose every trainable ONNX initializer: "
+            f"missing={missing[:8]}"
         )
     mismatches = {}
     for name, expected in mapped.items():
@@ -160,8 +162,23 @@ def _validate_refitter_against_map(
         raise RuntimeError(
             f"TensorRT prototype mismatch: {list(mismatches.items())[:4]}"
         )
-    if len(actual) != EXPECTED_REFIT_WEIGHTS:
-        raise RuntimeError(f"unexpected refittable weight count: {len(actual)}")
+    derived = [actual[name] for name in extras]
+    invalid = [item for item in derived if not item["name"].startswith("/dit/")]
+    if invalid:
+        raise RuntimeError(
+            "unexpected non-parameter refitter names outside the DiT graph: "
+            f"{invalid[:8]}"
+        )
+    return {
+        "mapped_trainable_count": len(mapped),
+        "mapped_trainable_digest": _canonical_sha256(
+            [actual[name] for name in sorted(mapped)]
+        ),
+        "derived_constant_count": len(extras),
+        "derived_constant_names": extras,
+        "derived_constant_digest": _canonical_sha256(extras),
+        "derived_constants_policy": "retain_plan_value_not_updated",
+    }
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -242,7 +259,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     refitter = trt.Refitter(engine, logger)
     refitter.weights_validation = True
     inventory = _refitter_inventory(refitter)
-    _validate_refitter_against_map(inventory, mapping)
+    classification = _validate_refitter_against_map(inventory, mapping)
 
     receipt = {
         "schema": "rlinf.gr00t-n1d7-trocar-true-b8-refittable-dit-engine.v1",
@@ -271,7 +288,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "num_optimization_profiles": int(engine.num_optimization_profiles),
             "bindings": bindings,
         },
-        "refitter": inventory,
+        "refitter": {**inventory, "classification": classification},
         "memory": {
             "total_device_bytes": total,
             "free_before_deserialize": free_before,
