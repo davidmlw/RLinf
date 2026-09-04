@@ -558,6 +558,7 @@ def test_revision_zero_diagnostic_is_wired_to_existing_ppo_gate() -> None:
     assert "W83_TRT_DIT_DIAGNOSTIC" in runner_source
     assert "W83_TRT_DIT_ONLINE" in runner_source
     assert "++rollout.model.tensorrt_dit.online_refit=true" in runner_source
+    assert "++rollout.model.tensorrt_dit.lineage_receipt_mode=" in runner_source
     assert "++rollout.model.enable_eager_dit_timing=true" in runner_source
     assert "revision_zero_PPO_identity_diagnostic_no_online_refit" in runtime_source
     assert "online_double_slot_refittable_tensorrt_dit" in runtime_source
@@ -646,6 +647,7 @@ def test_online_refit_adopts_only_the_verified_inactive_slot(monkeypatch) -> Non
     executor._memory = {"minimum_free_device_bytes": 1}
     executor.refit_records = []
     executor.probe_each_revision = True
+    executor.lineage_receipt_mode = "qualification_sha256"
     executor._source_state = lambda: {"weight": object()}
     executor._stage_weights = lambda _source: (
         {"weight": object()},
@@ -814,6 +816,7 @@ def test_online_refit_live_probe_failure_fail_stops() -> None:
         ({"probe_each_revision": False}, "probe every revision"),
         ({"minimum_free_device_bytes": (8 << 30) - 1}, "at least 8 GiB"),
         ({"ppo_authority_status": "passed"}, "failed PPO authority"),
+        ({"lineage_receipt_mode": "disabled"}, "lineage_receipt_mode"),
     ],
 )
 def test_online_refit_rejects_weakened_safety_config(override, message) -> None:
@@ -831,6 +834,17 @@ def test_online_refit_rejects_weakened_safety_config(override, message) -> None:
 
     with pytest.raises(ValueError, match=message):
         RefittableTensorRTDiT(None, config)
+
+
+def test_online_refit_gpu_validation_mode_skips_host_sha_receipt() -> None:
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_dit import (
+        RefittableTensorRTDiT,
+    )
+
+    executor = RefittableTensorRTDiT.__new__(RefittableTensorRTDiT)
+    executor.lineage_receipt_mode = "gpu_transform_validation"
+
+    assert executor._lineage_digests({}) == (None, None, 0.0)
 
 
 def test_eager_timing_waits_for_end_event(monkeypatch) -> None:

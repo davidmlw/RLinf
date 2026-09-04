@@ -43,6 +43,7 @@ _MIN_PROBE_COSINE = 0.999
 _MAX_PROBE_RELATIVE_L2 = 0.05
 _MIN_FREE_DEVICE_BYTES = 8 << 30
 _APPROXIMATE_PPO_AUTHORITY = "failed_ratio_kl_approximate_behavior_only"
+_LINEAGE_RECEIPT_MODES = {"qualification_sha256", "gpu_transform_validation"}
 
 
 def _sha256(path: Path) -> str:
@@ -349,6 +350,14 @@ class RefittableTensorRTDiT:
         self.minimum_headroom = int(
             config.get("minimum_free_device_bytes", _MIN_FREE_DEVICE_BYTES)
         )
+        self.lineage_receipt_mode = str(
+            config.get("lineage_receipt_mode", "qualification_sha256")
+        )
+        if self.lineage_receipt_mode not in _LINEAGE_RECEIPT_MODES:
+            raise ValueError(
+                "TensorRT DiT lineage_receipt_mode must be one of "
+                f"{sorted(_LINEAGE_RECEIPT_MODES)}"
+            )
         self.ppo_authority_status = config.get("ppo_authority_status")
         if self.online_refit:
             if not self.probe_each_revision:
@@ -551,7 +560,9 @@ class RefittableTensorRTDiT:
 
     def _lineage_digests(
         self, staged: Mapping[str, torch.Tensor]
-    ) -> tuple[str, str, float]:
+    ) -> tuple[str | None, str | None, float]:
+        if self.lineage_receipt_mode == "gpu_transform_validation":
+            return None, None, 0.0
         started = time.perf_counter()
         source_digest = _ordered_source_digest(
             self.action_model, self.artifacts["entries"]
@@ -718,6 +729,7 @@ class RefittableTensorRTDiT:
                     **staging_validation,
                     "source_digest": source_digest,
                     "staging_digest": staging_digest,
+                    "lineage_receipt_mode": self.lineage_receipt_mode,
                     "lineage_digest_wall_ms": lineage_wall_ms,
                     **refit,
                     "probe": probe,
@@ -976,6 +988,7 @@ class RefittableTensorRTDiT:
             "expected_source_digest": self.expected_source_digest,
             "observed_source_digest": self.observed_source_digest,
             "observed_staging_digest": self.observed_staging_digest,
+            "lineage_receipt_mode": self.lineage_receipt_mode,
             "probe_input_digest": self._probe_input_digest,
             "initial_live_probe_pending": self._initial_probe_pending,
             "active_revision": self.active_revision,
