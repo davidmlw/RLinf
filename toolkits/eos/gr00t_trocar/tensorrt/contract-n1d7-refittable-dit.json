@@ -39,12 +39,18 @@
     "apply_order": [
       "receive_and_apply_complete_action_head_patch_in_place",
       "wait_for_weight_apply_stream",
-      "validate_revision_and_parameter_map",
+      "mark_PyTorch_head_revision_as_updated",
+      "hash_ordered_raw_DiT_source_weight_bytes",
       "materialize_transposed_DiT_weight_staging",
+      "verify_ordered_post_transform_staging_bytes",
       "refit_inactive_TensorRT_DiT_engine",
-      "verify_refit_inventory_and_candidate_output",
+      "verify_refitter_inventory_and_prototypes",
+      "run_fixed_probe_and_compare_PyTorch_vs_TensorRT_metrics",
+      "require_candidate_output_change_from_previous_revision",
       "publish_revision_and_atomically_swap_active_engine"
-    ]
+    ],
+    "post_patch_failure_policy": "fail_stop_worker_because_PyTorch_head_cannot_be_rolled_back",
+    "future_transactional_option": "stage_or_restore_the_complete_action_head_before_allowing_old_revision_recovery"
   },
   "offline_parameter_gate": {
     "expected_checkpoint_action_head_tensors": 537,
@@ -73,24 +79,65 @@
     "contexts_remain_valid_after_successful_refit": true,
     "concurrent_inference_and_refit": false,
     "adoption": "double_buffered_inactive_engine_refit_then_verified_swap",
-    "failure_policy": "keep_previous_active_engine_and_revision_or_fail_stop",
+    "failure_policy": "fail_stop_after_any_possible_PyTorch_head_mutation",
+    "clean_abort_allowed": "only_before_the_PyTorch_head_patch_begins",
     "single_engine_in_place_failure_rollback_claim": false
   },
   "revision_gate": {
     "strictly_monotonic": true,
-    "active_revision_changes_only_after_candidate_verification": true,
+    "track_separately": [
+      "PyTorch_action_head_revision",
+      "TensorRT_DiT_revision"
+    ],
+    "inference_requires_equal_revisions": true,
+    "TensorRT_revision_changes_only_after_candidate_verification": true,
+    "verification_digests_are_distinct": true,
     "required_receipt_fields": [
       "actor_revision",
+      "PyTorch_action_head_revision",
+      "TensorRT_DiT_revision",
       "action_head_patch_identity",
       "parameter_map_sha256",
-      "source_weight_digest",
+      "ordered_raw_source_weight_digest",
+      "ordered_post_transform_staging_digest",
       "refitter_inventory_digest",
+      "refitter_prototype_digest",
+      "probe_input_digest",
+      "PyTorch_probe_output_digest",
+      "TensorRT_probe_output_digest",
+      "probe_metrics_digest",
+      "candidate_output_changed_from_previous_revision",
       "refit_wall_ms",
       "refit_device_ms",
       "staging_wall_ms",
-      "candidate_output_digest",
       "active_engine_slot",
       "previous_engine_slot"
+    ],
+    "actual_tensor_bytes_required": true,
+    "header_only_metadata_is_insufficient_for_artifact_promotion": true
+  },
+  "memory_preflight": {
+    "safety_headroom_bytes": 8589934592,
+    "observed_static_bytes": {
+      "rollout_PyTorch_action_head_bf16": 3241031936,
+      "one_DiT_BF16_weight_payload": 2183444480,
+      "transposed_staging_BF16": 1865416704
+    },
+    "do_not_infer_device_allocation_from_plan_file_size": true,
+    "measure_before_each_allocation": [
+      "free_and_total_device_bytes",
+      "candidate_engine_device_resident_bytes",
+      "candidate_context_device_bytes",
+      "refit_workspace_bytes",
+      "transformed_staging_bytes",
+      "verification_IO_bytes"
+    ],
+    "double_buffer_gate": "free_before_must_cover_all_requested_bytes_plus_safety_headroom",
+    "insufficient_memory_disposition": "single_engine_inventory_only",
+    "single_engine_forbidden_claims": [
+      "revision_rollback",
+      "resident_latency_promotion",
+      "PPO_authority"
     ]
   },
   "ppo_authority": {
