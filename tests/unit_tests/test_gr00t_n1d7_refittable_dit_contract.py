@@ -754,8 +754,8 @@ def test_online_refit_freezes_first_live_input_as_revision_probe() -> None:
     executor.shadow_eager = False
 
     result = executor(
-        hidden_states=torch.zeros((8, 41, 1536), dtype=torch.bfloat16),
-        encoder_hidden_states=torch.zeros((8, 208, 2048), dtype=torch.bfloat16),
+        hidden_states=torch.zeros((8, 41, 1536), dtype=torch.float32),
+        encoder_hidden_states=torch.zeros((8, 208, 2048), dtype=torch.float32),
         timestep=torch.full((8,), 250, dtype=torch.int64),
         image_mask=torch.ones((8, 208), dtype=torch.bool),
         backbone_attention_mask=torch.ones((8, 208), dtype=torch.bool),
@@ -764,6 +764,8 @@ def test_online_refit_freezes_first_live_input_as_revision_probe() -> None:
     assert result is output
     assert executor._initial_probe_pending is False
     assert executor._probe_input_digest is not None
+    assert executor._probe["sa_embs"].dtype == torch.bfloat16
+    assert executor._probe["vl_embs"].dtype == torch.bfloat16
     assert executor.refit_records[-1]["initial_live_probe"]["cosine"] == pytest.approx(
         1.0, abs=2e-7
     )
