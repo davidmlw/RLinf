@@ -782,6 +782,9 @@ class RefittableTensorRTDiT:
             "image_mask": image_mask,
             "backbone_attention_mask": backbone_attention_mask,
         }
+        for name in ("sa_embs", "vl_embs"):
+            if inputs[name].dtype == torch.float32:
+                inputs[name] = inputs[name].to(dtype=torch.bfloat16)
         expected_shapes = {
             "sa_embs": (8, 41, 1536),
             "vl_embs": (8, 208, 2048),
@@ -794,9 +797,22 @@ class RefittableTensorRTDiT:
             raise RuntimeError(
                 f"TensorRT DiT live ABI mismatch: {actual_shapes} != {expected_shapes}"
             )
+        expected_dtypes = {
+            "sa_embs": torch.bfloat16,
+            "vl_embs": torch.bfloat16,
+            "timestep": torch.int64,
+            "image_mask": torch.bool,
+            "backbone_attention_mask": torch.bool,
+        }
+        actual_dtypes = {name: value.dtype for name, value in inputs.items()}
+        if actual_dtypes != expected_dtypes:
+            raise RuntimeError(
+                f"TensorRT DiT live dtype mismatch: "
+                f"{actual_dtypes} != {expected_dtypes}"
+            )
         for name in ("vl_embs", "image_mask", "backbone_attention_mask"):
             self.engine.set_runtime_tensor_shape(name, inputs[name].shape)
-        timing = hidden_states.is_cuda
+        timing = inputs["sa_embs"].is_cuda
         if timing:
             stream = torch.cuda.current_stream()
             timing_start = torch.cuda.Event(enable_timing=True)
@@ -813,11 +829,11 @@ class RefittableTensorRTDiT:
         if self.shadow_eager:
             with torch.no_grad():
                 eager_output = self.eager_forward(
-                    hidden_states=hidden_states,
-                    encoder_hidden_states=encoder_hidden_states,
-                    timestep=timestep,
-                    image_mask=image_mask,
-                    backbone_attention_mask=backbone_attention_mask,
+                    hidden_states=inputs["sa_embs"],
+                    encoder_hidden_states=inputs["vl_embs"],
+                    timestep=inputs["timestep"],
+                    image_mask=inputs["image_mask"],
+                    backbone_attention_mask=inputs["backbone_attention_mask"],
                 )
             self._record_shadow(timestep, eager_output, output)
         return output
