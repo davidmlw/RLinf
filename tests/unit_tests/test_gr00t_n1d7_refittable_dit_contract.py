@@ -16,12 +16,15 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "toolkits/eos/gr00t_trocar/tensorrt"
 sys.path.insert(0, str(TOOLS))
 
+import build_refittable_dit_b8 as build_gate  # noqa: E402
+import export_refittable_dit_b8 as export_gate  # noqa: E402
 import refittable_dit_contract as contract  # noqa: E402
 
 
@@ -421,3 +424,62 @@ def test_offline_receipt_requires_explicit_generation_environment() -> None:
     assert '"checkpoint_header_sha256"' in source
     assert '"onnx_version"' in source
     assert '"python_version"' in source
+
+
+class _FakeTensor:
+    def __init__(self, shape, dtype):
+        self.shape = shape
+        self.dtype = dtype
+
+    def contiguous(self):
+        return self
+
+    def numpy(self):
+        return np.zeros(self.shape, dtype=np.uint8)
+
+
+class _Capture:
+    def __init__(self):
+        self.sa_embs = _FakeTensor((8, 41, 1536), "torch.bfloat16")
+        self.vl_embs = _FakeTensor((8, 208, 2048), "torch.bfloat16")
+        self.timestep = _FakeTensor((8,), "torch.int64")
+        self.image_mask = _FakeTensor((8, 208), "torch.bool")
+        self.backbone_attention_mask = _FakeTensor((8, 208), "torch.bool")
+
+
+def test_refittable_dit_export_capture_contract() -> None:
+    value = export_gate.validate_capture(_Capture())
+
+    assert value["sa_embs"]["shape"] == [8, 41, 1536]
+    assert value["vl_embs"]["shape"] == [8, 208, 2048]
+    assert value["image_mask"]["dtype"] == "torch.bool"
+
+
+def test_refittable_dit_export_rejects_b1_capture() -> None:
+    capture = _Capture()
+    capture.timestep = _FakeTensor((1,), "torch.int64")
+
+    with pytest.raises(RuntimeError, match="captured DiT ABI mismatch"):
+        export_gate.validate_capture(capture)
+
+
+def test_refittable_dit_profile_preserves_static_batch_and_action_sequence() -> None:
+    assert build_gate._profile_shape((8, -1, 2048), 208) == (8, 208, 2048)
+    assert build_gate._profile_shape((8, 41, 1536), 208) == (8, 41, 1536)
+
+
+def test_refittable_dit_binding_gate_rejects_dynamic_batch() -> None:
+    bindings = [
+        {"name": "sa_embs", "mode": "input", "shape": [-1, 41, 1536]},
+        {"name": "vl_embs", "mode": "input", "shape": [-1, -1, 2048]},
+        {"name": "timestep", "mode": "input", "shape": [-1]},
+        {"name": "image_mask", "mode": "input", "shape": [-1, -1]},
+        {
+            "name": "backbone_attention_mask",
+            "mode": "input",
+            "shape": [-1, -1],
+        },
+    ]
+
+    with pytest.raises(RuntimeError, match="DiT binding mismatch"):
+        build_gate._validate_bindings(bindings)
