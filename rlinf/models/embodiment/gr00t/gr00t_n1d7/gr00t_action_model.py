@@ -975,7 +975,28 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         }
         self._compiled_dit_mode = mode
 
-    def verify_online_update_contract(self) -> None:
+    def enable_tensorrt_dit_diagnostic(self, config: Mapping[str, Any]) -> None:
+        """Use the refittable DiT plan for the revision-zero PPO identity gate."""
+
+        if getattr(self, "_tensorrt_dit_diagnostic", None) is not None:
+            raise RuntimeError("TensorRT DiT diagnostic is already enabled")
+        if getattr(self, "_compiled_dit_forward", None) is not None:
+            raise RuntimeError(
+                "TensorRT and compiled DiT executors are mutually exclusive"
+            )
+        from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_dit import (
+            TensorRTDiTRevisionZeroDiagnostic,
+        )
+
+        action_model = self.action_head.model
+        self._eager_dit_forward = action_model.forward
+        self._tensorrt_dit_diagnostic = TensorRTDiTRevisionZeroDiagnostic(
+            action_model,
+            config,
+        )
+        action_model.forward = self._tensorrt_dit_diagnostic
+
+    def verify_online_update_contract(self, revision: Optional[int] = None) -> None:
         """Reject weight adoption that replaced a compiled DiT parameter/storage."""
 
         contract = getattr(self, "_compiled_dit_parameter_contract", None)
@@ -995,20 +1016,29 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
                 "online head update replaced compiled DiT parameters or storage: "
                 f"{changed[:8]}"
             )
+        tensorrt_dit = getattr(self, "_tensorrt_dit_diagnostic", None)
+        if tensorrt_dit is not None:
+            if revision is None:
+                raise ValueError(
+                    "TensorRT DiT revision verification requires a revision"
+                )
+            tensorrt_dit.verify_revision(revision)
 
     def hybrid_runtime_telemetry(self) -> dict[str, Any]:
         """Return runtime state used by W81 lifecycle receipts."""
 
         tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
+        tensorrt_dit = getattr(self, "_tensorrt_dit_diagnostic", None)
         compile_enabled = getattr(self, "_compiled_dit_forward", None) is not None
         unique_graphs = 0
         if compile_enabled:
             unique_graphs = int(torch._dynamo.utils.counters["stats"]["unique_graphs"])
         return {
             "tensorrt_backbone": (
-                tensorrt_backbone.telemetry()
-                if tensorrt_backbone is not None
-                else None
+                tensorrt_backbone.telemetry() if tensorrt_backbone is not None else None
+            ),
+            "tensorrt_dit": (
+                tensorrt_dit.telemetry() if tensorrt_dit is not None else None
             ),
             "compiled_dit": {
                 "enabled": compile_enabled,
@@ -1026,6 +1056,9 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
         if tensorrt_backbone is not None:
             tensorrt_backbone.close()
+        tensorrt_dit = getattr(self, "_tensorrt_dit_diagnostic", None)
+        if tensorrt_dit is not None:
+            tensorrt_dit.close()
 
     def _prepare_action_head_input(
         self, forward_inputs: Mapping[str, torch.Tensor]

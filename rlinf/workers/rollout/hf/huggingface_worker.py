@@ -472,6 +472,7 @@ class MultiStepRolloutWorker(Worker):
             "revision": int(self.version),
             "compiled_dit": telemetry["compiled_dit"],
             "tensorrt_backbone": None,
+            "tensorrt_dit": telemetry.get("tensorrt_dit"),
         }
         if backbone is not None:
             payload["tensorrt_backbone"] = {
@@ -530,6 +531,23 @@ class MultiStepRolloutWorker(Worker):
             if not callable(enable_tensorrt_backbone):
                 raise TypeError("rollout model does not support a TensorRT backbone")
             enable_tensorrt_backbone(tensorrt_config)
+
+        tensorrt_dit_config = OmegaConf.select(
+            self.cfg, "rollout.model.tensorrt_dit_diagnostic", default=None
+        )
+        if tensorrt_dit_config is not None and bool(
+            tensorrt_dit_config.get("enabled", False)
+        ):
+            if self.enable_offload:
+                raise ValueError(
+                    "TensorRT DiT diagnostic requires rollout.enable_offload=false"
+                )
+            enable_tensorrt_dit = getattr(
+                self.hf_model, "enable_tensorrt_dit_diagnostic", None
+            )
+            if not callable(enable_tensorrt_dit):
+                raise TypeError("rollout model does not support TensorRT DiT")
+            enable_tensorrt_dit(tensorrt_dit_config)
 
         if self.cfg.runner.get("ckpt_path", None):
             model_dict = torch.load(self.cfg.runner.ckpt_path)
@@ -1069,7 +1087,7 @@ class MultiStepRolloutWorker(Worker):
             self.hf_model, "verify_online_update_contract", None
         )
         if callable(verify_online_update):
-            verify_online_update()
+            verify_online_update(applied_version)
         self.version = applied_version
         if self.finished_episodes is None:
             self.finished_episodes = (
