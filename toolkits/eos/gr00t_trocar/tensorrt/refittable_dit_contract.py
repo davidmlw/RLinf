@@ -449,7 +449,10 @@ class RefitRevisionFence:
     phase: str = "idle"
     candidate_revision: int | None = None
     candidate_slot: str | None = None
-    source_weight_digest: str | None = None
+    admitted_patch_digest: str | None = None
+    observed_patch_digest: str | None = None
+    expected_source_weight_digest: str | None = None
+    observed_source_weight_digest: str | None = None
     expected_staging_digest: str | None = None
     expected_inventory_digest: str | None = None
     expected_prototype_digest: str | None = None
@@ -479,11 +482,11 @@ class RefitRevisionFence:
             raise RuntimeError(f"cannot end inference while phase is {self.phase}")
         self.phase = "idle"
 
-    def begin_refit(
+    def admit_patch(
         self,
         revision: int,
-        source_weight_digest: str,
-        expected_staging_digest: str,
+        patch_digest: str,
+        expected_source_weight_digest: str,
         expected_inventory_digest: str,
         expected_prototype_digest: str,
     ) -> str:
@@ -497,18 +500,21 @@ class RefitRevisionFence:
                 f"candidate={revision}"
             )
         digests = {
-            "source_weight_digest": source_weight_digest,
-            "expected_staging_digest": expected_staging_digest,
+            "patch_digest": patch_digest,
+            "expected_source_weight_digest": expected_source_weight_digest,
             "expected_inventory_digest": expected_inventory_digest,
             "expected_prototype_digest": expected_prototype_digest,
         }
         if any(not value for value in digests.values()):
             raise ValueError(f"refit digests must not be empty: {digests}")
-        self.phase = "refitting"
+        self.phase = "patch_admitted"
         self.candidate_revision = revision
         self.candidate_slot = "b" if self.active_slot == "a" else "a"
-        self.source_weight_digest = source_weight_digest
-        self.expected_staging_digest = expected_staging_digest
+        self.admitted_patch_digest = patch_digest
+        self.observed_patch_digest = None
+        self.expected_source_weight_digest = expected_source_weight_digest
+        self.observed_source_weight_digest = None
+        self.expected_staging_digest = None
         self.expected_inventory_digest = expected_inventory_digest
         self.expected_prototype_digest = expected_prototype_digest
         self.pytorch_head_digest = None
@@ -522,18 +528,62 @@ class RefitRevisionFence:
         self.failure_reason = None
         return self.candidate_slot
 
-    def mark_pytorch_applied(self, revision: int, head_digest: str) -> None:
-        if self.phase != "refitting":
+    def mark_pytorch_applied(
+        self,
+        revision: int,
+        *,
+        observed_patch_digest: str,
+        head_digest: str,
+        observed_source_weight_digest: str,
+    ) -> None:
+        if self.phase != "patch_admitted":
             raise RuntimeError(f"cannot mark PyTorch apply while phase is {self.phase}")
-        if revision != self.candidate_revision or not head_digest:
-            self.fail_refit("PyTorch head revision or digest mismatch")
-            raise ValueError("PyTorch head does not match the candidate revision")
+        evidence = {
+            "observed_patch_digest": observed_patch_digest,
+            "head_digest": head_digest,
+            "observed_source_weight_digest": observed_source_weight_digest,
+        }
+        # The patch has already mutated the module when this method is called.
+        # Record the observed state before validating it so every mismatch is
+        # represented as a mixed/unknown revision and remains fail-stopped.
         self.active_pytorch_revision = revision
+        self.observed_patch_digest = observed_patch_digest
         self.pytorch_head_digest = head_digest
+        self.observed_source_weight_digest = observed_source_weight_digest
+        mismatches = []
+        if revision != self.candidate_revision:
+            mismatches.append("revision")
+        if observed_patch_digest != self.admitted_patch_digest:
+            mismatches.append("patch")
+        if observed_source_weight_digest != self.expected_source_weight_digest:
+            mismatches.append("source_weight")
+        if any(not value for value in evidence.values()):
+            mismatches.append("empty_evidence")
+        if mismatches:
+            self.fail_refit(f"post-patch {'/'.join(mismatches)} mismatch")
+            raise ValueError(
+                f"post-patch evidence does not match admission: {mismatches}"
+            )
         self.phase = "pytorch_applied"
 
-    def mark_staging_verified(self, observed_digest: str) -> None:
+    def register_staging_reference(
+        self, source_weight_digest: str, expected_staging_digest: str
+    ) -> None:
         if self.phase != "pytorch_applied":
+            raise RuntimeError(
+                f"cannot register staging reference while phase is {self.phase}"
+            )
+        if source_weight_digest != self.observed_source_weight_digest:
+            self.fail_refit("staging reference is not derived from observed source")
+            raise ValueError("staging reference source does not match observed bytes")
+        if not expected_staging_digest:
+            self.fail_refit("staging reference digest is empty")
+            raise ValueError("staging reference digest must not be empty")
+        self.expected_staging_digest = expected_staging_digest
+        self.phase = "staging_reference"
+
+    def mark_staging_verified(self, observed_digest: str) -> None:
+        if self.phase != "staging_reference":
             raise RuntimeError(f"cannot verify staging while phase is {self.phase}")
         self.observed_staging_digest = observed_digest
         if observed_digest != self.expected_staging_digest:
@@ -566,6 +616,7 @@ class RefitRevisionFence:
         trt_output_digest: str,
         metrics_digest: str,
         numerics_passed: bool,
+        require_output_change: bool,
     ) -> None:
         if self.phase != "refitted":
             raise RuntimeError(f"cannot verify probe while phase is {self.phase}")
@@ -582,7 +633,8 @@ class RefitRevisionFence:
             self.fail_refit("candidate probe failed numerical thresholds")
             raise ValueError("candidate probe failed numerical thresholds")
         if (
-            self.active_probe_output_digest is not None
+            require_output_change
+            and self.active_probe_output_digest is not None
             and trt_output_digest == self.active_probe_output_digest
         ):
             self.fail_refit("candidate output did not change across revisions")
@@ -605,7 +657,7 @@ class RefitRevisionFence:
         self._clear_candidate("idle")
 
     def abort_before_pytorch_apply(self) -> None:
-        if self.phase != "refitting":
+        if self.phase != "patch_admitted":
             raise RuntimeError(
                 f"cannot cleanly abort after PyTorch apply; phase is {self.phase}"
             )
@@ -613,8 +665,9 @@ class RefitRevisionFence:
 
     def fail_refit(self, reason: str) -> None:
         if self.phase not in {
-            "refitting",
+            "patch_admitted",
             "pytorch_applied",
+            "staging_reference",
             "staging_verified",
             "refitted",
             "verified",
@@ -627,7 +680,8 @@ class RefitRevisionFence:
         self.phase = next_phase
         self.candidate_revision = None
         self.candidate_slot = None
-        self.source_weight_digest = None
+        self.admitted_patch_digest = None
+        self.expected_source_weight_digest = None
         self.expected_staging_digest = None
         self.expected_inventory_digest = None
         self.expected_prototype_digest = None

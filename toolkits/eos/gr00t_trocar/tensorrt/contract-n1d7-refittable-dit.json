@@ -37,10 +37,14 @@
       "tune_vlln": true
     },
     "apply_order": [
-      "receive_and_apply_complete_action_head_patch_in_place",
+      "receive_complete_action_head_patch_and_hash_immutable_payload",
+      "admit_Actor_revision_and_expected_post_apply_ordered_DiT_digest",
+      "apply_complete_action_head_patch_in_place",
       "wait_for_weight_apply_stream",
       "mark_PyTorch_head_revision_as_updated",
       "hash_ordered_raw_DiT_source_weight_bytes",
+      "match_observed_patch_and_raw_DiT_digests_to_admission",
+      "derive_reference_transforms_from_observed_raw_DiT_bytes_and_frozen_map",
       "materialize_transposed_DiT_weight_staging",
       "verify_ordered_post_transform_staging_bytes",
       "refit_inactive_TensorRT_DiT_engine",
@@ -114,7 +118,18 @@
       "previous_engine_slot"
     ],
     "actual_tensor_bytes_required": true,
-    "header_only_metadata_is_insufficient_for_artifact_promotion": true
+    "header_only_metadata_is_insufficient_for_artifact_promotion": true,
+    "source_to_staging_lineage": {
+      "admitted_patch_digest": "hash_exact_immutable_received_patch_payload_before_apply",
+      "admitted_source_digest": "Actor_published_ordered_full_DiT_tensor_bytes_at_same_revision",
+      "observed_patch_digest": "rehash_the_same_immutable_patch_payload_at_apply_completion",
+      "observed_source_digest": "hash_actual_Rollout_action_head_model_tensors_after_patch_apply",
+      "derived_staging_reference": "apply_frozen_identity_or_transpose_2d_map_to_observed_source_bytes",
+      "observed_staging_digest": "hash_actual_contiguous_DEVICE_refit_staging_in_frozen_initializer_order",
+      "mismatch_policy": "failed_stopped_before_refit_or_inference"
+    },
+    "output_change_requirement": "required_only_for_deliberate_nonzero_DiT_delta_lifecycle_probe",
+    "unchanged_DiT_revision": "record_explicit_no_refit_decision_and_do_not_claim_refit_execution"
   },
   "memory_preflight": {
     "safety_headroom_bytes": 8589934592,
