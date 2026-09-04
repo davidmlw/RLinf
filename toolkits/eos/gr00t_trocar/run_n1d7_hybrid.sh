@@ -131,6 +131,22 @@ sha256sum \
   "$w81_trt_engines/llm_bf16.engine" \
   >"$W73_ATTEMPT_ROOT/runtime/tensorrt-artifacts.sha256"
 
+w83_dit_root="/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W83/W83-refittable-dit-build-r3-5972556"
+case "${W83_TRT_DIT_DIAGNOSTIC:-0}" in
+  0) ;;
+  1)
+    sha256sum \
+      "$w83_dit_root/engine/rlinf-refittable-dit-engine-receipt.json" \
+      "$w83_dit_root/refittable-dit-parameter-map.json" \
+      "$w83_dit_root/engine/dit_bf16_refit.engine" \
+      >"$W73_ATTEMPT_ROOT/runtime/w83-refittable-dit-artifacts.sha256"
+    ;;
+  *)
+    printf 'W83_TRT_DIT_DIAGNOSTIC must be 0 or 1\n' >&2
+    exit 2
+    ;;
+esac
+
 {
   printf 'timestamp,index,memory_used_mib,utilization_gpu_pct,power_w\n'
   while [[ ! -f "$W73_ATTEMPT_ROOT/gpu/sampler.stop" ]]; do
@@ -161,6 +177,23 @@ overrides=(
 )
 if [[ -n "$W73_RESUME_DIR" ]]; then
   overrides+=(runner.resume_dir="$W73_RESUME_DIR")
+fi
+if [[ "${W83_TRT_DIT_DIAGNOSTIC:-0}" == 1 ]]; then
+  overrides+=(
+    runner.logger.experiment_name=w83_n1d7_trt_dit_identity
+    ++rollout.model.tensorrt_dit_diagnostic.enabled=true
+    ++rollout.model.tensorrt_dit_diagnostic.engine_path="$w83_dit_root/engine/dit_bf16_refit.engine"
+    ++rollout.model.tensorrt_dit_diagnostic.receipt_path="$w83_dit_root/engine/rlinf-refittable-dit-engine-receipt.json"
+    ++rollout.model.tensorrt_dit_diagnostic.receipt_sha256=774652d469c47884c6756fe98196884df74cdc129bd611afcf7ea949be7cf024
+    ++rollout.model.tensorrt_dit_diagnostic.parameter_map_path="$w83_dit_root/refittable-dit-parameter-map.json"
+    ++rollout.model.tensorrt_dit_diagnostic.parameter_map_sha256=df7c72b90629ff6343f52c066a03d430728cc7cd605d12c1b884851fed48c935
+    ++rollout.model.tensorrt_dit_diagnostic.source_digest_revision_0=dcadd3c8a2bf405e53dc23aded49c536d0315f4d68f86417feb59a321bd2aaca
+    ++rollout.model.tensorrt_dit_diagnostic.revision=0
+    ++rollout.model.tensorrt_dit_diagnostic.runtime_version=10.15.1.29
+    ++rollout.model.tensorrt_dit_diagnostic.runtime_distribution=tensorrt-cu12
+    ++rollout.model.tensorrt_dit_diagnostic.compute_capability='[9,0]'
+  )
+  printf 'W83_TRT_DIT_DIAGNOSTIC=1\n'
 fi
 case "${W81_DISABLE_PRE_UPDATE_IDENTITY_GATE:-0}" in
   0) ;;
