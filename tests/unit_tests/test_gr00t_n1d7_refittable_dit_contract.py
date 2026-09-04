@@ -145,41 +145,170 @@ def test_model_config_gate_rejects_frozen_dit(tmp_path: Path) -> None:
 
 def test_revision_fence_rejects_inference_during_refit() -> None:
     fence = contract.RefitRevisionFence()
-    assert fence.begin_refit(1, "revision-1") == "b"
+    assert (
+        fence.begin_refit(1, "source-1", "staging-1", "inventory-1", "prototype-1")
+        == "b"
+    )
 
     with pytest.raises(RuntimeError, match="cannot infer"):
         fence.begin_inference()
 
 
-def test_revision_fence_commits_only_a_verified_inactive_slot() -> None:
-    fence = contract.RefitRevisionFence()
-    candidate = fence.begin_refit(1, "revision-1")
-    fence.mark_verified("revision-1")
+def test_revision_fence_commits_only_a_fully_verified_revision() -> None:
+    fence = contract.RefitRevisionFence(active_probe_output_digest="output-0")
+    candidate = fence.begin_refit(
+        1, "source-1", "staging-1", "inventory-1", "prototype-1"
+    )
+    fence.mark_pytorch_applied(1, "head-1")
+    fence.mark_staging_verified("staging-1")
+    fence.mark_refit_complete("inventory-1", "prototype-1")
+    fence.mark_probe_verified(
+        probe_input_digest="probe-input",
+        pytorch_output_digest="pytorch-output-1",
+        trt_output_digest="trt-output-1",
+        metrics_digest="probe-metrics-1",
+        numerics_passed=True,
+    )
     fence.commit()
 
     assert candidate == "b"
     assert fence.active_slot == "b"
-    assert fence.active_revision == 1
+    assert fence.active_pytorch_revision == 1
+    assert fence.active_trt_revision == 1
+    assert fence.active_probe_output_digest == "trt-output-1"
     assert fence.phase == "idle"
 
 
-def test_revision_fence_digest_failure_preserves_active_revision() -> None:
-    fence = contract.RefitRevisionFence(active_revision=4, active_slot="b")
-    assert fence.begin_refit(5, "revision-5") == "a"
+def test_revision_fence_staging_failure_after_apply_is_fail_stop() -> None:
+    fence = contract.RefitRevisionFence(
+        active_pytorch_revision=4,
+        active_trt_revision=4,
+        active_slot="b",
+    )
+    assert (
+        fence.begin_refit(5, "source-5", "staging-5", "inventory-5", "prototype-5")
+        == "a"
+    )
+    fence.mark_pytorch_applied(5, "head-5")
 
-    with pytest.raises(ValueError, match="does not match"):
-        fence.mark_verified("wrong")
+    with pytest.raises(ValueError, match="staging digest"):
+        fence.mark_staging_verified("wrong")
 
-    assert fence.active_revision == 4
+    assert fence.active_pytorch_revision == 5
+    assert fence.active_trt_revision == 4
     assert fence.active_slot == "b"
+    assert fence.phase == "failed_stopped"
+    with pytest.raises(RuntimeError, match="cannot infer"):
+        fence.begin_inference()
+
+
+def test_revision_fence_probe_failure_is_fail_stop() -> None:
+    fence = contract.RefitRevisionFence(active_probe_output_digest="same-output")
+    fence.begin_refit(1, "source-1", "staging-1", "inventory-1", "prototype-1")
+    fence.mark_pytorch_applied(1, "head-1")
+    fence.mark_staging_verified("staging-1")
+    fence.mark_refit_complete("inventory-1", "prototype-1")
+
+    with pytest.raises(ValueError, match="did not change"):
+        fence.mark_probe_verified(
+            probe_input_digest="probe-input",
+            pytorch_output_digest="pytorch-output-1",
+            trt_output_digest="same-output",
+            metrics_digest="probe-metrics-1",
+            numerics_passed=True,
+        )
+
+    assert fence.phase == "failed_stopped"
+
+
+def test_revision_fence_rejects_mixed_active_revisions() -> None:
+    fence = contract.RefitRevisionFence(
+        active_pytorch_revision=5,
+        active_trt_revision=4,
+        phase="idle",
+    )
+
+    with pytest.raises(RuntimeError, match="mixed revisions"):
+        fence.begin_inference()
+
+
+def test_revision_fence_inventory_failure_after_apply_is_fail_stop() -> None:
+    fence = contract.RefitRevisionFence()
+    fence.begin_refit(1, "source-1", "staging-1", "inventory-1", "prototype-1")
+    fence.mark_pytorch_applied(1, "head-1")
+    fence.mark_staging_verified("staging-1")
+
+    with pytest.raises(ValueError, match="refitter inventory"):
+        fence.mark_refit_complete("wrong-inventory", "prototype-1")
+
+    assert fence.phase == "failed_stopped"
+    assert fence.active_pytorch_revision == 1
+    assert fence.active_trt_revision == 0
+
+
+def test_revision_fence_prototype_failure_after_apply_is_fail_stop() -> None:
+    fence = contract.RefitRevisionFence()
+    fence.begin_refit(1, "source-1", "staging-1", "inventory-1", "prototype-1")
+    fence.mark_pytorch_applied(1, "head-1")
+    fence.mark_staging_verified("staging-1")
+
+    with pytest.raises(ValueError, match="prototype"):
+        fence.mark_refit_complete("inventory-1", "wrong-prototype")
+
+    assert fence.phase == "failed_stopped"
+
+
+def test_revision_fence_can_abort_only_before_pytorch_apply() -> None:
+    fence = contract.RefitRevisionFence()
+    fence.begin_refit(1, "source-1", "staging-1", "inventory-1", "prototype-1")
+    fence.abort_before_pytorch_apply()
+
     assert fence.phase == "idle"
+    assert fence.active_pytorch_revision == 0
+    assert fence.active_trt_revision == 0
 
 
 def test_revision_fence_requires_monotonic_revision() -> None:
-    fence = contract.RefitRevisionFence(active_revision=4)
+    fence = contract.RefitRevisionFence(
+        active_pytorch_revision=4,
+        active_trt_revision=4,
+    )
 
     with pytest.raises(ValueError, match="must advance"):
-        fence.begin_refit(4, "same")
+        fence.begin_refit(4, "source", "staging", "inventory", "prototype")
+
+
+def test_double_buffer_memory_preflight_preserves_headroom() -> None:
+    value = contract.double_buffer_memory_preflight(
+        free_before_bytes=16 << 30,
+        total_device_bytes=80 << 30,
+        candidate_engine_device_bytes=2 << 30,
+        candidate_context_bytes=256 << 20,
+        refit_workspace_bytes=512 << 20,
+        transformed_staging_bytes=2 << 30,
+        verification_io_bytes=256 << 20,
+    )
+
+    assert value["status"] == "qualified_double_buffer"
+    assert value["double_buffer_allowed"] is True
+    assert value["remaining_after_request_bytes"] >= 8 << 30
+
+
+def test_double_buffer_memory_preflight_degrades_to_inventory_only() -> None:
+    value = contract.double_buffer_memory_preflight(
+        free_before_bytes=10 << 30,
+        total_device_bytes=80 << 30,
+        candidate_engine_device_bytes=2 << 30,
+        candidate_context_bytes=256 << 20,
+        refit_workspace_bytes=512 << 20,
+        transformed_staging_bytes=2 << 30,
+        verification_io_bytes=256 << 20,
+    )
+
+    assert value["status"] == "single_engine_inventory_only"
+    assert value["double_buffer_allowed"] is False
+    assert value["double_buffer_lifecycle_gate_allowed"] is False
+    assert value["single_engine_latency_or_authority_claim_forbidden"] is True
 
 
 def test_machine_contract_keeps_eager_actor_as_gradient_authority() -> None:
@@ -196,6 +325,13 @@ def test_machine_contract_keeps_eager_actor_as_gradient_authority() -> None:
     assert value["ppo_authority"]["TensorRT_vs_TensorRT_is_not_gradient_authority"]
     assert value["refit_engine"]["refit_identical_allowed"] is False
     assert value["refit_engine"]["adoption"].startswith("double_buffered")
+    assert value["refit_engine"]["failure_policy"].startswith("fail_stop")
+    assert value["revision_gate"]["inference_requires_equal_revisions"] is True
+    assert value["revision_gate"]["verification_digests_are_distinct"] is True
+    assert value["memory_preflight"]["safety_headroom_bytes"] == 8 << 30
+    assert value["memory_preflight"]["insufficient_memory_disposition"] == (
+        "single_engine_inventory_only"
+    )
 
 
 def test_machine_contract_freezes_observed_parameter_counts() -> None:

@@ -85,6 +85,8 @@ REQUIRED_MODEL_CONFIG = {
     "use_alternate_vl_dit": True,
 }
 
+DEFAULT_DOUBLE_BUFFER_HEADROOM_BYTES = 8 << 30
+
 
 def _canonical_sha256(value: Any) -> str:
     payload = json.dumps(
@@ -376,20 +378,100 @@ def build_refit_manifest(
     }
 
 
+def double_buffer_memory_preflight(
+    *,
+    free_before_bytes: int,
+    total_device_bytes: int,
+    candidate_engine_device_bytes: int,
+    candidate_context_bytes: int,
+    refit_workspace_bytes: int,
+    transformed_staging_bytes: int,
+    verification_io_bytes: int,
+    safety_headroom_bytes: int = DEFAULT_DOUBLE_BUFFER_HEADROOM_BYTES,
+) -> dict[str, Any]:
+    """Decide whether a second DiT engine slot may be allocated.
+
+    Every device allocation is reported separately because a serialized plan's
+    file size is not a reliable proxy for TensorRT's runtime allocation. Values
+    for the second slot must come from a measured single-slot artifact probe.
+    """
+
+    fields = {
+        "free_before_bytes": free_before_bytes,
+        "total_device_bytes": total_device_bytes,
+        "candidate_engine_device_bytes": candidate_engine_device_bytes,
+        "candidate_context_bytes": candidate_context_bytes,
+        "refit_workspace_bytes": refit_workspace_bytes,
+        "transformed_staging_bytes": transformed_staging_bytes,
+        "verification_io_bytes": verification_io_bytes,
+        "safety_headroom_bytes": safety_headroom_bytes,
+    }
+    invalid = {name: value for name, value in fields.items() if value < 0}
+    if invalid:
+        raise ValueError(f"memory preflight values must be non-negative: {invalid}")
+    if free_before_bytes > total_device_bytes:
+        raise ValueError("free device memory cannot exceed total device memory")
+
+    requested_bytes = sum(
+        fields[name]
+        for name in (
+            "candidate_engine_device_bytes",
+            "candidate_context_bytes",
+            "refit_workspace_bytes",
+            "transformed_staging_bytes",
+            "verification_io_bytes",
+        )
+    )
+    required_bytes = requested_bytes + safety_headroom_bytes
+    qualified = free_before_bytes >= required_bytes
+    return {
+        **fields,
+        "requested_bytes": requested_bytes,
+        "required_with_headroom_bytes": required_bytes,
+        "remaining_after_request_bytes": free_before_bytes - requested_bytes,
+        "status": (
+            "qualified_double_buffer" if qualified else "single_engine_inventory_only"
+        ),
+        "double_buffer_allowed": qualified,
+        "double_buffer_lifecycle_gate_allowed": qualified,
+        "single_engine_latency_or_authority_claim_forbidden": not qualified,
+    }
+
+
 @dataclass
 class RefitRevisionFence:
-    """Pure state machine for double-buffered fail-closed revision adoption."""
+    """Pure state machine for fail-closed PyTorch/TRT revision adoption."""
 
-    active_revision: int = 0
+    active_pytorch_revision: int = 0
+    active_trt_revision: int = 0
     active_slot: str = "a"
+    active_probe_output_digest: str | None = None
     phase: str = "idle"
     candidate_revision: int | None = None
     candidate_slot: str | None = None
-    candidate_digest: str | None = None
+    source_weight_digest: str | None = None
+    expected_staging_digest: str | None = None
+    expected_inventory_digest: str | None = None
+    expected_prototype_digest: str | None = None
+    pytorch_head_digest: str | None = None
+    observed_staging_digest: str | None = None
+    observed_inventory_digest: str | None = None
+    observed_prototype_digest: str | None = None
+    probe_input_digest: str | None = None
+    pytorch_probe_output_digest: str | None = None
+    trt_probe_output_digest: str | None = None
+    probe_metrics_digest: str | None = None
+    failure_reason: str | None = None
 
     def begin_inference(self) -> None:
         if self.phase != "idle":
             raise RuntimeError(f"cannot infer while refit phase is {self.phase}")
+        if self.active_pytorch_revision != self.active_trt_revision:
+            raise RuntimeError(
+                "cannot infer with mixed revisions: "
+                f"pytorch={self.active_pytorch_revision}, "
+                f"trt={self.active_trt_revision}"
+            )
         self.phase = "inference"
 
     def end_inference(self) -> None:
@@ -397,28 +479,118 @@ class RefitRevisionFence:
             raise RuntimeError(f"cannot end inference while phase is {self.phase}")
         self.phase = "idle"
 
-    def begin_refit(self, revision: int, source_digest: str) -> str:
+    def begin_refit(
+        self,
+        revision: int,
+        source_weight_digest: str,
+        expected_staging_digest: str,
+        expected_inventory_digest: str,
+        expected_prototype_digest: str,
+    ) -> str:
         if self.phase != "idle":
             raise RuntimeError(f"cannot refit while phase is {self.phase}")
-        if revision <= self.active_revision:
+        if self.active_pytorch_revision != self.active_trt_revision:
+            raise RuntimeError("cannot refit from an already mixed revision")
+        if revision <= self.active_trt_revision:
             raise ValueError(
-                f"refit revision must advance: active={self.active_revision}, "
+                f"refit revision must advance: active={self.active_trt_revision}, "
                 f"candidate={revision}"
             )
-        if not source_digest:
-            raise ValueError("refit source digest must not be empty")
+        digests = {
+            "source_weight_digest": source_weight_digest,
+            "expected_staging_digest": expected_staging_digest,
+            "expected_inventory_digest": expected_inventory_digest,
+            "expected_prototype_digest": expected_prototype_digest,
+        }
+        if any(not value for value in digests.values()):
+            raise ValueError(f"refit digests must not be empty: {digests}")
         self.phase = "refitting"
         self.candidate_revision = revision
         self.candidate_slot = "b" if self.active_slot == "a" else "a"
-        self.candidate_digest = source_digest
+        self.source_weight_digest = source_weight_digest
+        self.expected_staging_digest = expected_staging_digest
+        self.expected_inventory_digest = expected_inventory_digest
+        self.expected_prototype_digest = expected_prototype_digest
+        self.pytorch_head_digest = None
+        self.observed_staging_digest = None
+        self.observed_inventory_digest = None
+        self.observed_prototype_digest = None
+        self.probe_input_digest = None
+        self.pytorch_probe_output_digest = None
+        self.trt_probe_output_digest = None
+        self.probe_metrics_digest = None
+        self.failure_reason = None
         return self.candidate_slot
 
-    def mark_verified(self, observed_digest: str) -> None:
+    def mark_pytorch_applied(self, revision: int, head_digest: str) -> None:
         if self.phase != "refitting":
-            raise RuntimeError(f"cannot verify while phase is {self.phase}")
-        if observed_digest != self.candidate_digest:
-            self.abort_refit()
-            raise ValueError("candidate refit digest does not match source digest")
+            raise RuntimeError(f"cannot mark PyTorch apply while phase is {self.phase}")
+        if revision != self.candidate_revision or not head_digest:
+            self.fail_refit("PyTorch head revision or digest mismatch")
+            raise ValueError("PyTorch head does not match the candidate revision")
+        self.active_pytorch_revision = revision
+        self.pytorch_head_digest = head_digest
+        self.phase = "pytorch_applied"
+
+    def mark_staging_verified(self, observed_digest: str) -> None:
+        if self.phase != "pytorch_applied":
+            raise RuntimeError(f"cannot verify staging while phase is {self.phase}")
+        self.observed_staging_digest = observed_digest
+        if observed_digest != self.expected_staging_digest:
+            self.fail_refit("transformed staging digest mismatch")
+            raise ValueError("transformed staging digest does not match reference")
+        self.phase = "staging_verified"
+
+    def mark_refit_complete(self, inventory_digest: str, prototype_digest: str) -> None:
+        if self.phase != "staging_verified":
+            raise RuntimeError(f"cannot complete refit while phase is {self.phase}")
+        self.observed_inventory_digest = inventory_digest
+        self.observed_prototype_digest = prototype_digest
+        mismatches = []
+        if inventory_digest != self.expected_inventory_digest:
+            mismatches.append("inventory")
+        if prototype_digest != self.expected_prototype_digest:
+            mismatches.append("prototype")
+        if mismatches:
+            self.fail_refit(f"refitter {'/'.join(mismatches)} digest mismatch")
+            raise ValueError(
+                f"refitter {'/'.join(mismatches)} does not match the frozen map"
+            )
+        self.phase = "refitted"
+
+    def mark_probe_verified(
+        self,
+        *,
+        probe_input_digest: str,
+        pytorch_output_digest: str,
+        trt_output_digest: str,
+        metrics_digest: str,
+        numerics_passed: bool,
+    ) -> None:
+        if self.phase != "refitted":
+            raise RuntimeError(f"cannot verify probe while phase is {self.phase}")
+        digests = {
+            "probe_input_digest": probe_input_digest,
+            "pytorch_output_digest": pytorch_output_digest,
+            "trt_output_digest": trt_output_digest,
+            "metrics_digest": metrics_digest,
+        }
+        if any(not value for value in digests.values()):
+            self.fail_refit("probe evidence is incomplete")
+            raise ValueError(f"probe digests must not be empty: {digests}")
+        if not numerics_passed:
+            self.fail_refit("candidate probe failed numerical thresholds")
+            raise ValueError("candidate probe failed numerical thresholds")
+        if (
+            self.active_probe_output_digest is not None
+            and trt_output_digest == self.active_probe_output_digest
+        ):
+            self.fail_refit("candidate output did not change across revisions")
+            raise ValueError("candidate output did not change across revisions")
+        self.probe_input_digest = probe_input_digest
+        self.pytorch_probe_output_digest = pytorch_output_digest
+        self.trt_probe_output_digest = trt_output_digest
+        self.probe_metrics_digest = metrics_digest
         self.phase = "verified"
 
     def commit(self) -> None:
@@ -426,20 +598,39 @@ class RefitRevisionFence:
             raise RuntimeError(f"cannot commit while phase is {self.phase}")
         assert self.candidate_revision is not None
         assert self.candidate_slot is not None
-        self.active_revision = self.candidate_revision
+        assert self.trt_probe_output_digest is not None
+        self.active_trt_revision = self.candidate_revision
         self.active_slot = self.candidate_slot
-        self._clear_candidate()
+        self.active_probe_output_digest = self.trt_probe_output_digest
+        self._clear_candidate("idle")
 
-    def abort_refit(self) -> None:
-        if self.phase not in {"refitting", "verified"}:
-            raise RuntimeError(f"cannot abort while phase is {self.phase}")
-        self._clear_candidate()
+    def abort_before_pytorch_apply(self) -> None:
+        if self.phase != "refitting":
+            raise RuntimeError(
+                f"cannot cleanly abort after PyTorch apply; phase is {self.phase}"
+            )
+        self._clear_candidate("idle")
 
-    def _clear_candidate(self) -> None:
-        self.phase = "idle"
+    def fail_refit(self, reason: str) -> None:
+        if self.phase not in {
+            "refitting",
+            "pytorch_applied",
+            "staging_verified",
+            "refitted",
+            "verified",
+        }:
+            raise RuntimeError(f"cannot fail refit while phase is {self.phase}")
+        self.failure_reason = reason
+        self._clear_candidate("failed_stopped")
+
+    def _clear_candidate(self, next_phase: str) -> None:
+        self.phase = next_phase
         self.candidate_revision = None
         self.candidate_slot = None
-        self.candidate_digest = None
+        self.source_weight_digest = None
+        self.expected_staging_digest = None
+        self.expected_inventory_digest = None
+        self.expected_prototype_digest = None
 
 
 def _main() -> None:
