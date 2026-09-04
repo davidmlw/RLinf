@@ -402,3 +402,24 @@ def test_n1d7_tensorrt_dit_revision_check_without_compiled_contract():
     GR00T_N1_7_ForRLActionPrediction.verify_online_update_contract(policy, revision=0)
 
     assert tensorrt_dit.revisions == [0]
+
+
+def test_n1d7_online_tensorrt_dit_revision_check_without_compiled_contract():
+    pytest.importorskip("gr00t")
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.gr00t_action_model import (
+        GR00T_N1_7_ForRLActionPrediction,
+    )
+
+    class FakeTensorRTDiT:
+        def __init__(self):
+            self.revisions = []
+
+        def verify_revision(self, revision):
+            self.revisions.append(revision)
+
+    tensorrt_dit = FakeTensorRTDiT()
+    policy = SimpleNamespace(_tensorrt_dit=tensorrt_dit)
+
+    GR00T_N1_7_ForRLActionPrediction.verify_online_update_contract(policy, revision=3)
+
+    assert tensorrt_dit.revisions == [3]

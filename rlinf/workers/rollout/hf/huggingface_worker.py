@@ -473,6 +473,7 @@ class MultiStepRolloutWorker(Worker):
             "compiled_dit": telemetry["compiled_dit"],
             "tensorrt_backbone": None,
             "tensorrt_dit": telemetry.get("tensorrt_dit"),
+            "eager_dit_timing": telemetry.get("eager_dit_timing"),
         }
         if backbone is not None:
             payload["tensorrt_backbone"] = {
@@ -532,22 +533,51 @@ class MultiStepRolloutWorker(Worker):
                 raise TypeError("rollout model does not support a TensorRT backbone")
             enable_tensorrt_backbone(tensorrt_config)
 
-        tensorrt_dit_config = OmegaConf.select(
+        online_tensorrt_dit_config = OmegaConf.select(
+            self.cfg, "rollout.model.tensorrt_dit", default=None
+        )
+        diagnostic_tensorrt_dit_config = OmegaConf.select(
             self.cfg, "rollout.model.tensorrt_dit_diagnostic", default=None
+        )
+        if (
+            online_tensorrt_dit_config is not None
+            and diagnostic_tensorrt_dit_config is not None
+        ):
+            raise ValueError(
+                "configure either rollout.model.tensorrt_dit or "
+                "rollout.model.tensorrt_dit_diagnostic, not both"
+            )
+        tensorrt_dit_config = (
+            online_tensorrt_dit_config
+            if online_tensorrt_dit_config is not None
+            else diagnostic_tensorrt_dit_config
         )
         if tensorrt_dit_config is not None and bool(
             tensorrt_dit_config.get("enabled", False)
         ):
             if self.enable_offload:
-                raise ValueError(
-                    "TensorRT DiT diagnostic requires rollout.enable_offload=false"
-                )
-            enable_tensorrt_dit = getattr(
-                self.hf_model, "enable_tensorrt_dit_diagnostic", None
+                raise ValueError("TensorRT DiT requires rollout.enable_offload=false")
+            enable_method = (
+                "enable_tensorrt_dit"
+                if online_tensorrt_dit_config is not None
+                else "enable_tensorrt_dit_diagnostic"
             )
+            enable_tensorrt_dit = getattr(self.hf_model, enable_method, None)
             if not callable(enable_tensorrt_dit):
                 raise TypeError("rollout model does not support TensorRT DiT")
             enable_tensorrt_dit(tensorrt_dit_config)
+
+        if bool(
+            OmegaConf.select(
+                self.cfg, "rollout.model.enable_eager_dit_timing", default=False
+            )
+        ):
+            enable_eager_dit_timing = getattr(
+                self.hf_model, "enable_eager_dit_timing", None
+            )
+            if not callable(enable_eager_dit_timing):
+                raise TypeError("rollout model does not support eager DiT timing")
+            enable_eager_dit_timing()
 
         if self.cfg.runner.get("ckpt_path", None):
             model_dict = torch.load(self.cfg.runner.ckpt_path)
