@@ -520,3 +520,14 @@ def test_refitter_inventory_rejects_missing_trainable_weight(monkeypatch) -> Non
     monkeypatch.setattr(build_gate, "EXPECTED_REFIT_WEIGHTS", 1)
     with pytest.raises(RuntimeError, match="does not expose every trainable"):
         build_gate._validate_refitter_against_map({"named_weights": []}, mapping)
+
+
+def test_real_revision_probe_records_both_transforms_and_two_slots() -> None:
+    source = (TOOLS / "refit_dit_real_revision_probe.py").read_text(encoding="utf-8")
+
+    assert 'for transform in ("identity", "transpose_2d")' in source
+    assert '"staging_digest_revision_0"' in source
+    assert '"staging_digest_revision_1"' in source
+    assert '"engine_instances": 2' in source
+    assert '"old_slot_unchanged_before_switch"' in source
+    assert "DEFAULT_DOUBLE_BUFFER_HEADROOM_BYTES" in source
