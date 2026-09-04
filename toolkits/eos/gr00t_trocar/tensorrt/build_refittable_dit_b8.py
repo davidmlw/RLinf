@@ -206,8 +206,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             minimum = _profile_shape(shape, 1)
             optimum = _profile_shape(shape, EXPECTED_VL_SEQUENCE)
             maximum = _profile_shape(shape, 416)
-            if not profile.set_shape(value.name, minimum, optimum, maximum):
-                raise RuntimeError(f"failed to set TensorRT profile for {value.name}")
+            # TensorRT 10.15 mutates the profile but returns None here, despite
+            # newer API documentation describing a boolean return value.
+            profile.set_shape(value.name, minimum, optimum, maximum)
+            observed = tuple(tuple(item) for item in profile.get_shape(value.name))
+            expected_profile = (minimum, optimum, maximum)
+            if observed != expected_profile:
+                raise RuntimeError(
+                    f"failed to set TensorRT profile for {value.name}: "
+                    f"{observed} != {expected_profile}"
+                )
     config.add_optimization_profile(profile)
     config.profiling_verbosity = trt.ProfilingVerbosity.DETAILED
 
