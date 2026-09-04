@@ -572,3 +572,50 @@ def test_revision_zero_diagnostic_matches_alternate_vl_dit_keywords() -> None:
     assert "encoder_hidden_states: torch.Tensor" in signature
     assert '"sa_embs": hidden_states' in runtime_source
     assert '"vl_embs": encoder_hidden_states' in runtime_source
+
+
+def test_revision_zero_diagnostic_eager_shadow_preserves_tensorrt_output() -> None:
+    import torch
+
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_dit import (
+        TensorRTDiTRevisionZeroDiagnostic,
+    )
+
+    class FakeEngine:
+        def set_runtime_tensor_shape(self, _name, _shape):
+            return None
+
+        def __call__(self, **_inputs):
+            return {"output": torch.full((8, 41, 1024), 1.125, dtype=torch.bfloat16)}
+
+    diagnostic = TensorRTDiTRevisionZeroDiagnostic.__new__(
+        TensorRTDiTRevisionZeroDiagnostic
+    )
+    diagnostic.closed = False
+    diagnostic.active_revision = 0
+    diagnostic.expected_revision = 0
+    diagnostic.engine = FakeEngine()
+    diagnostic.shadow_eager = True
+    diagnostic.eager_forward = lambda **_inputs: torch.ones(
+        (8, 41, 1024), dtype=torch.bfloat16
+    )
+    diagnostic.shadow_calls = 0
+    diagnostic.shadow_by_timestep = {}
+
+    output = diagnostic(
+        hidden_states=torch.zeros((8, 41, 1536), dtype=torch.bfloat16),
+        encoder_hidden_states=torch.zeros((8, 208, 2048), dtype=torch.bfloat16),
+        timestep=torch.full((8,), 250, dtype=torch.int64),
+        image_mask=torch.ones((8, 208), dtype=torch.bool),
+        backbone_attention_mask=torch.ones((8, 208), dtype=torch.bool),
+    )
+    summary = diagnostic._shadow_summary()
+
+    torch.testing.assert_close(
+        output, torch.full((8, 41, 1024), 1.125, dtype=torch.bfloat16)
+    )
+    assert summary["trajectory_executor"] == "tensorrt"
+    assert summary["calls"] == 1
+    assert summary["per_timestep"][0]["timestep_bucket"] == 250
+    assert summary["per_timestep"][0]["mean_abs"] == pytest.approx(0.125)
+    assert summary["per_timestep"][0]["max_abs"] == pytest.approx(0.125)

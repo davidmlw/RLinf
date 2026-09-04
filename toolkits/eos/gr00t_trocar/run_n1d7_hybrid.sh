@@ -192,6 +192,7 @@ if [[ "${W83_TRT_DIT_DIAGNOSTIC:-0}" == 1 ]]; then
     ++rollout.model.tensorrt_dit_diagnostic.runtime_version=10.15.1.29
     ++rollout.model.tensorrt_dit_diagnostic.runtime_distribution=tensorrt-cu12
     ++rollout.model.tensorrt_dit_diagnostic.compute_capability='[9,0]'
+    ++rollout.model.tensorrt_dit_diagnostic.shadow_eager=true
   )
   printf 'W83_TRT_DIT_DIAGNOSTIC=1\n'
 fi
