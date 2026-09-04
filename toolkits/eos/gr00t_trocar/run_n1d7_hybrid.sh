@@ -134,6 +134,7 @@ sha256sum \
 w83_dit_root="/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W83/W83-refittable-dit-build-r3-5972556"
 w83_trt_dit_diagnostic="${W83_TRT_DIT_DIAGNOSTIC:-0}"
 w83_trt_dit_online="${W83_TRT_DIT_ONLINE:-0}"
+w83_trt_dit_lineage_mode="${W83_TRT_DIT_LINEAGE_MODE:-qualification_sha256}"
 case "$w83_trt_dit_diagnostic:$w83_trt_dit_online" in
   0:0) ;;
   1:0|0:1)
@@ -199,6 +200,14 @@ if [[ "$w83_trt_dit_diagnostic" == 1 ]]; then
   printf 'W83_TRT_DIT_DIAGNOSTIC=1\n'
 fi
 if [[ "$w83_trt_dit_online" == 1 ]]; then
+  case "$w83_trt_dit_lineage_mode" in
+    qualification_sha256|gpu_transform_validation) ;;
+    *)
+      printf 'invalid W83_TRT_DIT_LINEAGE_MODE: %s\n' \
+        "$w83_trt_dit_lineage_mode" >&2
+      exit 2
+      ;;
+  esac
   overrides+=(
     runner.logger.experiment_name=w83_n1d7_online_refittable_trt_dit
     ++rollout.model.tensorrt_dit.enabled=true
@@ -213,6 +222,7 @@ if [[ "$w83_trt_dit_online" == 1 ]]; then
     ++rollout.model.tensorrt_dit.runtime_distribution=tensorrt-cu12
     ++rollout.model.tensorrt_dit.compute_capability='[9,0]'
     ++rollout.model.tensorrt_dit.online_refit=true
+    ++rollout.model.tensorrt_dit.lineage_receipt_mode="$w83_trt_dit_lineage_mode"
     ++rollout.model.tensorrt_dit.probe_each_revision=true
     ++rollout.model.tensorrt_dit.minimum_probe_cosine=0.999
     ++rollout.model.tensorrt_dit.maximum_probe_relative_l2=0.05
@@ -221,6 +231,7 @@ if [[ "$w83_trt_dit_online" == 1 ]]; then
     ++rollout.model.tensorrt_dit.shadow_eager=false
   )
   printf 'W83_TRT_DIT_ONLINE=1\n'
+  printf 'W83_TRT_DIT_LINEAGE_MODE=%s\n' "$w83_trt_dit_lineage_mode"
   printf 'W83_PPO_AUTHORITY=failed_ratio_kl_approximate_behavior_only\n'
 fi
 case "${W83_EAGER_DIT_TIMING:-0}" in
