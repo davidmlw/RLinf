@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import math
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -203,6 +204,10 @@ class TensorRTDiTRevisionZeroDiagnostic:
             self.engine.close()
             raise
         self.action_model = action_model
+        self.shadow_eager = bool(config.get("shadow_eager", False))
+        self.eager_forward = action_model.forward if self.shadow_eager else None
+        self.shadow_calls = 0
+        self.shadow_by_timestep: dict[int, dict[str, Any]] = {}
         self.active_revision: int | None = None
         self.observed_source_digest: str | None = None
         self.closed = False
@@ -259,7 +264,124 @@ class TensorRTDiTRevisionZeroDiagnostic:
             )
         for name in ("vl_embs", "image_mask", "backbone_attention_mask"):
             self.engine.set_runtime_tensor_shape(name, inputs[name].shape)
-        return self.engine(**inputs)["output"]
+        output = self.engine(**inputs)["output"]
+        if self.shadow_eager:
+            with torch.no_grad():
+                eager_output = self.eager_forward(
+                    hidden_states=hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    timestep=timestep,
+                    image_mask=image_mask,
+                    backbone_attention_mask=backbone_attention_mask,
+                )
+            self._record_shadow(timestep, eager_output, output)
+        return output
+
+    def _record_shadow(
+        self,
+        timestep: torch.Tensor,
+        eager_output: torch.Tensor,
+        tensorrt_output: torch.Tensor,
+    ) -> None:
+        """Accumulate same-input eager/TensorRT errors without changing rollout."""
+
+        timestep_values = set(timestep.detach().cpu().tolist())
+        if len(timestep_values) != 1:
+            raise RuntimeError(
+                f"TensorRT DiT shadow expected one timestep, found {timestep_values}"
+            )
+        if eager_output.shape != tensorrt_output.shape:
+            raise RuntimeError(
+                "TensorRT DiT shadow output shape mismatch: "
+                f"{tuple(eager_output.shape)} != {tuple(tensorrt_output.shape)}"
+            )
+        if eager_output.dtype != tensorrt_output.dtype:
+            raise RuntimeError(
+                "TensorRT DiT shadow output dtype mismatch: "
+                f"{eager_output.dtype} != {tensorrt_output.dtype}"
+            )
+        reference = eager_output.detach().float()
+        candidate = tensorrt_output.detach().float()
+        if not torch.isfinite(reference).all() or not torch.isfinite(candidate).all():
+            raise RuntimeError("TensorRT DiT shadow comparison found non-finite output")
+        difference = candidate - reference
+        absolute = difference.abs()
+        terms = torch.stack(
+            (
+                absolute.sum(),
+                difference.square().sum(),
+                reference.square().sum(),
+                candidate.square().sum(),
+                (reference * candidate).sum(),
+                absolute.max(),
+            )
+        ).double()
+        sum_abs, error_sq, reference_sq, candidate_sq, dot, max_abs = (
+            terms.cpu().tolist()
+        )
+        timestep_bucket = int(timestep_values.pop())
+        elements = eager_output.numel()
+        call = {
+            "elements": elements,
+            "mean_abs": sum_abs / elements,
+            "max_abs": max_abs,
+            "relative_l2": math.sqrt(error_sq / reference_sq) if reference_sq else None,
+            "cosine": dot / math.sqrt(reference_sq * candidate_sq)
+            if reference_sq and candidate_sq
+            else None,
+        }
+        aggregate = self.shadow_by_timestep.setdefault(
+            timestep_bucket,
+            {
+                "calls": 0,
+                "elements": 0,
+                "sum_abs": 0.0,
+                "error_sq": 0.0,
+                "reference_sq": 0.0,
+                "candidate_sq": 0.0,
+                "dot": 0.0,
+                "max_abs": 0.0,
+                "first_call": call,
+            },
+        )
+        aggregate["calls"] += 1
+        aggregate["elements"] += elements
+        aggregate["sum_abs"] += sum_abs
+        aggregate["error_sq"] += error_sq
+        aggregate["reference_sq"] += reference_sq
+        aggregate["candidate_sq"] += candidate_sq
+        aggregate["dot"] += dot
+        aggregate["max_abs"] = max(aggregate["max_abs"], max_abs)
+        self.shadow_calls += 1
+
+    def _shadow_summary(self) -> dict[str, Any]:
+        per_timestep = []
+        for timestep, aggregate in sorted(self.shadow_by_timestep.items()):
+            reference_sq = aggregate["reference_sq"]
+            candidate_sq = aggregate["candidate_sq"]
+            per_timestep.append(
+                {
+                    "timestep_bucket": timestep,
+                    "calls": aggregate["calls"],
+                    "elements": aggregate["elements"],
+                    "mean_abs": aggregate["sum_abs"] / aggregate["elements"],
+                    "max_abs": aggregate["max_abs"],
+                    "relative_l2": math.sqrt(aggregate["error_sq"] / reference_sq)
+                    if reference_sq
+                    else None,
+                    "cosine": aggregate["dot"] / math.sqrt(reference_sq * candidate_sq)
+                    if reference_sq and candidate_sq
+                    else None,
+                    "first_call": aggregate["first_call"],
+                }
+            )
+        return {
+            "enabled": self.shadow_eager,
+            "calls": self.shadow_calls,
+            "trajectory_executor": "tensorrt",
+            "shadow_executor": "pytorch_eager",
+            "per_timestep": per_timestep,
+        }
 
     def telemetry(self) -> dict[str, Any]:
         """Return artifact, revision, and runtime evidence for worker receipts."""
@@ -271,6 +393,7 @@ class TensorRTDiTRevisionZeroDiagnostic:
             "expected_source_digest": self.expected_source_digest,
             "observed_source_digest": self.observed_source_digest,
             "active_revision": self.active_revision,
+            "shadow": self._shadow_summary(),
             "runtime": self.runtime,
             "engine": self.engine.telemetry(),
             "closed": self.closed,
