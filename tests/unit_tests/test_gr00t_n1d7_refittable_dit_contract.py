@@ -546,9 +546,14 @@ def test_revision_zero_diagnostic_is_wired_to_existing_ppo_gate() -> None:
     runtime_source = (
         ROOT / "rlinf/models/embodiment/gr00t/gr00t_n1d7/tensorrt_dit.py"
     ).read_text(encoding="utf-8")
+    verify_source = model_source.split("def verify_online_update_contract", 1)[1].split(
+        "def hybrid_runtime_telemetry", 1
+    )[0]
 
     assert "enable_tensorrt_dit_diagnostic" in model_source
     assert "tensorrt_dit.verify_revision(revision)" in model_source
+    assert "if contract is not None:" in verify_source
+    assert "if contract is None:" not in verify_source
     assert "verify_online_update(applied_version)" in worker_source
     assert "W83_TRT_DIT_DIAGNOSTIC" in runner_source
     assert "revision_zero_PPO_identity_diagnostic_no_online_refit" in runtime_source

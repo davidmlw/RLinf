@@ -1000,22 +1000,21 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         """Reject weight adoption that replaced a compiled DiT parameter/storage."""
 
         contract = getattr(self, "_compiled_dit_parameter_contract", None)
-        if contract is None:
-            return
-        actual = {
-            name: (id(parameter), parameter.data_ptr())
-            for name, parameter in self.action_head.model.named_parameters()
-        }
-        if actual != contract:
-            changed = sorted(
-                name
-                for name in set(contract) | set(actual)
-                if contract.get(name) != actual.get(name)
-            )
-            raise RuntimeError(
-                "online head update replaced compiled DiT parameters or storage: "
-                f"{changed[:8]}"
-            )
+        if contract is not None:
+            actual = {
+                name: (id(parameter), parameter.data_ptr())
+                for name, parameter in self.action_head.model.named_parameters()
+            }
+            if actual != contract:
+                changed = sorted(
+                    name
+                    for name in set(contract) | set(actual)
+                    if contract.get(name) != actual.get(name)
+                )
+                raise RuntimeError(
+                    "online head update replaced compiled DiT parameters or storage: "
+                    f"{changed[:8]}"
+                )
         tensorrt_dit = getattr(self, "_tensorrt_dit_diagnostic", None)
         if tensorrt_dit is not None:
             if revision is None:
