@@ -641,6 +641,8 @@ def test_online_refit_adopts_only_the_verified_inactive_slot(monkeypatch) -> Non
     executor.engine = "slot-0"
     executor.engines = ["slot-0", "slot-1"]
     executor._phase = "idle"
+    executor._probe = {"frozen": object()}
+    executor._initial_probe_pending = False
     executor._memory = {"minimum_free_device_bytes": 1}
     executor.refit_records = []
     executor.probe_each_revision = True
@@ -688,6 +690,8 @@ def test_online_refit_probe_failure_keeps_old_slot_and_fail_stops(monkeypatch) -
     executor.engine = "slot-0"
     executor.engines = ["slot-0", "slot-1"]
     executor._phase = "idle"
+    executor._probe = {"frozen": object()}
+    executor._initial_probe_pending = False
     executor._memory = {"minimum_free_device_bytes": 1}
     executor.refit_records = []
     executor.probe_each_revision = True
@@ -713,6 +717,92 @@ def test_online_refit_probe_failure_keeps_old_slot_and_fail_stops(monkeypatch) -
     assert executor.active_revision == 0
     assert executor.active_slot == 0
     assert executor.engine == "slot-0"
+    assert executor._phase == "failed_stopped"
+
+
+def test_online_refit_freezes_first_live_input_as_revision_probe() -> None:
+    import torch
+
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_dit import (
+        RefittableTensorRTDiT,
+    )
+
+    output = torch.full((8, 41, 1024), 1.125, dtype=torch.bfloat16)
+
+    class FakeEngine:
+        def set_runtime_tensor_shape(self, _name, _shape):
+            return None
+
+        def __call__(self, **_inputs):
+            return {"output": output}
+
+    executor = RefittableTensorRTDiT.__new__(RefittableTensorRTDiT)
+    executor.closed = False
+    executor.active_revision = 0
+    executor.active_slot = 0
+    executor.engine = FakeEngine()
+    executor.engines = [executor.engine]
+    executor.eager_forward = lambda **_inputs: output.clone()
+    executor.minimum_probe_cosine = 0.999
+    executor.maximum_probe_relative_l2 = 0.05
+    executor._phase = "idle"
+    executor._probe = None
+    executor._initial_probe_pending = True
+    executor._probe_input_digest = None
+    executor.refit_records = []
+    executor._timing_events = []
+    executor.shadow_eager = False
+
+    result = executor(
+        hidden_states=torch.zeros((8, 41, 1536), dtype=torch.bfloat16),
+        encoder_hidden_states=torch.zeros((8, 208, 2048), dtype=torch.bfloat16),
+        timestep=torch.full((8,), 250, dtype=torch.int64),
+        image_mask=torch.ones((8, 208), dtype=torch.bool),
+        backbone_attention_mask=torch.ones((8, 208), dtype=torch.bool),
+    )
+
+    assert result is output
+    assert executor._initial_probe_pending is False
+    assert executor._probe_input_digest is not None
+    assert executor.refit_records[-1]["initial_live_probe"]["cosine"] == pytest.approx(
+        1.0, abs=2e-7
+    )
+    assert executor.refit_records[-1]["probe_input_digest"]
+
+
+def test_online_refit_live_probe_failure_fail_stops() -> None:
+    import torch
+
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_dit import (
+        RefittableTensorRTDiT,
+    )
+
+    executor = RefittableTensorRTDiT.__new__(RefittableTensorRTDiT)
+    executor._initial_probe_pending = True
+    executor._probe = None
+    executor.active_revision = 0
+    executor.active_slot = 0
+    executor.engines = []
+    executor.eager_forward = lambda **_inputs: torch.zeros(
+        (8, 41, 1024), dtype=torch.bfloat16
+    )
+    executor.minimum_probe_cosine = 0.999
+    executor.maximum_probe_relative_l2 = 0.05
+    executor.refit_records = []
+    executor._phase = "idle"
+
+    inputs = {
+        "sa_embs": torch.zeros((8, 41, 1536), dtype=torch.bfloat16),
+        "vl_embs": torch.zeros((8, 208, 2048), dtype=torch.bfloat16),
+        "timestep": torch.full((8,), 250, dtype=torch.int64),
+        "image_mask": torch.ones((8, 208), dtype=torch.bool),
+        "backbone_attention_mask": torch.ones((8, 208), dtype=torch.bool),
+    }
+    with pytest.raises(RuntimeError, match="revision probe failed"):
+        executor._freeze_initial_live_probe(
+            inputs, torch.ones((8, 41, 1024), dtype=torch.bfloat16)
+        )
+
     assert executor._phase == "failed_stopped"
 
 

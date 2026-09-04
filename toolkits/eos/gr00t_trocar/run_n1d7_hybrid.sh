@@ -214,7 +214,6 @@ if [[ "$w83_trt_dit_online" == 1 ]]; then
     ++rollout.model.tensorrt_dit.compute_capability='[9,0]'
     ++rollout.model.tensorrt_dit.online_refit=true
     ++rollout.model.tensorrt_dit.probe_each_revision=true
-    ++rollout.model.tensorrt_dit.probe_seed=83001
     ++rollout.model.tensorrt_dit.minimum_probe_cosine=0.999
     ++rollout.model.tensorrt_dit.maximum_probe_relative_l2=0.05
     ++rollout.model.tensorrt_dit.minimum_free_device_bytes=8589934592

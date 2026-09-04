@@ -130,6 +130,21 @@ def _normalized_dtype(value: str) -> str:
     return value.rsplit(".", 1)[-1]
 
 
+def _input_digest(inputs: Mapping[str, torch.Tensor]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(inputs):
+        value = inputs[name].detach().contiguous()
+        metadata = json.dumps(
+            {"name": name, "shape": list(value.shape), "dtype": str(value.dtype)},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        digest.update(len(metadata).to_bytes(8, "little"))
+        digest.update(metadata)
+        digest.update(value.view(torch.uint8).cpu().numpy().tobytes())
+    return digest.hexdigest()
+
+
 def _validate_bindings(engine: PersistentEngine, receipt: Mapping[str, Any]) -> None:
     actual = engine.binding_manifest()
     expected = receipt["engine"]["bindings"]
@@ -321,7 +336,6 @@ class RefittableTensorRTDiT:
             raise ValueError("W83 diagnostic supports only the initial revision zero")
         self.online_refit = bool(config.get("online_refit", False))
         self.probe_each_revision = bool(config.get("probe_each_revision", True))
-        self.probe_seed = int(config.get("probe_seed", 83001))
         self.minimum_probe_cosine = float(
             config.get("minimum_probe_cosine", _MIN_PROBE_COSINE)
         )
@@ -382,6 +396,8 @@ class RefittableTensorRTDiT:
         self._recent_timing: dict[str, Any] = {"count": 0}
         self._phase = "idle"
         self._probe = None
+        self._initial_probe_pending = False
+        self._probe_input_digest: str | None = None
         self._transpose_staging: dict[str, torch.Tensor] = {}
         self._refitters: list[Any] = []
         free_after_engines, _ = torch.cuda.mem_get_info()
@@ -407,25 +423,6 @@ class RefittableTensorRTDiT:
         if len(self.engines) != 2:
             raise RuntimeError("online TensorRT DiT requires exactly two engine slots")
         device = next(self.action_model.parameters()).device
-        generator = torch.Generator(device="cpu").manual_seed(self.probe_seed)
-
-        def random_bf16(shape: tuple[int, ...]) -> torch.Tensor:
-            return torch.randn(shape, generator=generator).to(
-                device=device, dtype=torch.bfloat16
-            )
-
-        self._probe = {
-            "sa_embs": random_bf16((8, 41, 1536)),
-            "vl_embs": random_bf16((8, 208, 2048)),
-            "timestep": torch.full((8,), 500, dtype=torch.int64, device=device),
-            "image_mask": torch.ones((8, 208), dtype=torch.bool, device=device),
-            "backbone_attention_mask": torch.ones(
-                (8, 208), dtype=torch.bool, device=device
-            ),
-        }
-        for engine in self.engines:
-            for name in ("vl_embs", "image_mask", "backbone_attention_mask"):
-                engine.set_runtime_tensor_shape(name, self._probe[name].shape)
         state = self.action_model.state_dict()
         for entry in self.artifacts["entries"]:
             if entry["transform"] != "transpose_2d":
@@ -607,20 +604,15 @@ class RefittableTensorRTDiT:
         }
 
     def _probe_engine(self, engine: PersistentEngine) -> torch.Tensor:
+        if self._probe is None:
+            raise RuntimeError("TensorRT DiT live probe has not been frozen")
         output = engine(**self._probe)["output"]
         torch.cuda.current_stream().synchronize()
         return output.detach().clone()
 
-    def _verify_probe(self, engine: PersistentEngine) -> dict[str, Any]:
-        with torch.inference_mode():
-            eager = self.eager_forward(
-                hidden_states=self._probe["sa_embs"],
-                encoder_hidden_states=self._probe["vl_embs"],
-                timestep=self._probe["timestep"],
-                image_mask=self._probe["image_mask"],
-                backbone_attention_mask=self._probe["backbone_attention_mask"],
-            ).detach()
-            candidate = self._probe_engine(engine)
+    def _verify_probe_outputs(
+        self, eager: torch.Tensor, candidate: torch.Tensor
+    ) -> dict[str, Any]:
         metrics = _compare_outputs(eager, candidate)
         if not (
             metrics["finite"]
@@ -630,11 +622,64 @@ class RefittableTensorRTDiT:
             raise RuntimeError(f"TensorRT DiT revision probe failed: {metrics}")
         return metrics
 
+    def _verify_probe(self, engine: PersistentEngine) -> dict[str, Any]:
+        if self._probe is None:
+            raise RuntimeError("TensorRT DiT live probe has not been frozen")
+        with torch.inference_mode():
+            eager = self.eager_forward(
+                hidden_states=self._probe["sa_embs"],
+                encoder_hidden_states=self._probe["vl_embs"],
+                timestep=self._probe["timestep"],
+                image_mask=self._probe["image_mask"],
+                backbone_attention_mask=self._probe["backbone_attention_mask"],
+            ).detach()
+            candidate = self._probe_engine(engine)
+        return self._verify_probe_outputs(eager, candidate)
+
+    def _freeze_initial_live_probe(
+        self,
+        inputs: Mapping[str, torch.Tensor],
+        candidate: torch.Tensor,
+    ) -> None:
+        if not self._initial_probe_pending or self._probe is not None:
+            raise RuntimeError("TensorRT DiT initial live probe state is invalid")
+        self._probe = {name: value.detach().clone() for name, value in inputs.items()}
+        for engine in self.engines:
+            for name in ("vl_embs", "image_mask", "backbone_attention_mask"):
+                engine.set_runtime_tensor_shape(name, self._probe[name].shape)
+        try:
+            with torch.inference_mode():
+                eager = self.eager_forward(
+                    hidden_states=self._probe["sa_embs"],
+                    encoder_hidden_states=self._probe["vl_embs"],
+                    timestep=self._probe["timestep"],
+                    image_mask=self._probe["image_mask"],
+                    backbone_attention_mask=self._probe["backbone_attention_mask"],
+                ).detach()
+            metrics = self._verify_probe_outputs(eager, candidate)
+            self._probe_input_digest = _input_digest(self._probe)
+            self.refit_records.append(
+                {
+                    "revision": self.active_revision,
+                    "active_slot": self.active_slot,
+                    "initial_live_probe": metrics,
+                    "probe_input_digest": self._probe_input_digest,
+                }
+            )
+            self._initial_probe_pending = False
+        except Exception:
+            self._phase = "failed_stopped"
+            raise
+
     def _adopt_online_revision(self, revision: int) -> None:
         if self.active_revision is None or revision != self.active_revision + 1:
             raise RuntimeError(
                 "TensorRT DiT revisions must be adopted monotonically: "
                 f"active={self.active_revision}, requested={revision}"
+            )
+        if self._probe is None or self._initial_probe_pending:
+            raise RuntimeError(
+                "TensorRT DiT cannot refit before the initial live probe passes"
             )
         if self._phase != "idle":
             raise RuntimeError(f"TensorRT DiT cannot refit while phase={self._phase}")
@@ -703,17 +748,17 @@ class RefittableTensorRTDiT:
             raise RuntimeError(
                 "Rollout DiT revision-zero bytes differ from the qualified plan source"
             )
+        self.observed_source_digest = observed
+        self.active_revision = revision
         if self.online_refit:
-            probe = self._verify_probe(self.engines[self.active_slot])
+            self._initial_probe_pending = True
             self.refit_records.append(
                 {
                     "revision": revision,
                     "active_slot": self.active_slot,
-                    "initial_probe": probe,
+                    "initial_live_probe_pending": True,
                 }
             )
-        self.observed_source_digest = observed
-        self.active_revision = revision
 
     def __call__(
         self,
@@ -763,6 +808,8 @@ class RefittableTensorRTDiT:
             if not hasattr(self, "_timing_events"):
                 self._timing_events = []
             self._timing_events.append((self.active_revision, timing_start, timing_end))
+        if getattr(self, "_initial_probe_pending", False):
+            self._freeze_initial_live_probe(inputs, output)
         if self.shadow_eager:
             with torch.no_grad():
                 eager_output = self.eager_forward(
@@ -913,6 +960,8 @@ class RefittableTensorRTDiT:
             "expected_source_digest": self.expected_source_digest,
             "observed_source_digest": self.observed_source_digest,
             "observed_staging_digest": self.observed_staging_digest,
+            "probe_input_digest": self._probe_input_digest,
+            "initial_live_probe_pending": self._initial_probe_pending,
             "active_revision": self.active_revision,
             "active_slot": self.active_slot,
             "phase": self._phase,
