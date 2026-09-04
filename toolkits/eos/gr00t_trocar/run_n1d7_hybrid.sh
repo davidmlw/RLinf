@@ -218,9 +218,11 @@ if [[ "$w83_trt_dit_online" == 1 ]]; then
     ++rollout.model.tensorrt_dit.minimum_probe_cosine=0.999
     ++rollout.model.tensorrt_dit.maximum_probe_relative_l2=0.05
     ++rollout.model.tensorrt_dit.minimum_free_device_bytes=8589934592
+    ++rollout.model.tensorrt_dit.ppo_authority_status=failed_ratio_kl_approximate_behavior_only
     ++rollout.model.tensorrt_dit.shadow_eager=false
   )
   printf 'W83_TRT_DIT_ONLINE=1\n'
+  printf 'W83_PPO_AUTHORITY=failed_ratio_kl_approximate_behavior_only\n'
 fi
 case "${W83_EAGER_DIT_TIMING:-0}" in
   0) ;;

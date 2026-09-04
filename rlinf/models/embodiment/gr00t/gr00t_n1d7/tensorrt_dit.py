@@ -41,6 +41,8 @@ _EXPECTED_INPUTS = {
 _EXPECTED_OUTPUT = ([8, 41, 1024], "BF16")
 _MIN_PROBE_COSINE = 0.999
 _MAX_PROBE_RELATIVE_L2 = 0.05
+_MIN_FREE_DEVICE_BYTES = 8 << 30
+_APPROXIMATE_PPO_AUTHORITY = "failed_ratio_kl_approximate_behavior_only"
 
 
 def _sha256(path: Path) -> str:
@@ -186,6 +188,34 @@ def _ordered_source_digest(
     return digest.hexdigest()
 
 
+def _ordered_staging_digest(
+    staged: Mapping[str, torch.Tensor], entries: list[dict[str, Any]]
+) -> str:
+    digest = hashlib.sha256()
+    for entry in entries:
+        name = entry["initializer"]
+        value = staged[name]
+        if list(value.shape) != entry["initializer_shape"]:
+            raise RuntimeError(f"TensorRT DiT staging shape changed for {name}")
+        metadata = json.dumps(
+            {
+                "name": name,
+                "source_fqn": entry["source_fqn"],
+                "transform": entry["transform"],
+                "shape": list(value.shape),
+                "dtype": str(value.dtype),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        payload = value.detach().contiguous().view(torch.uint8).cpu().numpy().tobytes()
+        digest.update(len(metadata).to_bytes(8, "little"))
+        digest.update(metadata)
+        digest.update(len(payload).to_bytes(8, "little"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
 def _compare_outputs(
     reference: torch.Tensor, candidate: torch.Tensor
 ) -> dict[str, Any]:
@@ -252,7 +282,7 @@ class CudaTimedDiTForward:
     def telemetry(self) -> dict[str, Any]:
         recent = []
         if self._events:
-            self._events[-1][1].synchronize()
+            self._events[-1][2].synchronize()
             recent = [
                 float(start.elapsed_time(end)) for _revision, start, end in self._events
             ]
@@ -286,9 +316,6 @@ class RefittableTensorRTDiT:
         config: Mapping[str, Any],
     ) -> None:
         self.config = dict(config)
-        self.artifacts = _load_artifacts(config)
-        self.runtime = _validate_runtime(config)
-        self.expected_source_digest = str(_required(config, "source_digest_revision_0"))
         self.expected_revision = int(config.get("revision", 0))
         if self.expected_revision != 0:
             raise ValueError("W83 diagnostic supports only the initial revision zero")
@@ -305,6 +332,25 @@ class RefittableTensorRTDiT:
             raise ValueError("TensorRT DiT probe cosine gate cannot be weakened")
         if self.maximum_probe_relative_l2 > _MAX_PROBE_RELATIVE_L2:
             raise ValueError("TensorRT DiT probe relative-L2 gate cannot be weakened")
+        self.minimum_headroom = int(
+            config.get("minimum_free_device_bytes", _MIN_FREE_DEVICE_BYTES)
+        )
+        self.ppo_authority_status = config.get("ppo_authority_status")
+        if self.online_refit:
+            if not self.probe_each_revision:
+                raise ValueError("online TensorRT DiT requires a probe every revision")
+            if self.minimum_headroom < _MIN_FREE_DEVICE_BYTES:
+                raise ValueError(
+                    "online TensorRT DiT requires at least 8 GiB free-device headroom"
+                )
+            if self.ppo_authority_status != _APPROXIMATE_PPO_AUTHORITY:
+                raise ValueError(
+                    "online TensorRT DiT must declare its failed PPO authority gate"
+                )
+
+        self.artifacts = _load_artifacts(config)
+        self.runtime = _validate_runtime(config)
+        self.expected_source_digest = str(_required(config, "source_digest_revision_0"))
 
         free_before_engines, total_device_bytes = torch.cuda.mem_get_info()
         self.engines = [PersistentEngine(str(self.artifacts["engine_path"]))]
@@ -328,6 +374,7 @@ class RefittableTensorRTDiT:
         self.shadow_by_timestep: dict[int, dict[str, Any]] = {}
         self.active_revision: int | None = None
         self.observed_source_digest: str | None = None
+        self.observed_staging_digest: str | None = None
         self.refit_records: list[dict[str, Any]] = []
         self._timing_events: list[tuple[int, torch.cuda.Event, torch.cuda.Event]] = []
         self._timing_samples: list[float] = []
@@ -396,7 +443,7 @@ class RefittableTensorRTDiT:
             refitter.weights_validation = True
             self._refitters.append(refitter)
         free, total = torch.cuda.mem_get_info(device)
-        minimum_headroom = int(self.config.get("minimum_free_device_bytes", 8 << 30))
+        minimum_headroom = self.minimum_headroom
         if free < minimum_headroom:
             raise RuntimeError(
                 "online TensorRT DiT did not retain the configured device headroom"
@@ -468,6 +515,52 @@ class RefittableTensorRTDiT:
             "staging_device_ms": float(start.elapsed_time(end)),
             "staging_wall_ms": (time.perf_counter() - wall_started) * 1000,
         }
+
+    def _validate_staging(
+        self,
+        source: Mapping[str, torch.Tensor],
+        staged: Mapping[str, torch.Tensor],
+    ) -> dict[str, float]:
+        stream = torch.cuda.current_stream()
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        wall_started = time.perf_counter()
+        start.record(stream)
+        comparisons = []
+        for entry in self.artifacts["entries"]:
+            source_value = source[entry["source_fqn"]]
+            staged_value = staged[entry["initializer"]]
+            if entry["transform"] == "identity":
+                if staged_value.data_ptr() != source_value.data_ptr():
+                    raise RuntimeError(
+                        f"identity staging lost source storage for {entry['source_fqn']}"
+                    )
+            else:
+                comparisons.append(
+                    torch.eq(staged_value, source_value.transpose(0, 1)).all()
+                )
+        if comparisons:
+            comparison_passed = torch.stack(comparisons).all()
+        else:
+            comparison_passed = torch.ones((), dtype=torch.bool, device=stream.device)
+        end.record(stream)
+        end.synchronize()
+        if not bool(comparison_passed.item()):
+            raise RuntimeError("TensorRT DiT transformed staging differs from source")
+        return {
+            "staging_validation_device_ms": float(start.elapsed_time(end)),
+            "staging_validation_wall_ms": (time.perf_counter() - wall_started) * 1000,
+        }
+
+    def _lineage_digests(
+        self, staged: Mapping[str, torch.Tensor]
+    ) -> tuple[str, str, float]:
+        started = time.perf_counter()
+        source_digest = _ordered_source_digest(
+            self.action_model, self.artifacts["entries"]
+        )
+        staging_digest = _ordered_staging_digest(staged, self.artifacts["entries"])
+        return source_digest, staging_digest, (time.perf_counter() - started) * 1000
 
     def _refit_slot(
         self, slot: int, staged: Mapping[str, torch.Tensor]
@@ -551,6 +644,10 @@ class RefittableTensorRTDiT:
         try:
             source = self._source_state()
             staged, staging = self._stage_weights(source)
+            staging_validation = self._validate_staging(source, staged)
+            source_digest, staging_digest, lineage_wall_ms = self._lineage_digests(
+                staged
+            )
             refit = self._refit_slot(inactive_slot, staged)
             probe = (
                 self._verify_probe(self.engines[inactive_slot])
@@ -566,11 +663,17 @@ class RefittableTensorRTDiT:
             self.active_slot = inactive_slot
             self.engine = self.engines[inactive_slot]
             self.active_revision = revision
+            self.observed_source_digest = source_digest
+            self.observed_staging_digest = staging_digest
             self.refit_records.append(
                 {
                     "revision": revision,
                     "active_slot": inactive_slot,
                     **staging,
+                    **staging_validation,
+                    "source_digest": source_digest,
+                    "staging_digest": staging_digest,
+                    "lineage_digest_wall_ms": lineage_wall_ms,
                     **refit,
                     "probe": probe,
                     "adoption_wall_ms": (time.perf_counter() - wall_started) * 1000,
@@ -809,10 +912,12 @@ class RefittableTensorRTDiT:
             "parameter_map_sha256": self.artifacts["parameter_map_sha256"],
             "expected_source_digest": self.expected_source_digest,
             "observed_source_digest": self.observed_source_digest,
+            "observed_staging_digest": self.observed_staging_digest,
             "active_revision": self.active_revision,
             "active_slot": self.active_slot,
             "phase": self._phase,
             "online_refit": self.online_refit,
+            "ppo_authority_status": self.ppo_authority_status,
             "memory": self._memory,
             "refit_records": self.refit_records,
             "inference_timing_recent": self._recent_timing,
