@@ -1,0 +1,171 @@
+{
+  "schema": "rlinf.gr00t-n1d7-refittable-dit-feasibility.v1",
+  "scope": {
+    "status": "independent_feasibility_only",
+    "qualified_candidate_unchanged": "TensorRT ViT+LLM backbone + eager PyTorch DiT + exact rollout feature reuse",
+    "forbidden": [
+      "replace_or_modify_the_W81_qualified_candidate",
+      "silent_eager_fallback",
+      "claim_PPO_correctness_from_final_action_similarity",
+      "hide_refit_or_weight_staging_in_resident_inference"
+    ]
+  },
+  "source": {
+    "base_commit": "05322ee59beaf74ca03cd3aabce60bc567ffdcb5",
+    "isaac_gr00t_commit": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
+    "checkpoint": "nvidia/GR00T-N1.7-3B@2fc962b973bccdd5d8ce4f67cc63b264d6886495",
+    "tensorrt_version": "10.15.1.29"
+  },
+  "parameter_authority": {
+    "actor": "eager_FSDP_action_head_at_revision_N",
+    "rollout_sync_view": [
+      "action_head"
+    ],
+    "tensorrt_refit_prefix": "action_head.model",
+    "pytorch_execution_prefixes": [
+      "action_head.vlln",
+      "action_head.vl_self_attention",
+      "action_head.state_encoder",
+      "action_head.action_encoder",
+      "action_head.position_embedding",
+      "action_head.action_decoder",
+      "action_head.value_head"
+    ],
+    "model_config_requires": {
+      "tune_projector": true,
+      "tune_diffusion_model": true,
+      "tune_vlln": true
+    },
+    "apply_order": [
+      "receive_and_apply_complete_action_head_patch_in_place",
+      "wait_for_weight_apply_stream",
+      "validate_revision_and_parameter_map",
+      "materialize_transposed_DiT_weight_staging",
+      "refit_inactive_TensorRT_DiT_engine",
+      "verify_refit_inventory_and_candidate_output",
+      "publish_revision_and_atomically_swap_active_engine"
+    ]
+  },
+  "offline_parameter_gate": {
+    "expected_checkpoint_action_head_tensors": 537,
+    "expected_checkpoint_action_head_parameters": 1620515968,
+    "expected_checkpoint_action_head_bytes_bf16": 3241031936,
+    "expected_dit_tensors": 456,
+    "expected_dit_parameters": 1091722240,
+    "expected_dit_bytes_bf16": 2183444480,
+    "expected_initializer_transforms": {
+      "identity": 263,
+      "transpose_2d": 193
+    },
+    "requirements": [
+      "every_checkpoint_action_head_model_tensor_maps_once",
+      "every_ONNX_initializer_maps_once",
+      "shape_dtype_count_match",
+      "engine_refitter_inventory_exactly_matches_the_frozen_map"
+    ]
+  },
+  "refit_engine": {
+    "builder_flag": "REFIT",
+    "refit_identical_allowed": false,
+    "reason": "PPO changes DiT weights after every optimizer phase",
+    "set_named_weights_location": "DEVICE",
+    "anonymous_ONNX_linear_weight_transform": "transpose_2d_contiguous",
+    "contexts_remain_valid_after_successful_refit": true,
+    "concurrent_inference_and_refit": false,
+    "adoption": "double_buffered_inactive_engine_refit_then_verified_swap",
+    "failure_policy": "keep_previous_active_engine_and_revision_or_fail_stop",
+    "single_engine_in_place_failure_rollback_claim": false
+  },
+  "revision_gate": {
+    "strictly_monotonic": true,
+    "active_revision_changes_only_after_candidate_verification": true,
+    "required_receipt_fields": [
+      "actor_revision",
+      "action_head_patch_identity",
+      "parameter_map_sha256",
+      "source_weight_digest",
+      "refitter_inventory_digest",
+      "refit_wall_ms",
+      "refit_device_ms",
+      "staging_wall_ms",
+      "candidate_output_digest",
+      "active_engine_slot",
+      "previous_engine_slot"
+    ]
+  },
+  "ppo_authority": {
+    "behavior_executor": "refitted_TensorRT_DiT_on_Rollout",
+    "current_policy_and_gradient_executor": "eager_FSDP_DiT_on_Actor",
+    "decisive_gate": "TensorRT_Rollout_vs_eager_Actor_same_revision",
+    "TensorRT_vs_TensorRT_use": "refit_and_lifecycle_diagnostic_only",
+    "TensorRT_vs_TensorRT_is_not_gradient_authority": true,
+    "inputs_must_match": [
+      "exact_backbone_features",
+      "state_and_embodiment",
+      "initial_and_transition_noise",
+      "denoise_indices",
+      "masks",
+      "revision",
+      "action_level_reduction"
+    ],
+    "first_divergence_checkpoints": [
+      "DiT_output_per_denoise_step",
+      "decoded_velocity_per_denoise_step",
+      "transition_mean_per_denoise_step",
+      "chain_state_per_denoise_step",
+      "per_dimension_logprob",
+      "action_level_logprob",
+      "ratio",
+      "KL",
+      "normalized_action"
+    ]
+  },
+  "numerical_gates": {
+    "final_action": {
+      "cosine_min": 0.999,
+      "mean_abs_max": 0.005,
+      "max_abs_max": 0.05,
+      "finite": true
+    },
+    "pre_update_same_revision": {
+      "ratio_mean_abs_from_one_max": 0.0001,
+      "ratio_max_abs_from_one_max": 0.1,
+      "kl_mean_abs_max": 0.0001,
+      "kl_max_abs_max": 0.1,
+      "ratio_abs_gt_1e-3_fraction_max": 0.001,
+      "kl_abs_gt_1e-3_fraction_max": 0.001,
+      "value_mean_abs_max": 0.0005,
+      "value_max_abs_max": 0.01
+    },
+    "one_update": {
+      "required_only_after_pre_update_pass": true,
+      "loss_abs_max": 0.01,
+      "gradient_cosine_min": 0.999,
+      "gradient_relative_l2_max": 0.02,
+      "parameter_delta_cosine_min": 0.999,
+      "parameter_delta_relative_l2_max": 0.02
+    }
+  },
+  "performance_gates": {
+    "compare": [
+      "non_refittable_TensorRT_DiT",
+      "refittable_TensorRT_DiT",
+      "eager_PyTorch_DiT"
+    ],
+    "separate": [
+      "cold_build",
+      "engine_load_context_and_buffers",
+      "weight_staging",
+      "refit",
+      "candidate_verification",
+      "resident_DiT_inference"
+    ],
+    "record": [
+      "latency_distribution",
+      "peak_GPU_memory",
+      "plan_size",
+      "refit_weight_bytes",
+      "engine_and_context_counts"
+    ]
+  }
+}
