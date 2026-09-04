@@ -649,6 +649,11 @@ def test_online_refit_adopts_only_the_verified_inactive_slot(monkeypatch) -> Non
         {"weight": object()},
         {"staging_device_ms": 2.0, "staging_wall_ms": 2.5},
     )
+    executor._validate_staging = lambda _source, _staged: {
+        "staging_validation_device_ms": 1.0,
+        "staging_validation_wall_ms": 1.5,
+    }
+    executor._lineage_digests = lambda _staged: ("source-1", "staging-1", 6.0)
     executor._refit_slot = lambda slot, _staged: {
         "slot": slot,
         "weight_count": 1,
@@ -665,6 +670,8 @@ def test_online_refit_adopts_only_the_verified_inactive_slot(monkeypatch) -> Non
     assert executor.active_slot == 1
     assert executor.engine == "slot-1"
     assert executor._phase == "idle"
+    assert executor.observed_source_digest == "source-1"
+    assert executor.observed_staging_digest == "staging-1"
     assert executor.refit_records[-1]["probe"]["engine"] == "slot-1"
 
 
@@ -689,6 +696,11 @@ def test_online_refit_probe_failure_keeps_old_slot_and_fail_stops(monkeypatch) -
         {},
         {"staging_device_ms": 0.0, "staging_wall_ms": 0.0},
     )
+    executor._validate_staging = lambda _source, _staged: {
+        "staging_validation_device_ms": 0.0,
+        "staging_validation_wall_ms": 0.0,
+    }
+    executor._lineage_digests = lambda _staged: ("source-1", "staging-1", 0.0)
     executor._refit_slot = lambda _slot, _staged: {}
     executor._verify_probe = lambda _engine: (_ for _ in ()).throw(
         RuntimeError("probe failed")
@@ -702,3 +714,66 @@ def test_online_refit_probe_failure_keeps_old_slot_and_fail_stops(monkeypatch) -
     assert executor.active_slot == 0
     assert executor.engine == "slot-0"
     assert executor._phase == "failed_stopped"
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"probe_each_revision": False}, "probe every revision"),
+        ({"minimum_free_device_bytes": (8 << 30) - 1}, "at least 8 GiB"),
+        ({"ppo_authority_status": "passed"}, "failed PPO authority"),
+    ],
+)
+def test_online_refit_rejects_weakened_safety_config(override, message) -> None:
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_dit import (
+        RefittableTensorRTDiT,
+    )
+
+    config = {
+        "online_refit": True,
+        "probe_each_revision": True,
+        "minimum_free_device_bytes": 8 << 30,
+        "ppo_authority_status": "failed_ratio_kl_approximate_behavior_only",
+        **override,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        RefittableTensorRTDiT(None, config)
+
+
+def test_eager_timing_waits_for_end_event(monkeypatch) -> None:
+    import torch
+
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_dit import (
+        CudaTimedDiTForward,
+    )
+
+    events = []
+
+    class FakeEvent:
+        def __init__(self, **_kwargs):
+            self.synchronized = False
+            events.append(self)
+
+        def record(self, _stream):
+            return None
+
+        def synchronize(self):
+            self.synchronized = True
+
+        def elapsed_time(self, end):
+            assert end.synchronized
+            return 7.0
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda: object())
+    monkeypatch.setattr(torch.cuda, "Event", FakeEvent)
+    timed = CudaTimedDiTForward(lambda value: value + 1)
+    timed.set_revision(4)
+
+    assert timed(2) == 3
+    telemetry = timed.telemetry()
+
+    assert events[0].synchronized is False
+    assert events[1].synchronized is True
+    assert telemetry["by_revision"]["4"]["mean_ms"] == 7.0
