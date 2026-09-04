@@ -553,3 +553,17 @@ def test_revision_zero_diagnostic_is_wired_to_existing_ppo_gate() -> None:
     assert "W83_TRT_DIT_DIAGNOSTIC" in runner_source
     assert "revision_zero_PPO_identity_diagnostic_no_online_refit" in runtime_source
     assert "refuses online updates" in runtime_source
+
+
+def test_revision_zero_diagnostic_matches_alternate_vl_dit_keywords() -> None:
+    runtime_source = (
+        ROOT / "rlinf/models/embodiment/gr00t/gr00t_n1d7/tensorrt_dit.py"
+    ).read_text(encoding="utf-8")
+    signature = runtime_source.split("def __call__(", 1)[1].split(
+        ") -> torch.Tensor:", 1
+    )[0]
+
+    assert "hidden_states: torch.Tensor" in signature
+    assert "encoder_hidden_states: torch.Tensor" in signature
+    assert '"sa_embs": hidden_states' in runtime_source
+    assert '"vl_embs": encoder_hidden_states' in runtime_source

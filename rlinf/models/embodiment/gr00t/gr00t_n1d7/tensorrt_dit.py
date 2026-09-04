@@ -225,8 +225,8 @@ class TensorRTDiTRevisionZeroDiagnostic:
 
     def __call__(
         self,
-        sa_embs: torch.Tensor,
-        vl_embs: torch.Tensor,
+        hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
         timestep: torch.Tensor,
         *,
         image_mask: torch.Tensor,
@@ -239,8 +239,8 @@ class TensorRTDiTRevisionZeroDiagnostic:
                 "TensorRT DiT inference attempted before revision admission"
             )
         inputs = {
-            "sa_embs": sa_embs,
-            "vl_embs": vl_embs,
+            "sa_embs": hidden_states,
+            "vl_embs": encoder_hidden_states,
             "timestep": timestep,
             "image_mask": image_mask,
             "backbone_attention_mask": backbone_attention_mask,
