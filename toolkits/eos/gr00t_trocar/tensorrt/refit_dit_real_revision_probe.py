@@ -41,7 +41,11 @@ from refit_dit_lifecycle_probe import (
     _source_state,
     _trt,
 )
-from refittable_dit_contract import RefitRevisionFence, double_buffer_memory_preflight
+from refittable_dit_contract import (
+    DEFAULT_DOUBLE_BUFFER_HEADROOM_BYTES,
+    RefitRevisionFence,
+    double_buffer_memory_preflight,
+)
 
 
 def _load_checkpoint_dit(
@@ -97,8 +101,16 @@ def _apply_checkpoint_dit(
 ) -> dict[str, Any]:
     import torch
 
-    changed_tensors = 0
-    changed_parameters = 0
+    changes = {
+        transform: {
+            "fqns": [],
+            "tensor_count": 0,
+            "tensor_bytes": 0,
+            "changed_parameters": 0,
+            "changed_element_bytes": 0,
+        }
+        for transform in ("identity", "transpose_2d")
+    }
     maximum_absolute_delta = 0.0
     with torch.no_grad():
         for entry in entries:
@@ -106,17 +118,32 @@ def _apply_checkpoint_dit(
             destination = source[name]
             candidate = checkpoint[name].to(device=destination.device)
             delta = (candidate.float() - destination.float()).abs()
-            tensor_changed = bool(torch.count_nonzero(delta))
-            if tensor_changed:
-                changed_tensors += 1
-                changed_parameters += int(torch.count_nonzero(delta))
+            changed_parameters = int(torch.count_nonzero(delta))
+            if changed_parameters:
+                group = changes[entry["transform"]]
+                group["fqns"].append(name)
+                group["tensor_count"] += 1
+                group["tensor_bytes"] += (
+                    destination.numel() * destination.element_size()
+                )
+                group["changed_parameters"] += changed_parameters
+                group["changed_element_bytes"] += (
+                    changed_parameters * destination.element_size()
+                )
                 maximum_absolute_delta = max(maximum_absolute_delta, float(delta.max()))
             destination.copy_(candidate)
             del candidate, delta
     torch.cuda.synchronize()
     return {
-        "changed_tensors": changed_tensors,
-        "changed_parameters": changed_parameters,
+        "by_transform": changes,
+        "changed_tensors": sum(item["tensor_count"] for item in changes.values()),
+        "changed_tensor_bytes": sum(item["tensor_bytes"] for item in changes.values()),
+        "changed_parameters": sum(
+            item["changed_parameters"] for item in changes.values()
+        ),
+        "changed_element_bytes": sum(
+            item["changed_element_bytes"] for item in changes.values()
+        ),
         "maximum_absolute_delta": maximum_absolute_delta,
     }
 
@@ -176,6 +203,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         (entry["source_fqn"], base_source[entry["source_fqn"]]) for entry in entries
     ]
     source_digest_0 = _ordered_tensor_digest(base_order)
+    staging_0, transformed_staging_bytes_0 = _make_staging(base_source, entries)
+    staging_digest_0 = _ordered_tensor_digest(
+        [(entry["initializer"], staging_0[entry["initializer"]]) for entry in entries]
+    )
+    del staging_0
+    gc.collect()
+    torch.cuda.empty_cache()
     probe_digest = _ordered_tensor_digest(sorted(probe.items()))
     eager_0 = _eager(dit, probe)
     active_0 = _trt(active, probe)
@@ -220,6 +254,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("post-apply DiT digest differs from the checkpoint")
     if change_summary["changed_tensors"] == 0:
         raise RuntimeError("real Actor checkpoint did not change any DiT tensor")
+    for transform in ("identity", "transpose_2d"):
+        if change_summary["by_transform"][transform]["tensor_count"] == 0:
+            raise RuntimeError(
+                f"real Actor checkpoint did not change a {transform} DiT tensor"
+            )
 
     staging, transformed_staging_bytes = _make_staging(base_source, entries)
     staging_order = [
@@ -249,6 +288,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("qualified memory preflight rejected a second engine slot")
 
     candidate, candidate_free_before, candidate_free_after = _new_runtime(plan, probe)
+    if candidate_free_after < DEFAULT_DOUBLE_BUFFER_HEADROOM_BYTES:
+        candidate.close()
+        raise RuntimeError(
+            "actual second-slot allocation left less than the frozen 8 GiB headroom"
+        )
     candidate_refitter = trt.Refitter(candidate.handle, candidate.logger)
     candidate_refitter.weights_validation = True
     actual_names = set(candidate_refitter.get_all_weights())
@@ -322,9 +366,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         },
         "device_weights": {
             "source_digest_revision_0": source_digest_0,
+            "staging_digest_revision_0": staging_digest_0,
             "expected_source_digest_revision_1": expected_source_digest_1,
             "observed_source_digest_revision_1": source_digest_1,
             "staging_digest_revision_1": staging_digest_1,
+            "transformed_staging_bytes_revision_0": transformed_staging_bytes_0,
             "transformed_staging_bytes": transformed_staging_bytes,
             **change_summary,
         },
@@ -357,6 +403,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "candidate_slot_free_after": candidate_free_after,
             "candidate_slot_observed_delta_bytes": (
                 candidate_free_before - candidate_free_after
+            ),
+            "required_actual_remaining_headroom_bytes": (
+                DEFAULT_DOUBLE_BUFFER_HEADROOM_BYTES
+            ),
+            "actual_remaining_headroom_passed": (
+                candidate_free_after >= DEFAULT_DOUBLE_BUFFER_HEADROOM_BYTES
             ),
             "double_buffer_preflight": preflight,
         },
