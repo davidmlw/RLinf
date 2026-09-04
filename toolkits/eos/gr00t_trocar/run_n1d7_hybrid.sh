@@ -132,9 +132,11 @@ sha256sum \
   >"$W73_ATTEMPT_ROOT/runtime/tensorrt-artifacts.sha256"
 
 w83_dit_root="/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W83/W83-refittable-dit-build-r3-5972556"
-case "${W83_TRT_DIT_DIAGNOSTIC:-0}" in
-  0) ;;
-  1)
+w83_trt_dit_diagnostic="${W83_TRT_DIT_DIAGNOSTIC:-0}"
+w83_trt_dit_online="${W83_TRT_DIT_ONLINE:-0}"
+case "$w83_trt_dit_diagnostic:$w83_trt_dit_online" in
+  0:0) ;;
+  1:0|0:1)
     sha256sum \
       "$w83_dit_root/engine/rlinf-refittable-dit-engine-receipt.json" \
       "$w83_dit_root/refittable-dit-parameter-map.json" \
@@ -142,7 +144,7 @@ case "${W83_TRT_DIT_DIAGNOSTIC:-0}" in
       >"$W73_ATTEMPT_ROOT/runtime/w83-refittable-dit-artifacts.sha256"
     ;;
   *)
-    printf 'W83_TRT_DIT_DIAGNOSTIC must be 0 or 1\n' >&2
+    printf 'exactly zero or one W83 TensorRT DiT mode must be enabled\n' >&2
     exit 2
     ;;
 esac
@@ -178,7 +180,7 @@ overrides=(
 if [[ -n "$W73_RESUME_DIR" ]]; then
   overrides+=(runner.resume_dir="$W73_RESUME_DIR")
 fi
-if [[ "${W83_TRT_DIT_DIAGNOSTIC:-0}" == 1 ]]; then
+if [[ "$w83_trt_dit_diagnostic" == 1 ]]; then
   overrides+=(
     runner.logger.experiment_name=w83_n1d7_trt_dit_identity
     ++rollout.model.tensorrt_dit_diagnostic.enabled=true
@@ -196,6 +198,45 @@ if [[ "${W83_TRT_DIT_DIAGNOSTIC:-0}" == 1 ]]; then
   )
   printf 'W83_TRT_DIT_DIAGNOSTIC=1\n'
 fi
+if [[ "$w83_trt_dit_online" == 1 ]]; then
+  overrides+=(
+    runner.logger.experiment_name=w83_n1d7_online_refittable_trt_dit
+    ++rollout.model.tensorrt_dit.enabled=true
+    ++rollout.model.tensorrt_dit.engine_path="$w83_dit_root/engine/dit_bf16_refit.engine"
+    ++rollout.model.tensorrt_dit.receipt_path="$w83_dit_root/engine/rlinf-refittable-dit-engine-receipt.json"
+    ++rollout.model.tensorrt_dit.receipt_sha256=774652d469c47884c6756fe98196884df74cdc129bd611afcf7ea949be7cf024
+    ++rollout.model.tensorrt_dit.parameter_map_path="$w83_dit_root/refittable-dit-parameter-map.json"
+    ++rollout.model.tensorrt_dit.parameter_map_sha256=df7c72b90629ff6343f52c066a03d430728cc7cd605d12c1b884851fed48c935
+    ++rollout.model.tensorrt_dit.source_digest_revision_0=dcadd3c8a2bf405e53dc23aded49c536d0315f4d68f86417feb59a321bd2aaca
+    ++rollout.model.tensorrt_dit.revision=0
+    ++rollout.model.tensorrt_dit.runtime_version=10.15.1.29
+    ++rollout.model.tensorrt_dit.runtime_distribution=tensorrt-cu12
+    ++rollout.model.tensorrt_dit.compute_capability='[9,0]'
+    ++rollout.model.tensorrt_dit.online_refit=true
+    ++rollout.model.tensorrt_dit.probe_each_revision=true
+    ++rollout.model.tensorrt_dit.probe_seed=83001
+    ++rollout.model.tensorrt_dit.minimum_probe_cosine=0.999
+    ++rollout.model.tensorrt_dit.maximum_probe_relative_l2=0.05
+    ++rollout.model.tensorrt_dit.minimum_free_device_bytes=8589934592
+    ++rollout.model.tensorrt_dit.shadow_eager=false
+  )
+  printf 'W83_TRT_DIT_ONLINE=1\n'
+fi
+case "${W83_EAGER_DIT_TIMING:-0}" in
+  0) ;;
+  1)
+    if [[ "$w83_trt_dit_diagnostic" == 1 || "$w83_trt_dit_online" == 1 ]]; then
+      printf 'W83_EAGER_DIT_TIMING cannot be combined with TensorRT DiT\n' >&2
+      exit 2
+    fi
+    overrides+=(++rollout.model.enable_eager_dit_timing=true)
+    printf 'W83_EAGER_DIT_TIMING=1\n'
+    ;;
+  *)
+    printf 'W83_EAGER_DIT_TIMING must be 0 or 1\n' >&2
+    exit 2
+    ;;
+esac
 case "${W81_DISABLE_PRE_UPDATE_IDENTITY_GATE:-0}" in
   0) ;;
   1)

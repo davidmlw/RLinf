@@ -556,7 +556,11 @@ def test_revision_zero_diagnostic_is_wired_to_existing_ppo_gate() -> None:
     assert "if contract is None:" not in verify_source
     assert "verify_online_update(applied_version)" in worker_source
     assert "W83_TRT_DIT_DIAGNOSTIC" in runner_source
+    assert "W83_TRT_DIT_ONLINE" in runner_source
+    assert "++rollout.model.tensorrt_dit.online_refit=true" in runner_source
+    assert "++rollout.model.enable_eager_dit_timing=true" in runner_source
     assert "revision_zero_PPO_identity_diagnostic_no_online_refit" in runtime_source
+    assert "online_double_slot_refittable_tensorrt_dit" in runtime_source
     assert "refuses online updates" in runtime_source
 
 
@@ -564,7 +568,8 @@ def test_revision_zero_diagnostic_matches_alternate_vl_dit_keywords() -> None:
     runtime_source = (
         ROOT / "rlinf/models/embodiment/gr00t/gr00t_n1d7/tensorrt_dit.py"
     ).read_text(encoding="utf-8")
-    signature = runtime_source.split("def __call__(", 1)[1].split(
+    executor_source = runtime_source.split("class RefittableTensorRTDiT", 1)[1]
+    signature = executor_source.split("def __call__(", 1)[1].split(
         ") -> torch.Tensor:", 1
     )[0]
 
@@ -601,6 +606,8 @@ def test_revision_zero_diagnostic_eager_shadow_preserves_tensorrt_output() -> No
     )
     diagnostic.shadow_calls = 0
     diagnostic.shadow_by_timestep = {}
+    diagnostic._phase = "idle"
+    diagnostic._timing_events = []
 
     output = diagnostic(
         hidden_states=torch.zeros((8, 41, 1536), dtype=torch.bfloat16),
@@ -619,3 +626,79 @@ def test_revision_zero_diagnostic_eager_shadow_preserves_tensorrt_output() -> No
     assert summary["per_timestep"][0]["timestep_bucket"] == 250
     assert summary["per_timestep"][0]["mean_abs"] == pytest.approx(0.125)
     assert summary["per_timestep"][0]["max_abs"] == pytest.approx(0.125)
+
+
+def test_online_refit_adopts_only_the_verified_inactive_slot(monkeypatch) -> None:
+    import torch
+
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_dit import (
+        RefittableTensorRTDiT,
+    )
+
+    executor = RefittableTensorRTDiT.__new__(RefittableTensorRTDiT)
+    executor.active_revision = 0
+    executor.active_slot = 0
+    executor.engine = "slot-0"
+    executor.engines = ["slot-0", "slot-1"]
+    executor._phase = "idle"
+    executor._memory = {"minimum_free_device_bytes": 1}
+    executor.refit_records = []
+    executor.probe_each_revision = True
+    executor._source_state = lambda: {"weight": object()}
+    executor._stage_weights = lambda _source: (
+        {"weight": object()},
+        {"staging_device_ms": 2.0, "staging_wall_ms": 2.5},
+    )
+    executor._refit_slot = lambda slot, _staged: {
+        "slot": slot,
+        "weight_count": 1,
+        "set_weights_wall_ms": 3.0,
+        "refit_wall_ms": 4.0,
+        "refit_device_ms": 4.0,
+    }
+    executor._verify_probe = lambda engine: {"engine": engine, "cosine": 1.0}
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda: (100, 200))
+
+    executor._adopt_online_revision(1)
+
+    assert executor.active_revision == 1
+    assert executor.active_slot == 1
+    assert executor.engine == "slot-1"
+    assert executor._phase == "idle"
+    assert executor.refit_records[-1]["probe"]["engine"] == "slot-1"
+
+
+def test_online_refit_probe_failure_keeps_old_slot_and_fail_stops(monkeypatch) -> None:
+    import torch
+
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_dit import (
+        RefittableTensorRTDiT,
+    )
+
+    executor = RefittableTensorRTDiT.__new__(RefittableTensorRTDiT)
+    executor.active_revision = 0
+    executor.active_slot = 0
+    executor.engine = "slot-0"
+    executor.engines = ["slot-0", "slot-1"]
+    executor._phase = "idle"
+    executor._memory = {"minimum_free_device_bytes": 1}
+    executor.refit_records = []
+    executor.probe_each_revision = True
+    executor._source_state = lambda: {}
+    executor._stage_weights = lambda _source: (
+        {},
+        {"staging_device_ms": 0.0, "staging_wall_ms": 0.0},
+    )
+    executor._refit_slot = lambda _slot, _staged: {}
+    executor._verify_probe = lambda _engine: (_ for _ in ()).throw(
+        RuntimeError("probe failed")
+    )
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda: (100, 200))
+
+    with pytest.raises(RuntimeError, match="probe failed"):
+        executor._adopt_online_revision(1)
+
+    assert executor.active_revision == 0
+    assert executor.active_slot == 0
+    assert executor.engine == "slot-0"
+    assert executor._phase == "failed_stopped"
