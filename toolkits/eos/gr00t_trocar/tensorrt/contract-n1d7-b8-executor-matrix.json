@@ -35,7 +35,7 @@
       "ppo_lifecycle": "immutable",
       "executors": {
         "eager": "PyTorch eager ViT+LLM",
-        "pt2": "torch.compile full eager backbone forward, dynamic=false",
+        "pt2": "torch.compile full eager backbone forward, dynamic=false, capture_scalar_outputs=true for FlashAttention varlen SymInt",
         "tensorrt": "persistent immutable ViT+LLM engines"
       }
     },

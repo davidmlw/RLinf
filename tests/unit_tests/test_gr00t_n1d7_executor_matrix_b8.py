@@ -137,3 +137,14 @@ def test_executor_uses_narrow_refit_runtime_import() -> None:
     source = (TOOLS / "executor_matrix_b8.py").read_text(encoding="utf-8")
     assert "def _load_refittable_tensorrt_dit" in source
     assert "from rlinf.models.embodiment" not in source
+
+
+def test_pt2_backbone_preserves_flash_attention_scalar_lengths() -> None:
+    source = (TOOLS / "executor_matrix_b8.py").read_text(encoding="utf-8")
+    assert "torch._dynamo.config.capture_scalar_outputs = True" in source
+    assert "capture_scalar_outputs_before" in source
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+    assert (
+        "capture_scalar_outputs=true"
+        in contract["partition"]["frozen_backbone"]["executors"]["pt2"]
+    )

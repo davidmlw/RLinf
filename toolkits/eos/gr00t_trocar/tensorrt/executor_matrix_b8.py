@@ -333,9 +333,16 @@ def run_executor_matrix(
     }
     lifecycle = {"memory_before_setup": _cuda_memory()}
     trt_dit = None
+    capture_scalar_outputs_before = torch._dynamo.config.capture_scalar_outputs
     try:
         torch._dynamo.reset()
         torch._dynamo.utils.counters.clear()
+        torch._dynamo.config.capture_scalar_outputs = True
+        lifecycle["pt2_compile_policy"] = {
+            "dynamic": False,
+            "capture_scalar_outputs": True,
+            "reason": "preserve FlashAttention varlen max sequence lengths as SymInt",
+        }
         compile_started = time.perf_counter()
         compiled_backbone_forward = torch.compile(
             original_eager_backbone_forward,
@@ -608,6 +615,7 @@ def run_executor_matrix(
             "gates": gates,
         }
     finally:
+        torch._dynamo.config.capture_scalar_outputs = capture_scalar_outputs_before
         eager_backbone.forward = original_eager_backbone_forward
         eager_action_model.forward = original_eager_action_forward
         trt_backbone_action_model.forward = original_trt_action_forward
