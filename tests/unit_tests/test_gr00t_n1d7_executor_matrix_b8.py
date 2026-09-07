@@ -137,7 +137,7 @@ def test_stage_matrix_clears_warmup_before_measurement(monkeypatch) -> None:
 
 def test_contract_freezes_refittable_action_head() -> None:
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
-    assert contract["schema"] == "rlinf.gr00t-n1d7-b8-executor-matrix-contract.v1"
+    assert contract["schema"] == "rlinf.gr00t-n1d7-b8-executor-matrix-contract.v2"
     action_head = contract["partition"]["refittable_action_head"]
     assert (
         action_head["ppo_lifecycle"] == "hot-updateable at a fenced revision boundary"
@@ -167,9 +167,41 @@ def test_executor_uses_narrow_refit_runtime_import() -> None:
     assert "from rlinf.models.embodiment" not in source
 
 
-def test_pt2_backbone_records_exact_runtime_unavailability() -> None:
+def test_pt2_backbone_freezes_static_flash_attention_adapter() -> None:
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
     description = contract["partition"]["frozen_backbone"]["executors"]["pt2"]
-    assert "unavailable" in description
-    assert "5986289" in description
-    assert "5986310" in description
+    adapter = contract["measurement"]["pt2_static_vision_adapter"]
+    assert "FakeTensor scalar" in description
+    assert adapter["required_grid_rows"] == 24
+    assert adapter["required_sequence_length"] == 256
+    assert adapter["attention_backend"] == "flash_attention_2"
+    assert adapter["attention_backend_change_allowed"] is False
+    assert adapter["prior_failed_jobs"] == [5986289, 5986310]
+
+
+def test_uniform_vision_sequence_length() -> None:
+    module = _load_module()
+    rows = [[1, 16, 16] for _ in range(24)]
+    assert module._uniform_vision_sequence_length(rows) == (256, 24)
+    assert module._uniform_vision_sequence_length([[2, 16, 16]]) == (256, 2)
+
+
+def test_uniform_vision_sequence_length_rejects_dynamic_geometry() -> None:
+    module = _load_module()
+    with pytest.raises(ValueError, match="requires one sequence length"):
+        module._uniform_vision_sequence_length([[1, 16, 16], [1, 8, 16]])
+    with pytest.raises(ValueError, match="three values"):
+        module._uniform_vision_sequence_length([[1, 16]])
+    with pytest.raises(ValueError, match="positive"):
+        module._uniform_vision_sequence_length([[0, 16, 16]])
+
+
+def test_launcher_enables_pt2_backbone() -> None:
+    source = (TOOLS / "start_executor_matrix_b8.py").read_text(encoding="utf-8")
+    assert '"--pt2-backbone-unavailable-reason"' not in source
+
+
+def test_pt2_backbone_code_checks_exact_b8_geometry() -> None:
+    module = _load_module()
+    assert module.EXPECTED_VISION_SEGMENTS == 24
+    assert module.EXPECTED_VISION_SEQUENCE_LENGTH == 256

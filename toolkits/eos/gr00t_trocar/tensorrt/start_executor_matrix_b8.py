@@ -348,12 +348,6 @@ def _run_agent(args: argparse.Namespace) -> int:
         "10",
         "--matrix-measured",
         "30",
-        "--pt2-backbone-unavailable-reason",
-        (
-            "Torch 2.9/FlashAttention 2.8.3 varlen rejects Dynamo fake scalar "
-            "max_seqlen_q/k; reproduced by W84 jobs 5986289 and 5986310 with "
-            "capture_scalar_outputs false and true"
-        ),
         "--output",
         str(attempt / "executor-matrix.json"),
     ]

@@ -1,5 +1,5 @@
 {
-  "schema": "rlinf.gr00t-n1d7-b8-executor-matrix-contract.v1",
+  "schema": "rlinf.gr00t-n1d7-b8-executor-matrix-contract.v2",
   "source": {
     "rlinf_parent": "b1a1fe93edf8a01186df6c72d4248df9c9709b7a",
     "isaac_gr00t": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
@@ -35,7 +35,7 @@
       "ppo_lifecycle": "immutable",
       "executors": {
         "eager": "PyTorch eager ViT+LLM",
-        "pt2": "unavailable in the exact runtime: Torch 2.9 plus FlashAttention 2.8.3 varlen rejects Dynamo fake scalar max_seqlen_q/k with capture_scalar_outputs both false and true; jobs 5986289 and 5986310",
+        "pt2": "torch.compile full eager Backbone forward, dynamic=false; fixture-validated static visual sequence length replaces only the invalid FakeTensor scalar supplied to the unchanged FlashAttention 2 kernel",
         "tensorrt": "persistent immutable ViT+LLM engines"
       }
     },
@@ -82,6 +82,16 @@
       "total_ms"
     ],
     "stage_closure_max_abs_ms": 0.01,
+    "pt2_static_vision_adapter": {
+      "required_grid_rows": 24,
+      "required_sequence_length": 256,
+      "attention_backend": "flash_attention_2",
+      "attention_backend_change_allowed": false,
+      "normalized_action_cosine_min": 0.999,
+      "normalized_action_mean_abs_max": 0.005,
+      "normalized_action_max_abs_max": 0.05,
+      "prior_failed_jobs": [5986289, 5986310]
+    },
     "excluded": [
       "raw observation preprocessing",
       "CPU-to-GPU transfer",

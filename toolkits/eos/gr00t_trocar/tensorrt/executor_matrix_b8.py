@@ -28,6 +28,9 @@ from common_boundary_b8 import call_with_explicit_noise, cuda_event_call
 
 StageCall = Callable[[], tuple[Any, dict[str, float]]]
 TensorRTPhase = Callable[[str, int, Callable[[], Any]], Any]
+VISION_ATTENTION_CLASS = "Qwen3VLVisionAttention"
+EXPECTED_VISION_SEGMENTS = 24
+EXPECTED_VISION_SEQUENCE_LENGTH = 256
 
 
 class CudaTimedForward:
@@ -251,6 +254,94 @@ def _parameter_contract(module: Any) -> dict[str, tuple[int, int]]:
     }
 
 
+def _uniform_vision_sequence_length(
+    grid_rows: Sequence[Sequence[int]],
+) -> tuple[int, int]:
+    """Validate static Qwen vision geometry and return length and segment count."""
+
+    lengths = []
+    for row in grid_rows:
+        if len(row) != 3:
+            raise ValueError(f"image_grid_thw row must have three values: {row!r}")
+        temporal, height, width = (int(value) for value in row)
+        if temporal < 1 or height < 1 or width < 1:
+            raise ValueError(f"image_grid_thw values must be positive: {row!r}")
+        lengths.extend([height * width] * temporal)
+    if not lengths:
+        raise ValueError("image_grid_thw must contain at least one vision segment")
+    unique_lengths = set(lengths)
+    if len(unique_lengths) != 1:
+        raise ValueError(
+            f"PT2 static vision adapter requires one sequence length: {sorted(unique_lengths)}"
+        )
+    return lengths[0], len(lengths)
+
+
+def _install_static_vision_flash_attention(
+    backbone: Any,
+    prepared: tuple[Any, Any],
+) -> tuple[dict[str, Any], Callable[[], None]]:
+    """Use a fixture-validated Python max length for compiled vision FA2 calls."""
+
+    backbone_inputs, _ = prepared
+    image_grid_thw = backbone_inputs.get("image_grid_thw")
+    if image_grid_thw is None:
+        raise RuntimeError("PT2 Backbone requires image_grid_thw")
+    grid_rows = image_grid_thw.detach().cpu().tolist()
+    sequence_length, segment_count = _uniform_vision_sequence_length(grid_rows)
+    if (
+        sequence_length != EXPECTED_VISION_SEQUENCE_LENGTH
+        or segment_count != EXPECTED_VISION_SEGMENTS
+    ):
+        raise RuntimeError(
+            "PT2 Backbone visual geometry changed: "
+            f"segments={segment_count}, sequence_length={sequence_length}"
+        )
+    vision_modules = sum(
+        type(module).__name__ == VISION_ATTENTION_CLASS for module in backbone.modules()
+    )
+    if vision_modules < 1:
+        raise RuntimeError("PT2 Backbone found no Qwen vision attention modules")
+
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+
+    local_mapping = ALL_ATTENTION_FUNCTIONS._local_mapping
+    had_local_override = "flash_attention_2" in local_mapping
+    previous_local = local_mapping.get("flash_attention_2")
+    original = ALL_ATTENTION_FUNCTIONS["flash_attention_2"]
+
+    def static_vision_flash_attention(
+        module: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if type(module).__name__ == VISION_ATTENTION_CLASS:
+            kwargs["max_length_q"] = sequence_length
+            kwargs["max_length_k"] = sequence_length
+        return original(module, *args, **kwargs)
+
+    ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = static_vision_flash_attention
+
+    def restore() -> None:
+        if had_local_override:
+            ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = previous_local
+        else:
+            del ALL_ATTENTION_FUNCTIONS["flash_attention_2"]
+
+    return (
+        {
+            "policy": "fixture-validated static Qwen vision FlashAttention max length",
+            "sequence_length": sequence_length,
+            "segment_count": segment_count,
+            "vision_attention_modules": vision_modules,
+            "grid_rows": grid_rows,
+            "kernel": "flash_attention_2",
+            "changes_attention_backend": False,
+        },
+        restore,
+    )
+
+
 def _first_refit_parameter(executor: Any) -> tuple[str, Any]:
     parameters = dict(executor.action_model.named_parameters())
     for entry in executor.artifacts["entries"]:
@@ -364,11 +455,16 @@ def run_executor_matrix(
     }
     lifecycle = {"memory_before_setup": _cuda_memory()}
     trt_dit = None
+    restore_vision_flash_attention = None
     try:
         torch._dynamo.reset()
         torch._dynamo.utils.counters.clear()
         compiled_backbone_forward = None
         if pt2_backbone_unavailable_reason is None:
+            (
+                lifecycle["pt2_backbone_static_vision_adapter"],
+                restore_vision_flash_attention,
+            ) = _install_static_vision_flash_attention(eager_backbone, eager_prepared)
             compile_started = time.perf_counter()
             compiled_backbone_forward = torch.compile(
                 original_eager_backbone_forward,
@@ -651,6 +747,22 @@ def run_executor_matrix(
                 result["count"] == pure_dit["expected_samples_per_arm"]
                 for result in pure_dit["arms"].values()
             ),
+            "normalized_action_parity": all(
+                comparison["finite"]
+                and comparison["cosine"] is not None
+                and comparison["cosine"] >= 0.999
+                and comparison["mean_abs"] <= 0.005
+                and comparison["max_abs"] <= 0.05
+                for matrix in matrices.values()
+                for comparison in matrix["output_comparisons"].values()
+            ),
+            "pt2_backbone_static_geometry_verified": (
+                pt2_backbone_unavailable_reason is not None
+                or lifecycle["pt2_backbone_static_vision_adapter"][
+                    "changes_attention_backend"
+                ]
+                is False
+            ),
         }
         trt_dit.close()
         trt_telemetry_after_close = trt_dit.telemetry()
@@ -660,7 +772,7 @@ def run_executor_matrix(
         trt_dit = None
         lifecycle["unique_graphs_after_measurement"] = unique_graphs_after_measurement
         return {
-            "schema": "rlinf.gr00t-n1d7-b8-executor-matrix.v1",
+            "schema": "rlinf.gr00t-n1d7-b8-executor-matrix.v2",
             "status": "passed" if all(gates.values()) else "failed",
             "scope": {
                 "backbone": "immutable ViT+LLM to pre-final hidden state",
@@ -697,6 +809,8 @@ def run_executor_matrix(
             "gates": gates,
         }
     finally:
+        if restore_vision_flash_attention is not None:
+            restore_vision_flash_attention()
         eager_backbone.forward = original_eager_backbone_forward
         eager_action_model.forward = original_eager_action_forward
         trt_backbone_action_model.forward = original_trt_action_forward
