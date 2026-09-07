@@ -348,6 +348,8 @@ def _run_agent(args: argparse.Namespace) -> int:
         "10",
         "--matrix-measured",
         "30",
+        "--pt2-backbone-compile-mode",
+        "max-autotune-no-cudagraphs",
         "--output",
         str(attempt / "executor-matrix.json"),
     ]

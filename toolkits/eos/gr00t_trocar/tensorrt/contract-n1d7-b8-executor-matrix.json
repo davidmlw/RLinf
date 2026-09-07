@@ -35,7 +35,7 @@
       "ppo_lifecycle": "immutable",
       "executors": {
         "eager": "PyTorch eager ViT+LLM",
-        "pt2": "torch.compile full eager Backbone forward, dynamic=false; fixture-validated static visual sequence length replaces only the invalid FakeTensor scalar supplied to the unchanged FlashAttention 2 kernel",
+        "pt2": "torch.compile invoked on the full eager Backbone forward, dynamic=false and mode=max-autotune-no-cudagraphs; fixture-validated static visual sequence length replaces only the invalid FakeTensor scalar supplied to the unchanged FlashAttention 2 kernel; Dynamo graph breaks are retained and reported",
         "tensorrt": "persistent immutable ViT+LLM engines"
       }
     },
@@ -87,6 +87,8 @@
       "required_sequence_length": 256,
       "attention_backend": "flash_attention_2",
       "attention_backend_change_allowed": false,
+      "compile_mode": "max-autotune-no-cudagraphs",
+      "cuda_graphs": false,
       "normalized_action_cosine_min": 0.999,
       "normalized_action_mean_abs_max": 0.005,
       "normalized_action_max_abs_max": 0.05,

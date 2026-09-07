@@ -176,6 +176,8 @@ def test_pt2_backbone_freezes_static_flash_attention_adapter() -> None:
     assert adapter["required_sequence_length"] == 256
     assert adapter["attention_backend"] == "flash_attention_2"
     assert adapter["attention_backend_change_allowed"] is False
+    assert adapter["compile_mode"] == "max-autotune-no-cudagraphs"
+    assert adapter["cuda_graphs"] is False
     assert adapter["prior_failed_jobs"] == [5986289, 5986310]
 
 
@@ -199,6 +201,8 @@ def test_uniform_vision_sequence_length_rejects_dynamic_geometry() -> None:
 def test_launcher_enables_pt2_backbone() -> None:
     source = (TOOLS / "start_executor_matrix_b8.py").read_text(encoding="utf-8")
     assert '"--pt2-backbone-unavailable-reason"' not in source
+    assert '"--pt2-backbone-compile-mode"' in source
+    assert '"max-autotune-no-cudagraphs"' in source
 
 
 def test_pt2_backbone_code_checks_exact_b8_geometry() -> None:

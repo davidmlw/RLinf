@@ -1232,6 +1232,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             trt_explicit_head=hybrid_explicit_head,
             initial_actions=initial_actions,
             compile_mode=args.compile_mode,
+            pt2_backbone_compile_mode=args.pt2_backbone_compile_mode,
             warmup=args.matrix_warmup,
             measured=args.matrix_measured,
             pt2_backbone_unavailable_reason=(args.pt2_backbone_unavailable_reason),
@@ -1473,6 +1474,9 @@ def main() -> int:
     parser.add_argument("--common-warmup", type=int, default=10)
     parser.add_argument("--common-measured", type=int, default=30)
     parser.add_argument("--compile-mode", default="max-autotune")
+    parser.add_argument(
+        "--pt2-backbone-compile-mode", default="max-autotune-no-cudagraphs"
+    )
     parser.add_argument("--matrix-warmup", type=int, default=10)
     parser.add_argument("--matrix-measured", type=int, default=30)
     parser.add_argument("--pt2-backbone-unavailable-reason")

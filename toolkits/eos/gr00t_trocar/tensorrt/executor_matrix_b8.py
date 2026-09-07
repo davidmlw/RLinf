@@ -430,6 +430,7 @@ def run_executor_matrix(
     trt_explicit_head: Any,
     initial_actions: Any,
     compile_mode: str,
+    pt2_backbone_compile_mode: str,
     warmup: int,
     measured: int,
     pt2_backbone_unavailable_reason: str | None,
@@ -468,7 +469,7 @@ def run_executor_matrix(
             compile_started = time.perf_counter()
             compiled_backbone_forward = torch.compile(
                 original_eager_backbone_forward,
-                mode=compile_mode,
+                mode=pt2_backbone_compile_mode,
                 dynamic=False,
             )
             eager_backbone.forward = compiled_backbone_forward
@@ -786,6 +787,7 @@ def run_executor_matrix(
                 ),
             },
             "compile_mode": compile_mode,
+            "pt2_backbone_compile_mode": pt2_backbone_compile_mode,
             "backend_capabilities": {
                 "pt2_backbone": {
                     "availability": (
