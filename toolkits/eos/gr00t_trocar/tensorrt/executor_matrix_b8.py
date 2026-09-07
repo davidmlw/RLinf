@@ -30,6 +30,33 @@ StageCall = Callable[[], tuple[Any, dict[str, float]]]
 TensorRTPhase = Callable[[str, int, Callable[[], Any]], Any]
 
 
+class CudaTimedForward:
+    """Collect unsynchronized CUDA-event samples for one DiT forward."""
+
+    def __init__(self, forward: Callable[..., Any]) -> None:
+        self.forward = forward
+        self.events: list[tuple[Any, Any]] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        import torch
+
+        stream = torch.cuda.current_stream()
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record(stream)
+        output = self.forward(*args, **kwargs)
+        end.record(stream)
+        self.events.append((start, end))
+        return output
+
+    def take_samples(self) -> list[float]:
+        if self.events:
+            self.events[-1][1].synchronize()
+        samples = [float(start.elapsed_time(end)) for start, end in self.events]
+        self.events.clear()
+        return samples
+
+
 def _load_refittable_tensorrt_dit() -> Any:
     """Load the narrow runtime without importing RLinf's model registry."""
 
@@ -127,6 +154,7 @@ def measure_stage_matrix(
     warmup: int,
     measured: int,
     boundary: str,
+    before_measurement: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Measure all arms under one balanced schedule and one CUDA-event boundary."""
 
@@ -139,6 +167,8 @@ def measure_stage_matrix(
     for index in range(warmup):
         for name in schedule[index % len(schedule)]:
             arms[name]()
+    if before_measurement is not None:
+        before_measurement()
 
     stages = ("backbone_ms", "action_head_ms", "total_ms")
     samples = {name: {stage: [] for stage in stages} for name in names}
@@ -449,14 +479,6 @@ def run_executor_matrix(
             backbone_forward=trt_backbone_forward,
             action_forward=original_trt_action_forward,
         )
-        trt_backbone_pt2_head = _make_call(
-            trt_backbone_policy,
-            trt_prepared,
-            trt_explicit_head,
-            initial_actions,
-            backbone_forward=trt_backbone_forward,
-            action_forward=compiled_trt_action_forward,
-        )
         trt_backbone_refittable_head = _make_call(
             trt_backbone_policy,
             trt_prepared,
@@ -464,6 +486,33 @@ def run_executor_matrix(
             initial_actions,
             backbone_forward=trt_backbone_forward,
             action_forward=trt_dit,
+        )
+        eager_dit_timer = CudaTimedForward(original_trt_action_forward)
+        pt2_dit_timer = CudaTimedForward(compiled_trt_action_forward)
+        trt_dit_timer = CudaTimedForward(trt_dit)
+        trt_backbone_timed_eager_head = _make_call(
+            trt_backbone_policy,
+            trt_prepared,
+            trt_explicit_head,
+            initial_actions,
+            backbone_forward=trt_backbone_forward,
+            action_forward=eager_dit_timer,
+        )
+        trt_backbone_timed_pt2_head = _make_call(
+            trt_backbone_policy,
+            trt_prepared,
+            trt_explicit_head,
+            initial_actions,
+            backbone_forward=trt_backbone_forward,
+            action_forward=pt2_dit_timer,
+        )
+        trt_backbone_timed_refittable_head = _make_call(
+            trt_backbone_policy,
+            trt_prepared,
+            trt_explicit_head,
+            initial_actions,
+            backbone_forward=trt_backbone_forward,
+            action_forward=trt_dit_timer,
         )
         per_arm_calls = warmup + measured
         backbone_arms = {
@@ -510,19 +559,38 @@ def run_executor_matrix(
             3 * per_arm_calls,
             lambda: measure_stage_matrix(
                 {
-                    "eager_action_head": trt_backbone_eager_head,
-                    "pt2_action_head": trt_backbone_pt2_head,
-                    "refittable_tensorrt_action_head": (trt_backbone_refittable_head),
+                    "eager_action_head": trt_backbone_timed_eager_head,
+                    "pt2_action_head": trt_backbone_timed_pt2_head,
+                    "refittable_tensorrt_action_head": (
+                        trt_backbone_timed_refittable_head
+                    ),
                 },
                 reference="eager_action_head",
                 warmup=warmup,
                 measured=measured,
                 boundary=(
-                    "retained TensorRT pre-final hidden state + CUDA state/noise -> "
+                    "identical preceding TensorRT backbone + CUDA state/noise -> "
                     "normalized action; PT2/TRT replace DiT, remainder stays PyTorch"
+                ),
+                before_measurement=lambda: (
+                    eager_dit_timer.take_samples(),
+                    pt2_dit_timer.take_samples(),
+                    trt_dit_timer.take_samples(),
                 ),
             ),
         )
+        pure_dit_samples = {
+            "eager": eager_dit_timer.take_samples(),
+            "pt2": pt2_dit_timer.take_samples(),
+            "refittable_tensorrt": trt_dit_timer.take_samples(),
+        }
+        pure_dit = {
+            "boundary": "one B8 DiT denoise invocation on the current Torch stream",
+            "expected_samples_per_arm": measured * 4,
+            "arms": {
+                name: _statistics(samples) for name, samples in pure_dit_samples.items()
+            },
+        }
         diagonal_matrix = trt_backbone_phase(
             "w84_diagonal_matrix",
             per_arm_calls,
@@ -579,6 +647,10 @@ def run_executor_matrix(
                 trt_telemetry_before_close["online_refit"]
                 and len(trt_telemetry_before_close["engines"]) == 2
             ),
+            "pure_dit_sample_counts_match": all(
+                result["count"] == pure_dit["expected_samples_per_arm"]
+                for result in pure_dit["arms"].values()
+            ),
         }
         trt_dit.close()
         trt_telemetry_after_close = trt_dit.telemetry()
@@ -616,6 +688,7 @@ def run_executor_matrix(
                 "refittable_tensorrt_action_head": {"availability": "measured"},
             },
             "matrices": matrices,
+            "pure_dit": pure_dit,
             "lifecycle": lifecycle,
             "refittable_dit_telemetry": {
                 "before_close": trt_telemetry_before_close,

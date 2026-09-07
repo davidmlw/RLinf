@@ -107,6 +107,34 @@ def test_stage_matrix_retains_samples_and_relative_results(monkeypatch) -> None:
     assert result["max_abs_stage_closure_error_ms"] == 0.0
 
 
+def test_stage_matrix_clears_warmup_before_measurement(monkeypatch) -> None:
+    module = _load_module()
+
+    class FakeOutput:
+        def detach(self):
+            return self
+
+        def clone(self):
+            return self
+
+    calls = []
+    monkeypatch.setattr(
+        module,
+        "_compare",
+        lambda _reference, _candidate: {"finite": True, "bitwise_equal": True},
+    )
+    timing = {"backbone_ms": 1.0, "action_head_ms": 2.0, "total_ms": 3.0}
+    module.measure_stage_matrix(
+        {"a": lambda: (FakeOutput(), timing), "b": lambda: (FakeOutput(), timing)},
+        reference="a",
+        warmup=3,
+        measured=2,
+        boundary="fixture",
+        before_measurement=lambda: calls.append("cleared"),
+    )
+    assert calls == ["cleared"]
+
+
 def test_contract_freezes_refittable_action_head() -> None:
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
     assert contract["schema"] == "rlinf.gr00t-n1d7-b8-executor-matrix-contract.v1"
