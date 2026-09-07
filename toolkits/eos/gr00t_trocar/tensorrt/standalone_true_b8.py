@@ -1234,6 +1234,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             compile_mode=args.compile_mode,
             warmup=args.matrix_warmup,
             measured=args.matrix_measured,
+            pt2_backbone_unavailable_reason=(args.pt2_backbone_unavailable_reason),
             refittable_dit_config={
                 "engine_path": str(args.refittable_dit_engine),
                 "receipt_path": str(args.refittable_dit_receipt),
@@ -1474,6 +1475,7 @@ def main() -> int:
     parser.add_argument("--compile-mode", default="max-autotune")
     parser.add_argument("--matrix-warmup", type=int, default=10)
     parser.add_argument("--matrix-measured", type=int, default=30)
+    parser.add_argument("--pt2-backbone-unavailable-reason")
     parser.add_argument("--refittable-dit-engine", type=Path)
     parser.add_argument("--refittable-dit-receipt", type=Path)
     parser.add_argument("--refittable-dit-receipt-sha256")

@@ -35,7 +35,7 @@
       "ppo_lifecycle": "immutable",
       "executors": {
         "eager": "PyTorch eager ViT+LLM",
-        "pt2": "torch.compile full eager backbone forward, dynamic=false, capture_scalar_outputs=true for FlashAttention varlen SymInt",
+        "pt2": "unavailable in the exact runtime: Torch 2.9 plus FlashAttention 2.8.3 varlen rejects Dynamo fake scalar max_seqlen_q/k with capture_scalar_outputs both false and true; jobs 5986289 and 5986310",
         "tensorrt": "persistent immutable ViT+LLM engines"
       }
     },

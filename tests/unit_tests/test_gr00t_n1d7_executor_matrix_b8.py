@@ -139,12 +139,9 @@ def test_executor_uses_narrow_refit_runtime_import() -> None:
     assert "from rlinf.models.embodiment" not in source
 
 
-def test_pt2_backbone_preserves_flash_attention_scalar_lengths() -> None:
-    source = (TOOLS / "executor_matrix_b8.py").read_text(encoding="utf-8")
-    assert "torch._dynamo.config.capture_scalar_outputs = True" in source
-    assert "capture_scalar_outputs_before" in source
+def test_pt2_backbone_records_exact_runtime_unavailability() -> None:
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
-    assert (
-        "capture_scalar_outputs=true"
-        in contract["partition"]["frozen_backbone"]["executors"]["pt2"]
-    )
+    description = contract["partition"]["frozen_backbone"]["executors"]["pt2"]
+    assert "unavailable" in description
+    assert "5986289" in description
+    assert "5986310" in description

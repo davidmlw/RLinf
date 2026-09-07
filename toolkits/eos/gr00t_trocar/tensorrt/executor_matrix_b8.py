@@ -311,6 +311,7 @@ def run_executor_matrix(
     compile_mode: str,
     warmup: int,
     measured: int,
+    pt2_backbone_unavailable_reason: str | None,
     refittable_dit_config: Mapping[str, Any],
     trt_backbone_phase: TensorRTPhase,
 ) -> dict[str, Any]:
@@ -333,37 +334,32 @@ def run_executor_matrix(
     }
     lifecycle = {"memory_before_setup": _cuda_memory()}
     trt_dit = None
-    capture_scalar_outputs_before = torch._dynamo.config.capture_scalar_outputs
     try:
         torch._dynamo.reset()
         torch._dynamo.utils.counters.clear()
-        torch._dynamo.config.capture_scalar_outputs = True
-        lifecycle["pt2_compile_policy"] = {
-            "dynamic": False,
-            "capture_scalar_outputs": True,
-            "reason": "preserve FlashAttention varlen max sequence lengths as SymInt",
-        }
-        compile_started = time.perf_counter()
-        compiled_backbone_forward = torch.compile(
-            original_eager_backbone_forward,
-            mode=compile_mode,
-            dynamic=False,
-        )
-        eager_backbone.forward = compiled_backbone_forward
-        eager_action_model.forward = original_eager_action_forward
-        call_with_explicit_noise(
-            eager_policy.model,
-            eager_explicit_head,
-            eager_prepared,
-            initial_actions,
-        )
-        torch.cuda.synchronize()
-        lifecycle["pt2_backbone_first_call_wall_ms"] = (
-            time.perf_counter() - compile_started
-        ) * 1000
-        lifecycle["unique_graphs_after_backbone_first"] = int(
-            torch._dynamo.utils.counters["stats"]["unique_graphs"]
-        )
+        compiled_backbone_forward = None
+        if pt2_backbone_unavailable_reason is None:
+            compile_started = time.perf_counter()
+            compiled_backbone_forward = torch.compile(
+                original_eager_backbone_forward,
+                mode=compile_mode,
+                dynamic=False,
+            )
+            eager_backbone.forward = compiled_backbone_forward
+            eager_action_model.forward = original_eager_action_forward
+            call_with_explicit_noise(
+                eager_policy.model,
+                eager_explicit_head,
+                eager_prepared,
+                initial_actions,
+            )
+            torch.cuda.synchronize()
+            lifecycle["pt2_backbone_first_call_wall_ms"] = (
+                time.perf_counter() - compile_started
+            ) * 1000
+            lifecycle["unique_graphs_after_backbone_first"] = int(
+                torch._dynamo.utils.counters["stats"]["unique_graphs"]
+            )
 
         compile_started = time.perf_counter()
         compiled_eager_action_forward = torch.compile(
@@ -445,14 +441,6 @@ def run_executor_matrix(
             backbone_forward=original_eager_backbone_forward,
             action_forward=original_eager_action_forward,
         )
-        pt2_backbone_eager_head = _make_call(
-            eager_policy,
-            eager_prepared,
-            eager_explicit_head,
-            initial_actions,
-            backbone_forward=compiled_backbone_forward,
-            action_forward=original_eager_action_forward,
-        )
         trt_backbone_eager_head = _make_call(
             trt_backbone_policy,
             trt_prepared,
@@ -477,25 +465,37 @@ def run_executor_matrix(
             backbone_forward=trt_backbone_forward,
             action_forward=trt_dit,
         )
-        pt2_pt2 = _make_call(
-            eager_policy,
-            eager_prepared,
-            eager_explicit_head,
-            initial_actions,
-            backbone_forward=compiled_backbone_forward,
-            action_forward=compiled_eager_action_forward,
-        )
-
         per_arm_calls = warmup + measured
+        backbone_arms = {
+            "eager_backbone": eager_eager,
+            "tensorrt_backbone": trt_backbone_eager_head,
+        }
+        diagonal_arms = {
+            "eager_backbone_eager_head": eager_eager,
+            "tensorrt_backbone_refittable_head": trt_backbone_refittable_head,
+        }
+        if compiled_backbone_forward is not None:
+            backbone_arms["pt2_backbone"] = _make_call(
+                eager_policy,
+                eager_prepared,
+                eager_explicit_head,
+                initial_actions,
+                backbone_forward=compiled_backbone_forward,
+                action_forward=original_eager_action_forward,
+            )
+            diagonal_arms["pt2_backbone_pt2_head"] = _make_call(
+                eager_policy,
+                eager_prepared,
+                eager_explicit_head,
+                initial_actions,
+                backbone_forward=compiled_backbone_forward,
+                action_forward=compiled_eager_action_forward,
+            )
         backbone_matrix = trt_backbone_phase(
             "w84_backbone_matrix",
             per_arm_calls,
             lambda: measure_stage_matrix(
-                {
-                    "eager_backbone": eager_eager,
-                    "pt2_backbone": pt2_backbone_eager_head,
-                    "tensorrt_backbone": trt_backbone_eager_head,
-                },
+                backbone_arms,
                 reference="eager_backbone",
                 warmup=warmup,
                 measured=measured,
@@ -527,11 +527,7 @@ def run_executor_matrix(
             "w84_diagonal_matrix",
             per_arm_calls,
             lambda: measure_stage_matrix(
-                {
-                    "eager_backbone_eager_head": eager_eager,
-                    "pt2_backbone_pt2_head": pt2_pt2,
-                    "tensorrt_backbone_refittable_head": (trt_backbone_refittable_head),
-                },
+                diagonal_arms,
                 reference="eager_backbone_eager_head",
                 warmup=warmup,
                 measured=measured,
@@ -606,6 +602,19 @@ def run_executor_matrix(
                 ),
             },
             "compile_mode": compile_mode,
+            "backend_capabilities": {
+                "pt2_backbone": {
+                    "availability": (
+                        "unavailable"
+                        if pt2_backbone_unavailable_reason is not None
+                        else "measured"
+                    ),
+                    "reason": pt2_backbone_unavailable_reason,
+                },
+                "pt2_action_head": {"availability": "measured"},
+                "tensorrt_backbone": {"availability": "measured"},
+                "refittable_tensorrt_action_head": {"availability": "measured"},
+            },
             "matrices": matrices,
             "lifecycle": lifecycle,
             "refittable_dit_telemetry": {
@@ -615,7 +624,6 @@ def run_executor_matrix(
             "gates": gates,
         }
     finally:
-        torch._dynamo.config.capture_scalar_outputs = capture_scalar_outputs_before
         eager_backbone.forward = original_eager_backbone_forward
         eager_action_model.forward = original_eager_action_forward
         trt_backbone_action_model.forward = original_trt_action_forward
