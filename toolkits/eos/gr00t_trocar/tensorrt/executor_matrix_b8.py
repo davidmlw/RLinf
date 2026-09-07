@@ -116,6 +116,12 @@ def _statistics(values: Sequence[float]) -> dict[str, Any]:
     }
 
 
+def _counter_snapshot(counter: Mapping[Any, Any]) -> dict[str, int]:
+    """Return a stable, JSON-serializable TorchDynamo counter snapshot."""
+
+    return {str(key): int(value) for key, value in sorted(counter.items(), key=str)}
+
+
 def _compare(reference: Any, candidate: Any) -> dict[str, Any]:
     import torch
 
@@ -487,6 +493,9 @@ def run_executor_matrix(
             lifecycle["unique_graphs_after_backbone_first"] = int(
                 torch._dynamo.utils.counters["stats"]["unique_graphs"]
             )
+            lifecycle["graph_breaks_after_backbone_first"] = _counter_snapshot(
+                torch._dynamo.utils.counters["graph_break"]
+            )
 
         compile_started = time.perf_counter()
         compiled_eager_action_forward = torch.compile(
@@ -533,6 +542,9 @@ def run_executor_matrix(
         ) * 1000
         lifecycle["unique_graphs_after_all_first_calls"] = int(
             torch._dynamo.utils.counters["stats"]["unique_graphs"]
+        )
+        lifecycle["graph_breaks_after_all_first_calls"] = _counter_snapshot(
+            torch._dynamo.utils.counters["graph_break"]
         )
 
         trt_backbone_action_model.forward = original_trt_action_forward
@@ -704,6 +716,9 @@ def run_executor_matrix(
         unique_graphs_after_measurement = int(
             torch._dynamo.utils.counters["stats"]["unique_graphs"]
         )
+        graph_breaks_after_measurement = _counter_snapshot(
+            torch._dynamo.utils.counters["graph_break"]
+        )
         parameter_contracts_after = {
             "eager_action_head": _parameter_contract(eager_action_model),
             "trt_backbone_action_head": _parameter_contract(trt_backbone_action_model),
@@ -727,6 +742,10 @@ def run_executor_matrix(
             ),
             "pt2_compiled_graphs_exist": (
                 lifecycle["unique_graphs_after_all_first_calls"] > 0
+            ),
+            "pt2_backbone_compiled_graphs_exist": (
+                pt2_backbone_unavailable_reason is not None
+                or lifecycle["unique_graphs_after_backbone_first"] > 0
             ),
             "no_pt2_recompile_during_measurement": (
                 unique_graphs_after_measurement
@@ -772,6 +791,7 @@ def run_executor_matrix(
         )
         trt_dit = None
         lifecycle["unique_graphs_after_measurement"] = unique_graphs_after_measurement
+        lifecycle["graph_breaks_after_measurement"] = graph_breaks_after_measurement
         return {
             "schema": "rlinf.gr00t-n1d7-b8-executor-matrix.v2",
             "status": "passed" if all(gates.values()) else "failed",

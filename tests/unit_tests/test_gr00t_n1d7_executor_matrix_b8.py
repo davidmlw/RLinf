@@ -135,6 +135,13 @@ def test_stage_matrix_clears_warmup_before_measurement(monkeypatch) -> None:
     assert calls == ["cleared"]
 
 
+def test_dynamo_counter_snapshot_is_json_serializable_and_stable() -> None:
+    module = _load_module()
+    snapshot = module._counter_snapshot({"second": 2, "first": 1})
+    assert snapshot == {"first": 1, "second": 2}
+    assert json.loads(json.dumps(snapshot)) == snapshot
+
+
 def test_contract_freezes_refittable_action_head() -> None:
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
     assert contract["schema"] == "rlinf.gr00t-n1d7-b8-executor-matrix-contract.v2"
@@ -209,3 +216,10 @@ def test_pt2_backbone_code_checks_exact_b8_geometry() -> None:
     module = _load_module()
     assert module.EXPECTED_VISION_SEGMENTS == 24
     assert module.EXPECTED_VISION_SEQUENCE_LENGTH == 256
+
+
+def test_pt2_backbone_receipt_records_graph_breaks() -> None:
+    source = (TOOLS / "executor_matrix_b8.py").read_text(encoding="utf-8")
+    assert 'lifecycle["graph_breaks_after_backbone_first"]' in source
+    assert 'lifecycle["graph_breaks_after_measurement"]' in source
+    assert '"pt2_backbone_compiled_graphs_exist"' in source
