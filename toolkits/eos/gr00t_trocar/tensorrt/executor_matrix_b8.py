@@ -20,12 +20,29 @@ import math
 import statistics
 import time
 from collections.abc import Callable, Mapping, Sequence
+from importlib import util
+from pathlib import Path
 from typing import Any
 
 from common_boundary_b8 import call_with_explicit_noise, cuda_event_call
 
 StageCall = Callable[[], tuple[Any, dict[str, float]]]
 TensorRTPhase = Callable[[str, int, Callable[[], Any]], Any]
+
+
+def _load_refittable_tensorrt_dit() -> Any:
+    """Load the narrow runtime without importing RLinf's model registry."""
+
+    source = (
+        Path(__file__).resolve().parents[4]
+        / "rlinf/models/embodiment/gr00t/gr00t_n1d7/tensorrt_dit.py"
+    )
+    spec = util.spec_from_file_location("w84_refittable_tensorrt_dit", source)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load refittable TensorRT DiT from {source}")
+    module = util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.RefittableTensorRTDiT
 
 
 def balanced_orders(names: Sequence[str]) -> tuple[tuple[str, ...], ...]:
@@ -301,9 +318,7 @@ def run_executor_matrix(
 
     import torch
 
-    from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_dit import (
-        RefittableTensorRTDiT,
-    )
+    RefittableTensorRTDiT = _load_refittable_tensorrt_dit()
 
     eager_backbone = eager_policy.model.backbone
     eager_action_model = eager_policy.model.action_head.model

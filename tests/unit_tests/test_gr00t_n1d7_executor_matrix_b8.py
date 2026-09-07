@@ -131,3 +131,9 @@ def test_standalone_entry_requires_complete_refit_bundle() -> None:
     )
     assert all(option in source for option in required)
     assert "W84 refittable DiT arguments must be supplied together" in source
+
+
+def test_executor_uses_narrow_refit_runtime_import() -> None:
+    source = (TOOLS / "executor_matrix_b8.py").read_text(encoding="utf-8")
+    assert "def _load_refittable_tensorrt_dit" in source
+    assert "from rlinf.models.embodiment" not in source
