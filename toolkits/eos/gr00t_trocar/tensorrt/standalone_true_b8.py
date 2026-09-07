@@ -1125,9 +1125,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             .numpy(),
         ),
         "compiled_dit_eager_vs_trt_backbone": _compare_array(
-            common_compiled_backbone_executor_outputs[
-                "eager_backbone_compile_dit_head"
-            ]
+            common_compiled_backbone_executor_outputs["eager_backbone_compile_dit_head"]
             .float()
             .cpu()
             .numpy(),
@@ -1191,9 +1189,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "compiled_head_stable": (
             common_comparisons["eager_compile_first_vs_measured"]["bitwise_equal"]
-            and common_comparisons["hybrid_compile_first_vs_measured"][
-                "bitwise_equal"
-            ]
+            and common_comparisons["hybrid_compile_first_vs_measured"]["bitwise_equal"]
         ),
         "no_compile_rebuild_during_measurement": (
             unique_graphs_after_eager_first > 0
@@ -1201,6 +1197,69 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             and unique_graphs_after_measurement == unique_graphs_after_both_first
         ),
     }
+    executor_matrix = None
+    refittable_arguments = (
+        args.refittable_dit_engine,
+        args.refittable_dit_receipt,
+        args.refittable_dit_receipt_sha256,
+        args.refittable_dit_parameter_map,
+        args.refittable_dit_parameter_map_sha256,
+        args.refittable_dit_source_digest,
+    )
+    if any(value is not None for value in refittable_arguments) and not all(
+        value is not None for value in refittable_arguments
+    ):
+        raise ValueError("W84 refittable DiT arguments must be supplied together")
+    if all(value is not None for value in refittable_arguments):
+        from executor_matrix_b8 import run_executor_matrix  # noqa: PLC0415
+
+        def w84_trt_backbone_phase(name: str, expected: int, call: Any) -> Any:
+            return _engine_phase(
+                engine_phases,
+                name,
+                vit_engine,
+                llm_engine,
+                expected,
+                call,
+            )
+
+        executor_matrix = run_executor_matrix(
+            eager_policy=paired_eager,
+            trt_backbone_policy=hybrid,
+            eager_prepared=eager_prepared,
+            trt_prepared=hybrid_prepared,
+            eager_explicit_head=eager_explicit_head,
+            trt_explicit_head=hybrid_explicit_head,
+            initial_actions=initial_actions,
+            compile_mode=args.compile_mode,
+            warmup=args.matrix_warmup,
+            measured=args.matrix_measured,
+            refittable_dit_config={
+                "engine_path": str(args.refittable_dit_engine),
+                "receipt_path": str(args.refittable_dit_receipt),
+                "receipt_sha256": args.refittable_dit_receipt_sha256,
+                "parameter_map_path": str(args.refittable_dit_parameter_map),
+                "parameter_map_sha256": (args.refittable_dit_parameter_map_sha256),
+                "source_digest_revision_0": args.refittable_dit_source_digest,
+                "revision": 0,
+                "runtime_version": args.refittable_dit_runtime_version,
+                "runtime_distribution": args.refittable_dit_runtime_distribution,
+                "compute_capability": [9, 0],
+                "online_refit": True,
+                "lineage_receipt_mode": "gpu_transform_validation",
+                "probe_each_revision": True,
+                "minimum_probe_cosine": 0.999,
+                "maximum_probe_relative_l2": 0.05,
+                "minimum_free_device_bytes": 8 * 1024**3,
+                "ppo_authority_status": ("failed_ratio_kl_approximate_behavior_only"),
+                "shadow_eager": False,
+            },
+            trt_backbone_phase=w84_trt_backbone_phase,
+        )
+        if executor_matrix["status"] != "passed":
+            raise RuntimeError(
+                f"W84 executor matrix failed: {executor_matrix['gates']}"
+            )
     paired_eager = None
     gc.collect()
     telemetry_before_close = {
@@ -1274,6 +1333,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             and telemetry_after_close["llm"]["closed"]
             and telemetry_after_close["vit"]["close_event_sync_count"] == 1
             and telemetry_after_close["llm"]["close_event_sync_count"] == 1
+        ),
+        "executor_matrix": (
+            executor_matrix is None or executor_matrix["status"] == "passed"
         ),
     }
     status = (
@@ -1375,6 +1437,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "before_close": telemetry_before_close,
             "after_close": telemetry_after_close,
         },
+        "executor_matrix": executor_matrix,
     }
     output.write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -1409,6 +1472,18 @@ def main() -> int:
     parser.add_argument("--common-warmup", type=int, default=10)
     parser.add_argument("--common-measured", type=int, default=30)
     parser.add_argument("--compile-mode", default="max-autotune")
+    parser.add_argument("--matrix-warmup", type=int, default=10)
+    parser.add_argument("--matrix-measured", type=int, default=30)
+    parser.add_argument("--refittable-dit-engine", type=Path)
+    parser.add_argument("--refittable-dit-receipt", type=Path)
+    parser.add_argument("--refittable-dit-receipt-sha256")
+    parser.add_argument("--refittable-dit-parameter-map", type=Path)
+    parser.add_argument("--refittable-dit-parameter-map-sha256")
+    parser.add_argument("--refittable-dit-source-digest")
+    parser.add_argument("--refittable-dit-runtime-version", default="10.15.1.29")
+    parser.add_argument(
+        "--refittable-dit-runtime-distribution", default="tensorrt-cu12"
+    )
     args = parser.parse_args()
     try:
         receipt = run(args)

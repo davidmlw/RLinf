@@ -1,0 +1,147 @@
+{
+  "schema": "rlinf.gr00t-n1d7-b8-executor-matrix-contract.v1",
+  "source": {
+    "rlinf_parent": "b1a1fe93edf8a01186df6c72d4248df9c9709b7a",
+    "isaac_gr00t": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
+    "model_repository": "nvidia/GR00T-N1.7-3B",
+    "model_revision": "2fc962b973bccdd5d8ce4f67cc63b264d6886495",
+    "backbone_repository": "nvidia/Cosmos-Reason2-2B",
+    "backbone_revision": "9ce19a195e423419c349abfc86fd07178b230561"
+  },
+  "workload": {
+    "task": "Assemble Trocar",
+    "batch_size": 8,
+    "b1x8_allowed": false,
+    "camera_order": [
+      "left_wrist_view",
+      "right_wrist_view",
+      "room_view"
+    ],
+    "camera_shape": [224, 224, 3],
+    "visual_patches_per_row": 768,
+    "merged_visual_tokens_per_row": 192,
+    "pre_final_sequence_length": 208,
+    "public_state_action_width": 28,
+    "model_state_action_width": 132,
+    "generated_action_horizon": 40,
+    "executed_action_horizon": 16,
+    "denoise_steps": 4,
+    "fixture": "W80 qualified true-static-B8 collated input and explicit initial noise"
+  },
+  "partition": {
+    "frozen_backbone": {
+      "input": "preloaded contiguous CUDA model inputs",
+      "output": "pre-final Qwen hidden state and masks",
+      "ppo_lifecycle": "immutable",
+      "executors": {
+        "eager": "PyTorch eager ViT+LLM",
+        "pt2": "torch.compile full eager backbone forward, dynamic=false",
+        "tensorrt": "persistent immutable ViT+LLM engines"
+      }
+    },
+    "refittable_action_head": {
+      "input": "retained backbone feature, state and explicit initial noise",
+      "output": "normalized deployment action",
+      "ppo_lifecycle": "hot-updateable at a fenced revision boundary",
+      "executors": {
+        "eager": "all Action Head modules in PyTorch eager",
+        "pt2": "torch.compile DiT forward, remaining Action Head in PyTorch eager",
+        "tensorrt": "double-buffer refittable TensorRT DiT, remaining Action Head in PyTorch eager"
+      },
+      "tensorrt_refit": {
+        "weight_count": 456,
+        "parameter_prefix": "action_head.model",
+        "online_refit": true,
+        "engine_slots": 2,
+        "atomic_revision_switch": true,
+        "lineage_receipt_mode": "gpu_transform_validation",
+        "minimum_free_device_bytes": 8589934592,
+        "resident_timing_excludes_refit": true
+      }
+    }
+  },
+  "measurement": {
+    "clock": "CUDA events on the current Torch stream",
+    "input_boundary": "preloaded contiguous CUDA tensors plus explicit immutable initial noise",
+    "output_boundary": "normalized deployment action",
+    "host_synchronization_inside_stage": false,
+    "warmup": 10,
+    "measured": 30,
+    "order": "balanced forward/reverse rotations",
+    "reported": [
+      "raw_samples",
+      "p50",
+      "p95",
+      "mean",
+      "sample_std",
+      "cv"
+    ],
+    "stages": [
+      "backbone_ms",
+      "action_head_ms",
+      "total_ms"
+    ],
+    "stage_closure_max_abs_ms": 0.01,
+    "excluded": [
+      "raw observation preprocessing",
+      "CPU-to-GPU transfer",
+      "implicit random-number generation",
+      "public action decode",
+      "TensorRT deserialize and context creation",
+      "PT2 compile",
+      "Action Head patch, staging, refit and revision publication",
+      "PPO value and behavior-logprob computation"
+    ]
+  },
+  "matrices": {
+    "frozen_backbone": {
+      "fixed_component": "eager Action Head",
+      "arms": [
+        "eager_backbone",
+        "pt2_backbone",
+        "tensorrt_backbone"
+      ]
+    },
+    "refittable_action_head": {
+      "fixed_component": "TensorRT Backbone",
+      "arms": [
+        "eager_action_head",
+        "pt2_action_head",
+        "refittable_tensorrt_action_head"
+      ]
+    },
+    "whole_model_diagonal": {
+      "arms": [
+        "eager_backbone_eager_head",
+        "pt2_backbone_pt2_head",
+        "tensorrt_backbone_refittable_head"
+      ]
+    }
+  },
+  "correctness": {
+    "same_fixture_and_noise": true,
+    "all_outputs_finite": true,
+    "parameter_and_storage_identity_preserved": true,
+    "pt2_recompile_during_measurement_allowed": false,
+    "tensorrt_refit_must_exercise_both_slots_cold_and_warm": true,
+    "normalized_action_metrics": [
+      "bitwise_equal",
+      "cosine",
+      "mean_abs",
+      "max_abs",
+      "relative_l2"
+    ],
+    "ppo_authority": {
+      "standalone_availability": "unavailable",
+      "pt2_dit_prior_state": "failed same-revision ratio/KL gate in W81",
+      "refittable_tensorrt_dit_prior_state": "failed same-revision ratio/KL gate in W83",
+      "performance_receipt_can_override_prior_failure": false
+    }
+  },
+  "reporting": {
+    "compare_absolute_latency_only_within_each_matrix": true,
+    "cross_experiment_absolute_splicing_allowed": false,
+    "performance_without_ppo_authority_label": "systems-only",
+    "b1_and_praxis_data": "directional context only"
+  }
+}
