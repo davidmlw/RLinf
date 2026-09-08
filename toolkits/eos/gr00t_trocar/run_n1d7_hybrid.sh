@@ -21,6 +21,9 @@ required=(
   W73_DEADLINE_UNIX_S
   W77_BACKBONE_MODEL_ROOT
   W77_TROCAR_METADATA
+  RLINF_GROOT_TRT_RUNTIME_OVERLAY
+  RLINF_GROOT_TRT_ENGINE_DIR
+  RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256
 )
 for name in "${required[@]}"; do
   if [[ -z "${!name:-}" ]]; then
@@ -108,27 +111,41 @@ export OMNI_KIT_ACCEPT_EULA=YES
 export ACCEPT_EULA=Y
 export PRIVACY_CONSENT=Y
 
-w81_trt_overlay="/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/envs/overlays/tensorrt-10.15.1.29-py312"
-w81_trt_engines="/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W80/g2-export-build-r1-5967165/engines"
+trt_overlay="$RLINF_GROOT_TRT_RUNTIME_OVERLAY"
+trt_engines="$RLINF_GROOT_TRT_ENGINE_DIR"
+trt_receipt="$trt_engines/rlinf-engine-receipt.json"
+if [[ "$RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256" \
+  =~ ^[0-9a-f]{64}$ ]]; then
+  :
+else
+  printf 'RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256 must be lowercase SHA-256\n' >&2
+  exit 2
+fi
+test -d "$trt_overlay"
+test -d "$trt_engines"
+test -f "$trt_receipt"
 case ":${W73_PYTHON_DEPS:-}:" in
-  *":$w81_trt_overlay:"*) ;;
+  *":$trt_overlay:"*) ;;
   *)
-    printf 'W81 TensorRT overlay is absent from W73_PYTHON_DEPS\n' >&2
+    printf 'TensorRT overlay is absent from the configured Python dependencies\n' >&2
     exit 2
     ;;
 esac
 "$W73_RUNTIME_PYTHON" \
   "$W73_SOURCE_ROOT/toolkits/eos/gr00t_trocar/tensorrt/prepare_runtime_overlay.py" \
-  verify --output "$w81_trt_overlay" \
+  verify --output "$trt_overlay" \
   >"$W73_ATTEMPT_ROOT/runtime/tensorrt-overlay-verify.json"
 "$W73_RUNTIME_PYTHON" -c \
   'import importlib.metadata as m,json,tensorrt as trt,torch; print(json.dumps({"torch":torch.__version__,"cuda":torch.version.cuda,"tensorrt_module":trt.__version__,"tensorrt_distribution":m.version("tensorrt-cu12"),"tensorrt_path":trt.__file__},sort_keys=True))' \
   >"$W73_ATTEMPT_ROOT/runtime/tensorrt-import.json"
+printf '%s  %s\n' \
+  "$RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256" \
+  "$trt_receipt" | sha256sum --check --status
 sha256sum \
-  "$w81_trt_engines/rlinf-engine-receipt.json" \
-  "$w81_trt_engines/export_metadata.json" \
-  "$w81_trt_engines/vit.engine" \
-  "$w81_trt_engines/llm_bf16.engine" \
+  "$trt_receipt" \
+  "$trt_engines/export_metadata.json" \
+  "$trt_engines/vit.engine" \
+  "$trt_engines/llm_bf16.engine" \
   >"$W73_ATTEMPT_ROOT/runtime/tensorrt-artifacts.sha256"
 
 {

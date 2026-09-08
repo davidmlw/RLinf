@@ -21,6 +21,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 TOOLKIT = ROOT / "toolkits/eos/gr00t_trocar"
 CONTRACT = TOOLKIT / "tensorrt/contract-n1d7-rlinf-hybrid-integration.json"
+SUPPORT = TOOLKIT / "tensorrt/hybrid-engine-support.json"
+GUIDE = (
+    ROOT
+    / "docs/source-en/rst_source/guides/performance/gr00t_tensorrt_hybrid.rst"
+)
 CONFIGS = {
     "eager": TOOLKIT / "config-n1d7-hybrid-eager-chunk16.yaml",
     "trt_eager": TOOLKIT / "config-n1d7-hybrid-trt-eager-chunk16.yaml",
@@ -40,6 +45,10 @@ REUSE_CONFIGS = {
 
 def _contract() -> dict:
     return json.loads(CONTRACT.read_text(encoding="utf-8"))
+
+
+def _support() -> dict:
+    return json.loads(SUPPORT.read_text(encoding="utf-8"))
 
 
 def _config(name: str) -> dict:
@@ -67,6 +76,34 @@ def test_w81_contract_keeps_execution_in_python() -> None:
     ]
     assert implementation["compiled_component"] == "action_head.model.forward"
     assert implementation["apply_final_llm_norm"] is False
+
+
+def test_public_support_manifest_separates_supported_and_experimental_paths() -> None:
+    support = _support()
+    tiers = support["support_tiers"]
+
+    assert tiers["supported"] == {
+        "frozen_backbone": "persistent_tensorrt_vit_llm",
+        "action_head": "pytorch_eager_hot_updateable",
+        "rollout_feature_transport": "borrowed_ipc_pinned",
+        "weight_sync_prefixes": ["action_head"],
+        "ppo_identity": "passed",
+    }
+    assert tiers["experimental"]["refittable_tensorrt_dit"]["ppo_identity"] == (
+        "failed"
+    )
+    assert tiers["benchmark_only"]["pt2_dit"] is True
+    assert tiers["oracle_only"]["rlinf_training_backend"] is False
+
+
+def test_public_hybrid_guide_omits_internal_work_items_and_personal_paths() -> None:
+    guide = GUIDE.read_text(encoding="utf-8")
+
+    assert not any(f"W{number}" in guide for number in range(100))
+    assert "/lustre/" not in guide
+    assert "/mnt/" not in guide
+    assert "borrowed_ipc_pinned" in guide
+    assert "same-revision PPO ratio/KL gate" in guide
 
 
 def test_w81_configs_have_only_preregistered_arm_differences() -> None:
@@ -184,6 +221,23 @@ def test_w81_configs_freeze_common_lifecycle_and_workload() -> None:
         )
 
 
+def test_hybrid_configs_use_portable_tensorrt_artifact_inputs() -> None:
+    expected = {
+        "engine_dir": "${oc.env:RLINF_GROOT_TRT_ENGINE_DIR}",
+        "receipt_path": (
+            "${oc.env:RLINF_GROOT_TRT_ENGINE_DIR}/rlinf-engine-receipt.json"
+        ),
+        "receipt_sha256": (
+            "${oc.env:RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256}"
+        ),
+    }
+
+    for name in CONFIGS | REUSE_CONFIGS:
+        backend = _config(name)["rollout"]["model"]["tensorrt_backbone"]
+        for field, value in expected.items():
+            assert backend[field] == value
+
+
 def test_w81_numerical_thresholds_are_frozen() -> None:
     gates = _contract()["numerical_gates"]
 
@@ -219,6 +273,22 @@ def test_hybrid_runner_can_disable_identity_gate_for_qualified_perf_runs() -> No
         in runner
     )
     assert "W81_DISABLE_PRE_UPDATE_IDENTITY_GATE must be 0 or 1" in runner
+
+
+def test_hybrid_runner_requires_portable_tensorrt_artifact_inputs() -> None:
+    runner = (
+        ROOT / "toolkits/eos/gr00t_trocar/run_n1d7_hybrid.sh"
+    ).read_text(encoding="utf-8")
+
+    for name in (
+        "RLINF_GROOT_TRT_RUNTIME_OVERLAY",
+        "RLINF_GROOT_TRT_ENGINE_DIR",
+        "RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256",
+    ):
+        assert name in runner
+    assert "/runs/W80/" not in runner
+    assert "/envs/overlays/tensorrt-10.15.1.29-py312" not in runner
+    assert "sha256sum --check --status" in runner
 
 
 def test_w81_standalone_ablation_separates_trt_and_compile() -> None:

@@ -1382,7 +1382,44 @@ def _ray_worker_environment(site: Mapping[str, Any]) -> dict[str, str]:
             "PRIVACY_CONSENT": "Y",
         }
     )
+    env.update(_hybrid_artifact_environment(site))
     return env
+
+
+def _hybrid_artifact_environment(site: Mapping[str, Any]) -> dict[str, str]:
+    """Resolve an optional GR00T TensorRT bundle from site provenance."""
+
+    files = site["provenance"]["files"]
+    receipt_matches = [
+        item
+        for item in files
+        if Path(item["path"]).name == "rlinf-engine-receipt.json"
+    ]
+    overlay_matches = [
+        item
+        for item in files
+        if Path(item["path"]).name == "rlinf-tensorrt-overlay.json"
+    ]
+    if not receipt_matches and not overlay_matches:
+        return {}
+    if len(receipt_matches) != 1 or len(overlay_matches) != 1:
+        raise WorkflowError(
+            "hybrid runtime requires exactly one TensorRT engine receipt and "
+            "one TensorRT overlay manifest in provenance.files"
+        )
+    receipt = receipt_matches[0]
+    overlay = overlay_matches[0]
+    engine_dir = Path(receipt["path"]).parent
+    overlay_dir = Path(overlay["path"]).parent
+    if str(overlay_dir) not in site["runtime"]["python_deps"]:
+        raise WorkflowError(
+            "TensorRT overlay manifest parent is absent from runtime.python_deps"
+        )
+    return {
+        "RLINF_GROOT_TRT_RUNTIME_OVERLAY": str(overlay_dir),
+        "RLINF_GROOT_TRT_ENGINE_DIR": str(engine_dir),
+        "RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256": receipt["sha256"],
+    }
 
 
 def _archive_ray_failure_logs(ray_temp: Path, attempt: Path) -> Path | None:

@@ -1,0 +1,115 @@
+{
+  "schema": "rlinf.gr00t-n1d7-hybrid-engine-support.v1",
+  "implementation": {
+    "language": "python",
+    "qualified_base_revision": "05322ee59beaf74ca03cd3aabce60bc567ffdcb5",
+    "external_runtime_dependencies": [
+      "pytorch",
+      "tensorrt_python"
+    ],
+    "forbidden_runtime_dependencies": [
+      "aoti",
+      "poiesis",
+      "praxis",
+      "rust"
+    ]
+  },
+  "support_tiers": {
+    "supported": {
+      "frozen_backbone": "persistent_tensorrt_vit_llm",
+      "action_head": "pytorch_eager_hot_updateable",
+      "rollout_feature_transport": "borrowed_ipc_pinned",
+      "weight_sync_prefixes": [
+        "action_head"
+      ],
+      "ppo_identity": "passed"
+    },
+    "experimental": {
+      "refittable_tensorrt_dit": {
+        "deployment_action_parity": "passed",
+        "ppo_identity": "failed"
+      }
+    },
+    "benchmark_only": {
+      "pt2_backbone": true,
+      "pt2_dit": true,
+      "ppo_identity": "failed"
+    },
+    "oracle_only": {
+      "official_full_seven_engine_tensorrt": true,
+      "rlinf_training_backend": false
+    }
+  },
+  "model_contract": {
+    "isaac_gr00t_revision": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
+    "model": {
+      "repository": "nvidia/GR00T-N1.7-3B",
+      "revision": "2fc962b973bccdd5d8ce4f67cc63b264d6886495"
+    },
+    "backbone": {
+      "repository": "nvidia/Cosmos-Reason2-2B",
+      "revision": "9ce19a195e423419c349abfc86fd07178b230561"
+    },
+    "cut": "vit_llm_only_pre_final_qwen_hidden",
+    "apply_final_llm_norm": false
+  },
+  "artifact_contract": {
+    "required_files": [
+      "vit.engine",
+      "llm_bf16.engine",
+      "export_metadata.json",
+      "rlinf-engine-receipt.json"
+    ],
+    "precision": {
+      "vit.engine": "fp32",
+      "llm_bf16.engine": "bf16"
+    },
+    "tensorrt_version": "10.15.1.29",
+    "compute_capability": [
+      9,
+      0
+    ],
+    "static_batch": 8,
+    "sequence_opt": 208,
+    "camera_order": [
+      "left_wrist_view",
+      "right_wrist_view",
+      "room_view"
+    ],
+    "silent_fallback": false
+  },
+  "runtime_environment": {
+    "RLINF_GROOT_TRT_RUNTIME_OVERLAY": "directory containing rlinf-tensorrt-overlay.json",
+    "RLINF_GROOT_TRT_ENGINE_DIR": "qualified two-engine bundle directory",
+    "RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256": "lowercase SHA-256 of rlinf-engine-receipt.json"
+  },
+  "qualification": {
+    "standalone": {
+      "boundary": "preloaded contiguous CUDA inputs plus explicit initial noise to normalized deployment action",
+      "final_action": {
+        "cosine_min": 0.999,
+        "mean_abs_max": 0.005,
+        "max_abs_max": 0.05,
+        "finite": true
+      },
+      "persistent_engine_load_count": 1,
+      "silent_fallback": false
+    },
+    "rlinf": {
+      "minimum_functional_outer_steps": 2,
+      "minimum_performance_outer_steps": 5,
+      "warmup_zero_based_steps": [
+        0
+      ],
+      "measured_zero_based_steps": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "same_revision_ppo_gate": "contract-n1d7-rlinf-hybrid-integration.json",
+      "feature_fallback_count": 0,
+      "tensorrt_reload_rebuild_refit_after_revision": 0
+    }
+  }
+}

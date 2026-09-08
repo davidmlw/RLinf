@@ -223,9 +223,9 @@ rollout:
     embodiment_tag: new_embodiment
     tensorrt_backbone:
       enabled: true
-      engine_dir: /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W80/g2-export-build-r1-5967165/engines
-      receipt_path: /lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W80/g2-export-build-r1-5967165/engines/rlinf-engine-receipt.json
-      receipt_sha256: 758f3751b63f2399c4824b20b22c4508d463eb6144db5d1393ac23f0a069a0cd
+      engine_dir: ${oc.env:RLINF_GROOT_TRT_ENGINE_DIR}
+      receipt_path: ${oc.env:RLINF_GROOT_TRT_ENGINE_DIR}/rlinf-engine-receipt.json
+      receipt_sha256: ${oc.env:RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256}
       static_batch_size: 8
       sequence_opt: 208
       runtime_version: 10.15.1.29

@@ -574,6 +574,67 @@ def test_ray_workers_inherit_source_and_task_environment(tmp_path: Path) -> None
     assert env["W68_SANITIZED_TRAY_USD"] == site["runtime"]["sanitized_tray_usd"]
 
 
+def test_ray_workers_resolve_hybrid_artifacts_from_provenance(
+    tmp_path: Path,
+) -> None:
+    site_path = _site(tmp_path)
+    value = json.loads(site_path.read_text(encoding="utf-8"))
+    overlay = tmp_path / "tensorrt-overlay"
+    engines = tmp_path / "engines"
+    overlay.mkdir()
+    engines.mkdir()
+    overlay_manifest = overlay / "rlinf-tensorrt-overlay.json"
+    engine_receipt = engines / "rlinf-engine-receipt.json"
+    overlay_manifest.write_text("{}\n", encoding="utf-8")
+    engine_receipt.write_text("{}\n", encoding="utf-8")
+    value["runtime"]["python_deps"].append(str(overlay))
+    value["provenance"]["files"].extend(
+        [
+            {
+                "name": "tensorrt-runtime-overlay",
+                "path": str(overlay_manifest),
+                "sha256": _sha256(overlay_manifest),
+            },
+            {
+                "name": "tensorrt-engine-receipt",
+                "path": str(engine_receipt),
+                "sha256": _sha256(engine_receipt),
+            },
+        ]
+    )
+    site_path.write_text(json.dumps(value), encoding="utf-8")
+
+    site = MODULE._load_site(site_path)
+    env = MODULE._ray_worker_environment(site)
+
+    assert env["RLINF_GROOT_TRT_RUNTIME_OVERLAY"] == str(overlay)
+    assert env["RLINF_GROOT_TRT_ENGINE_DIR"] == str(engines)
+    assert env["RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256"] == _sha256(
+        engine_receipt
+    )
+
+
+def test_hybrid_artifacts_require_complete_provenance(tmp_path: Path) -> None:
+    site_path = _site(tmp_path)
+    value = json.loads(site_path.read_text(encoding="utf-8"))
+    engines = tmp_path / "engines"
+    engines.mkdir()
+    engine_receipt = engines / "rlinf-engine-receipt.json"
+    engine_receipt.write_text("{}\n", encoding="utf-8")
+    value["provenance"]["files"].append(
+        {
+            "name": "tensorrt-engine-receipt",
+            "path": str(engine_receipt),
+            "sha256": _sha256(engine_receipt),
+        }
+    )
+    site_path.write_text(json.dumps(value), encoding="utf-8")
+
+    site = MODULE._load_site(site_path)
+    with pytest.raises(MODULE.WorkflowError, match="exactly one TensorRT"):
+        MODULE._ray_worker_environment(site)
+
+
 def test_ray_failure_logs_are_archived_before_cleanup(tmp_path: Path) -> None:
     ray_temp = tmp_path / "ray"
     logs = ray_temp / "session_latest" / "logs"
