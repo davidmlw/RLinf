@@ -186,6 +186,20 @@ least five resident steps, treat step 0 as warmup, and summarize steps 1-4.
 Report Rollout/Predict, concurrent Rollout+Env wall, and outer-step wall as
 separate boundaries; never add overlapping worker timers.
 
+Create the final fail-closed trial receipt from the standalone receipt, engine
+receipt, and retained RLinf training log:
+
+.. code-block:: bash
+
+   python toolkits/eos/gr00t_trocar/tensorrt/qualify_hybrid_trial.py \
+     --standalone "$BUILD_ROOT/standalone-qualification.json" \
+     --engine-receipt "$BUILD_ROOT/engines/rlinf-engine-receipt.json" \
+     --training-log /path/to/attempt/logs/training.out \
+     --output /path/to/attempt/hybrid-trial-receipt.json
+
+The command returns nonzero when any required rank, lifecycle event, feature
+stream record, zero-fallback metric, or global PPO identity receipt is missing.
+
 Troubleshooting
 ---------------
 
