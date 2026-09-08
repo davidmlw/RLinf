@@ -143,6 +143,7 @@ def test_qualified_trial_passes_all_runtime_and_ppo_gates(tmp_path: Path) -> Non
         "revision_adopted": 2,
         "rollout_complete": 2,
     }
+    assert receipt["gates"]["runtime"]["completed_outer_steps"] == 2
 
 
 def test_trial_fails_closed_on_nonzero_feature_fallback(tmp_path: Path) -> None:
@@ -267,6 +268,26 @@ def test_trial_fails_closed_on_nonfinite_or_missing_training_metrics(
     assert receipt["status"] == "failed"
     assert "actor/grad_norm: nonfinite at steps [0]" in receipt["failures"]
     assert (
-        "actor/total_loss: expected at least 2 values, found 1"
+        "actor/total_loss: expected 2 values, found 1"
         in receipt["failures"]
     )
+
+
+def test_trial_uses_observed_steps_not_only_requested_minimum(tmp_path: Path) -> None:
+    standalone, engine, training = _inputs(tmp_path)
+    text = training.read_text(encoding="utf-8")
+    training.write_text(
+        text.replace("actor/total_loss=0.2", "missing_total_loss=0.2"),
+        encoding="utf-8",
+    )
+
+    receipt = MODULE.qualify(
+        standalone,
+        engine,
+        training,
+        world_size=2,
+        min_outer_steps=1,
+    )
+
+    assert receipt["status"] == "failed"
+    assert "actor/total_loss: expected 2 values, found 1" in receipt["failures"]
