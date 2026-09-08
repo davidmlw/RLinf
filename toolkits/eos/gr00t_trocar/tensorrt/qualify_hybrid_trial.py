@@ -99,8 +99,13 @@ def _runtime_gates(
         if rank not in expected_ranks:
             failures.append(f"unexpected hybrid runtime rank {rank}")
             continue
-        if record.get("compiled_dit") is not False:
+        compiled_dit = record.get("compiled_dit")
+        if not isinstance(compiled_dit, dict):
+            failures.append(f"rank {rank} omitted compiled DiT telemetry")
+        elif compiled_dit.get("enabled") is not False:
             failures.append(f"rank {rank} enabled an unsupported compiled DiT")
+        if record.get("tensorrt_dit") is not None:
+            failures.append(f"rank {rank} enabled an unsupported TensorRT DiT")
         backbone = record.get("tensorrt_backbone")
         if not isinstance(backbone, dict):
             failures.append(f"rank {rank} omitted TensorRT backbone telemetry")
@@ -162,6 +167,13 @@ def qualify(
 
     if standalone.get("status") != "passed":
         failures.append("standalone qualification did not pass")
+    standalone_engine = (
+        standalone.get("provenance", {})
+        .get("artifacts", {})
+        .get("engine_receipt", {})
+    )
+    if standalone_engine.get("sha256") != engine_receipt_sha256:
+        failures.append("standalone qualification used a different engine receipt")
     if engine_receipt.get("status") != "passed":
         failures.append("engine receipt did not pass")
     if engine_receipt.get("silent_fallback") is not False:
@@ -236,6 +248,9 @@ def qualify(
         },
         "gates": {
             "standalone_passed": standalone.get("status") == "passed",
+            "standalone_engine_receipt_matches": (
+                standalone_engine.get("sha256") == engine_receipt_sha256
+            ),
             "engine_receipt_passed": engine_receipt.get("status") == "passed",
             "runtime": runtime,
             "pre_update_identity_receipts": identities,
