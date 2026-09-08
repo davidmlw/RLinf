@@ -213,6 +213,50 @@ receipt, and retained RLinf training log:
 The command returns nonzero when any required rank, lifecycle event, feature
 stream record, zero-fallback metric, or global PPO identity receipt is missing.
 
+Reference Results
+-----------------
+
+The following H100 measurements are reference points for detecting a grossly
+misconfigured trial. They are not portable performance guarantees. Each delta
+uses one receipt and one timing boundary; do not combine rows to manufacture an
+end-to-end speedup.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Boundary
+     - Baseline
+     - Candidate
+     - Observed change
+   * - True-static-B8 standalone model core
+     - Full PyTorch eager
+     - TensorRT Backbone + eager Action Head
+     - Approximately 9% lower latency
+   * - RLinf resident Rollout/Predict, five outer steps
+     - Eager Backbone + eager Action Head
+     - TensorRT Backbone + eager Action Head + exact feature reuse
+     - Approximately 9% lower latency
+   * - RLinf resident outer-step wall, same trial
+     - Eager Backbone + eager Action Head
+     - TensorRT Backbone + eager Action Head + exact feature reuse
+     - Approximately 1.3-1.5% lower latency
+
+The smaller outer-step gain is expected for this workload: Environment work
+overlaps Rollout and remains close to the critical path. A separate
+true-static-B8 component matrix measured Backbone eager/PT2/TensorRT at
+``50.646/41.641/39.300 ms`` and, with a fixed TensorRT Backbone, Action Head
+eager/PT2/refittable-TensorRT at ``43.348/17.091/19.320 ms``. PT2 and
+refittable-TensorRT Action Heads are systems results only because their
+same-revision PPO identity gate did not pass.
+
+Cleanup
+-------
+
+Allow RLinf to close Rollout workers so the receipt records one ``closing`` and
+one ``closed`` event per rank. Keep the JSON receipts and hashes before removing
+large ONNX or plan directories. TensorRT plans, model checkpoints, and generated
+fixtures are runtime artifacts and must not be committed to Git.
+
 Troubleshooting
 ---------------
 
