@@ -44,6 +44,11 @@ The current artifact contract is intentionally narrow:
 * ``nvidia/Cosmos-Reason2-2B`` revision
   ``9ce19a195e423419c349abfc86fd07178b230561``.
 * TensorRT ``10.15.1.29`` on an H100 (SM90).
+* A C/C++ compiler and development headers for the selected Python
+  interpreter. ``standalone_true_b8.py`` also runs a diagnostic PT2 DiT
+  comparison, so TorchInductor must be able to compile its generated extension
+  modules. For Python 3.12 on Ubuntu, install ``libpython3.12-dev`` in the
+  qualification container before running the command.
 * A genuine static batch of 8, three 224x224 camera views per row, and LLM
   sequence length 208. Running eight B1 calls is not equivalent.
 * Trocar metadata with the 28-dimensional state/action ordering expected by
