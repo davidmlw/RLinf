@@ -218,8 +218,8 @@ Reference Results
 
 The following H100 measurements are reference points for detecting a grossly
 misconfigured trial. They are not portable performance guarantees. Each delta
-uses one receipt and one timing boundary; do not combine rows to manufacture an
-end-to-end speedup.
+uses matched receipts with one timing boundary; do not combine rows to
+manufacture an end-to-end speedup.
 
 .. list-table::
    :header-rows: 1
@@ -236,7 +236,7 @@ end-to-end speedup.
      - Eager Backbone + eager Action Head
      - TensorRT Backbone + eager Action Head + exact feature reuse
      - Approximately 9% lower latency
-   * - RLinf resident outer-step wall, same trial
+   * - RLinf resident outer-step wall, two order-controlled paired trials
      - Eager Backbone + eager Action Head
      - TensorRT Backbone + eager Action Head + exact feature reuse
      - Approximately 1.3-1.5% lower latency
