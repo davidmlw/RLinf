@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 from collections import Counter, defaultdict
@@ -39,6 +40,11 @@ FALLBACK_RE = re.compile(
     r"actor/reuse_feature_fallbacks=(?P<value>"
     r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
 )
+TRAINING_METRIC_RE = re.compile(
+    r"actor/(?P<name>grad_norm|policy_loss|total_loss)="
+    r"(?P<value>[-+A-Za-z0-9.eE]+)"
+)
+TRAINING_METRICS = ("grad_norm", "policy_loss", "total_loss")
 
 
 def _sha256(path: Path) -> str:
@@ -81,6 +87,34 @@ def _rank_counts(lines: list[str], pattern: re.Pattern[str]) -> Counter[int]:
         if match is not None:
             counts[int(match.group(1))] += 1
     return counts
+
+
+def _training_metric_gates(
+    lines: list[str], *, min_outer_steps: int
+) -> tuple[dict[str, Any], list[str]]:
+    values: dict[str, list[float]] = {name: [] for name in TRAINING_METRICS}
+    for line in lines:
+        for match in TRAINING_METRIC_RE.finditer(line):
+            values[match.group("name")].append(float(match.group("value")))
+
+    failures = []
+    nonfinite_steps = {}
+    for name, metric_values in values.items():
+        if len(metric_values) < min_outer_steps:
+            failures.append(
+                f"actor/{name}: expected at least {min_outer_steps} values, "
+                f"found {len(metric_values)}"
+            )
+        indices = [
+            step for step, value in enumerate(metric_values) if not math.isfinite(value)
+        ]
+        nonfinite_steps[name] = indices
+        if indices:
+            failures.append(f"actor/{name}: nonfinite at steps {indices}")
+    return {
+        "counts": {name: len(metric_values) for name, metric_values in values.items()},
+        "nonfinite_steps": nonfinite_steps,
+    }, failures
 
 
 def _runtime_gates(
@@ -220,6 +254,11 @@ def qualify(
     if any(value != 0.0 for value in fallback_values):
         failures.append("feature reuse reported a nonzero fallback count")
 
+    training_metrics, training_metric_failures = _training_metric_gates(
+        lines, min_outer_steps=min_outer_steps
+    )
+    failures.extend(training_metric_failures)
+
     deduplicated_failures = list(dict.fromkeys(failures))
     return {
         "schema": "rlinf.gr00t-n1d7-hybrid-trial.v1",
@@ -261,6 +300,7 @@ def qualify(
                 for name, counts in stream_counts.items()
             },
             "feature_fallback_values": fallback_values,
+            "training_metrics": training_metrics,
         },
         "failures": deduplicated_failures,
     }

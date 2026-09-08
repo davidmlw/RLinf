@@ -104,6 +104,12 @@ def _inputs(tmp_path: Path, *, fallback: float = 0.0) -> tuple[Path, Path, Path]
     lines.extend(
         [f"actor/reuse_feature_fallbacks={fallback}" for _ in range(2)]
     )
+    lines.extend(
+        [
+            "actor/grad_norm=1.25 actor/policy_loss=-0.2 actor/total_loss=0.3",
+            "actor/grad_norm=0.75 actor/policy_loss=0.1 actor/total_loss=0.2",
+        ]
+    )
     training.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return standalone, engine, training
 
@@ -122,6 +128,14 @@ def test_qualified_trial_passes_all_runtime_and_ppo_gates(tmp_path: Path) -> Non
     assert receipt["status"] == "passed"
     assert receipt["failures"] == []
     assert receipt["gates"]["feature_fallback_values"] == [0.0, 0.0]
+    assert receipt["gates"]["training_metrics"] == {
+        "counts": {"grad_norm": 2, "policy_loss": 2, "total_loss": 2},
+        "nonfinite_steps": {
+            "grad_norm": [],
+            "policy_loss": [],
+            "total_loss": [],
+        },
+    }
     assert receipt["gates"]["runtime"]["rank_stage_counts"]["0"] == {
         "closed": 1,
         "closing": 1,
@@ -228,3 +242,31 @@ def test_trial_fails_closed_on_tensorrt_dit(tmp_path: Path) -> None:
 
     assert receipt["status"] == "failed"
     assert "rank 0 enabled an unsupported TensorRT DiT" in receipt["failures"]
+
+
+def test_trial_fails_closed_on_nonfinite_or_missing_training_metrics(
+    tmp_path: Path,
+) -> None:
+    standalone, engine, training = _inputs(tmp_path)
+    text = training.read_text(encoding="utf-8")
+    training.write_text(
+        text.replace("actor/grad_norm=1.25", "actor/grad_norm=nan").replace(
+            "actor/total_loss=0.2", "missing_total_loss=0.2"
+        ),
+        encoding="utf-8",
+    )
+
+    receipt = MODULE.qualify(
+        standalone,
+        engine,
+        training,
+        world_size=2,
+        min_outer_steps=2,
+    )
+
+    assert receipt["status"] == "failed"
+    assert "actor/grad_norm: nonfinite at steps [0]" in receipt["failures"]
+    assert (
+        "actor/total_loss: expected at least 2 values, found 1"
+        in receipt["failures"]
+    )
