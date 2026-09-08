@@ -105,3 +105,19 @@ def test_verify_rejects_weakened_probe_thresholds(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="weakened numerical thresholds"):
         MODULE.verify(root, qualification)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("cosine_min", float("nan")), ("relative_l2_max", float("inf"))],
+)
+def test_verify_rejects_nonfinite_probe_thresholds(
+    tmp_path: Path, name: str, value: float
+) -> None:
+    root, qualification = _bundle(tmp_path)
+    receipt = json.loads(qualification.read_text(encoding="utf-8"))
+    receipt["fixed_probe"]["thresholds"][name] = value
+    qualification.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="weakened numerical thresholds"):
+        MODULE.verify(root, qualification)

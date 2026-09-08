@@ -90,7 +90,10 @@ Run the Diagnostic Mode
 -----------------------
 
 The diagnostic mode executes TensorRT DiT at revision zero while retaining an
-eager shadow for parity measurements. It does not perform online refits:
+eager shadow for parity measurements. It does not perform online refits. The
+command below must be submitted through an already materialized RLinf EOS site;
+``start_rlinf.py`` supplies the common workload, model, runtime, and artifact
+environment required by ``run_n1d7_hybrid.sh``:
 
 .. code-block:: bash
 
@@ -99,20 +102,24 @@ eager shadow for parity measurements. It does not perform online refits:
 "$DIT_QUALIFICATION/refit-lifecycle-receipt.json"
    export RLINF_GROOT_TRT_DIT_DIAGNOSTIC=1
    export RLINF_GROOT_TRT_DIT_ONLINE=0
-   bash toolkits/eos/gr00t_trocar/run_n1d7_hybrid.sh
+   python toolkits/eos/start_rlinf.py submit --site /path/to/site.json
 
 Run the Experimental Online Refit
 ---------------------------------
 
 Online refit is opt-in and fail-closed. It cannot be enabled together with the
-diagnostic mode:
+diagnostic mode. Because this backend failed the PPO authority gate, a run that
+advances beyond revision zero also requires an explicit systems-only opt-in.
+That opt-in disables the pre-update identity gate; the resulting run is not a
+PPO qualification, learning result, or convergence result:
 
 .. code-block:: bash
 
    export RLINF_GROOT_TRT_DIT_DIAGNOSTIC=0
    export RLINF_GROOT_TRT_DIT_ONLINE=1
    export RLINF_GROOT_TRT_DIT_LINEAGE_MODE=qualification_sha256
-   bash toolkits/eos/gr00t_trocar/run_n1d7_hybrid.sh
+   export RLINF_GROOT_TRT_DIT_ALLOW_FAILED_PPO_AUTHORITY=1
+   python toolkits/eos/start_rlinf.py submit --site /path/to/site.json
 
 For the EOS launcher, include one
 ``rlinf-refittable-dit-engine-receipt.json``, one
@@ -129,6 +136,11 @@ Retain the bundle verification output, per-revision source and staging
 digests, candidate probe metrics, slot transitions, refit latency, TensorRT
 load/context counts, and shutdown state. Any mismatch must abort adoption;
 there is no silent eager fallback.
+
+Only ``qualification_sha256`` lineage can produce this retainable evidence.
+``gpu_transform_validation`` is a non-qualifying performance diagnostic: it
+validates transformed GPU tensors but deliberately omits source and staging
+digests, so its output must not be promoted as an online-refit qualification.
 
 The observed ratio/KL failure is a correctness boundary, not a tunable warning.
 Promotion requires a new same-revision PPO receipt showing behavior/current

@@ -818,6 +818,8 @@ def test_online_refit_live_probe_failure_fail_stops() -> None:
         ({"minimum_free_device_bytes": (8 << 30) - 1}, "at least 8 GiB"),
         ({"ppo_authority_status": "passed"}, "failed PPO authority"),
         ({"lineage_receipt_mode": "disabled"}, "lineage_receipt_mode"),
+        ({"minimum_probe_cosine": float("nan")}, "cosine gate"),
+        ({"maximum_probe_relative_l2": float("nan")}, "relative-L2 gate"),
     ],
 )
 def test_online_refit_rejects_weakened_safety_config(override, message) -> None:

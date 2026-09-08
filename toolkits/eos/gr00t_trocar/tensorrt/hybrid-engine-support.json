@@ -89,7 +89,8 @@
     "RLINF_GROOT_TRT_DIT_ROOT": "experimental refittable DiT build root",
     "RLINF_GROOT_TRT_DIT_QUALIFICATION": "refit-lifecycle-receipt.json qualified against the selected build",
     "RLINF_GROOT_TRT_DIT_DIAGNOSTIC": "set to 1 for revision-zero eager-shadow diagnostics",
-    "RLINF_GROOT_TRT_DIT_ONLINE": "set to 1 for approximate-behavior online refit; mutually exclusive with diagnostic mode"
+    "RLINF_GROOT_TRT_DIT_ONLINE": "set to 1 for approximate-behavior online refit; mutually exclusive with diagnostic mode",
+    "RLINF_GROOT_TRT_DIT_ALLOW_FAILED_PPO_AUTHORITY": "must be 1 to advance online refit beyond revision zero; disables the PPO identity gate and marks the run systems-only"
   },
   "qualification": {
     "standalone": {

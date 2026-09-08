@@ -343,9 +343,15 @@ class RefittableTensorRTDiT:
         self.maximum_probe_relative_l2 = float(
             config.get("maximum_probe_relative_l2", _MAX_PROBE_RELATIVE_L2)
         )
-        if self.minimum_probe_cosine < _MIN_PROBE_COSINE:
+        if (
+            not math.isfinite(self.minimum_probe_cosine)
+            or self.minimum_probe_cosine < _MIN_PROBE_COSINE
+        ):
             raise ValueError("TensorRT DiT probe cosine gate cannot be weakened")
-        if self.maximum_probe_relative_l2 > _MAX_PROBE_RELATIVE_L2:
+        if (
+            not math.isfinite(self.maximum_probe_relative_l2)
+            or self.maximum_probe_relative_l2 > _MAX_PROBE_RELATIVE_L2
+        ):
             raise ValueError("TensorRT DiT probe relative-L2 gate cannot be weakened")
         self.minimum_headroom = int(
             config.get("minimum_free_device_bytes", _MIN_FREE_DEVICE_BYTES)

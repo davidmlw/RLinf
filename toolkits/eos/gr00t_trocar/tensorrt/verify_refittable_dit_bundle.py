@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -94,9 +95,13 @@ def verify(build_root: Path, qualification_path: Path) -> dict[str, Any]:
         raise ValueError("lifecycle qualification omits revision-zero source digest")
     fixed_probe = qualification.get("fixed_probe", {})
     thresholds = fixed_probe.get("thresholds", {})
+    cosine_min = float(thresholds.get("cosine_min", 0.0))
+    relative_l2_max = float(thresholds.get("relative_l2_max", 1.0))
     if (
-        float(thresholds.get("cosine_min", 0.0)) < 0.999
-        or float(thresholds.get("relative_l2_max", 1.0)) > 0.05
+        not math.isfinite(cosine_min)
+        or not math.isfinite(relative_l2_max)
+        or cosine_min < 0.999
+        or relative_l2_max > 0.05
     ):
         raise ValueError("lifecycle qualification used weakened numerical thresholds")
 

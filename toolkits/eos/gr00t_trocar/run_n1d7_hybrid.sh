@@ -281,14 +281,19 @@ case "${RLINF_GROOT_EAGER_DIT_TIMING:-0}" in
     exit 2
     ;;
 esac
-case "${W81_DISABLE_PRE_UPDATE_IDENTITY_GATE:-0}" in
+allow_failed_ppo_authority="${RLINF_GROOT_TRT_DIT_ALLOW_FAILED_PPO_AUTHORITY:-${W81_DISABLE_PRE_UPDATE_IDENTITY_GATE:-0}}"
+if [[ "$trt_dit_online" == 1 && "$allow_failed_ppo_authority" != 1 ]]; then
+  printf 'online TensorRT DiT requires explicit approximate-behavior opt-in: RLINF_GROOT_TRT_DIT_ALLOW_FAILED_PPO_AUTHORITY=1\n' >&2
+  exit 2
+fi
+case "$allow_failed_ppo_authority" in
   0) ;;
   1)
     overrides+=(actor.pre_update_same_revision_gate.enabled=false)
-    printf 'W81_DISABLE_PRE_UPDATE_IDENTITY_GATE=1\n'
+    printf 'RLINF_GROOT_TRT_DIT_ALLOW_FAILED_PPO_AUTHORITY=1\n'
     ;;
   *)
-    printf 'W81_DISABLE_PRE_UPDATE_IDENTITY_GATE must be 0 or 1\n' >&2
+    printf 'RLINF_GROOT_TRT_DIT_ALLOW_FAILED_PPO_AUTHORITY must be 0 or 1\n' >&2
     exit 2
     ;;
 esac
