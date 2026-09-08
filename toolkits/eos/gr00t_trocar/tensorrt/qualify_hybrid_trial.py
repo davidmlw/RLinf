@@ -90,7 +90,7 @@ def _rank_counts(lines: list[str], pattern: re.Pattern[str]) -> Counter[int]:
 
 
 def _training_metric_gates(
-    lines: list[str], *, min_outer_steps: int
+    lines: list[str], *, expected_outer_steps: int
 ) -> tuple[dict[str, Any], list[str]]:
     values: dict[str, list[float]] = {name: [] for name in TRAINING_METRICS}
     for line in lines:
@@ -100,9 +100,9 @@ def _training_metric_gates(
     failures = []
     nonfinite_steps = {}
     for name, metric_values in values.items():
-        if len(metric_values) < min_outer_steps:
+        if len(metric_values) != expected_outer_steps:
             failures.append(
-                f"actor/{name}: expected at least {min_outer_steps} values, "
+                f"actor/{name}: expected {expected_outer_steps} values, "
                 f"found {len(metric_values)}"
             )
         indices = [
@@ -158,6 +158,7 @@ def _runtime_gates(
             if engine.get("resident_host_sync_count") != 0:
                 failures.append(f"rank {rank} {engine_name} synchronized the host")
 
+    completed_outer_steps = []
     for rank in sorted(expected_ranks):
         stages = by_rank_stage.get(rank, Counter())
         if stages["initialized"] < 1:
@@ -170,11 +171,16 @@ def _runtime_gates(
             failures.append(
                 f"rank {rank} has fewer than {min_outer_steps} completed rollouts"
             )
+        completed_outer_steps.append(stages["rollout_complete"])
         if stages["closing"] != 1 or stages["closed"] != 1:
             failures.append(f"rank {rank} has incomplete shutdown telemetry")
 
+    if len(set(completed_outer_steps)) != 1:
+        failures.append("hybrid runtime ranks completed different outer-step counts")
+    observed_outer_steps = max(completed_outer_steps, default=0)
     return {
         "record_count": len(records),
+        "completed_outer_steps": observed_outer_steps,
         "rank_stage_counts": {
             str(rank): dict(sorted(stages.items()))
             for rank, stages in sorted(by_rank_stage.items())
@@ -221,6 +227,7 @@ def qualify(
         min_outer_steps=min_outer_steps,
     )
     failures.extend(runtime_failures)
+    observed_outer_steps = int(runtime["completed_outer_steps"])
 
     identities = _marker_json(lines, JSON_MARKERS["identity"])
     if not identities:
@@ -239,9 +246,10 @@ def qualify(
     }
     for name, counts in stream_counts.items():
         for rank in sorted(expected_ranks):
-            if counts[rank] < min_outer_steps:
+            if counts[rank] != observed_outer_steps:
                 failures.append(
-                    f"rank {rank} has fewer than {min_outer_steps} {name} records"
+                    f"rank {rank} has {counts[rank]} {name} records; "
+                    f"expected {observed_outer_steps}"
                 )
 
     fallback_values = [
@@ -249,13 +257,16 @@ def qualify(
         for line in lines
         for match in FALLBACK_RE.finditer(line)
     ]
-    if len(fallback_values) < min_outer_steps:
-        failures.append("training log has too few feature-fallback metrics")
+    if len(fallback_values) != observed_outer_steps:
+        failures.append(
+            f"training log has {len(fallback_values)} feature-fallback metrics; "
+            f"expected {observed_outer_steps}"
+        )
     if any(value != 0.0 for value in fallback_values):
         failures.append("feature reuse reported a nonzero fallback count")
 
     training_metrics, training_metric_failures = _training_metric_gates(
-        lines, min_outer_steps=min_outer_steps
+        lines, expected_outer_steps=observed_outer_steps
     )
     failures.extend(training_metric_failures)
 
