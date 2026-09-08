@@ -36,12 +36,24 @@ def _inputs(tmp_path: Path, *, fallback: float = 0.0) -> tuple[Path, Path, Path]
     standalone = tmp_path / "standalone.json"
     engine = tmp_path / "rlinf-engine-receipt.json"
     training = tmp_path / "training.out"
-    standalone.write_text(json.dumps({"status": "passed"}), encoding="utf-8")
     engine.write_text(
         json.dumps({"status": "passed", "silent_fallback": False}),
         encoding="utf-8",
     )
     receipt_sha256 = _sha256(engine)
+    standalone.write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "provenance": {
+                    "artifacts": {
+                        "engine_receipt": {"sha256": receipt_sha256}
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     lines = []
     for rank in range(2):
         engine_stats = {
@@ -66,7 +78,12 @@ def _inputs(tmp_path: Path, *, fallback: float = 0.0) -> tuple[Path, Path, Path]
             payload = {
                 "stage": stage,
                 "rank": rank,
-                "compiled_dit": False,
+                "compiled_dit": {
+                    "enabled": False,
+                    "mode": None,
+                    "unique_graphs": 0,
+                    "parameter_count": 0,
+                },
                 "tensorrt_backbone": backbone,
             }
             lines.append(f"prefix RLINF_HYBRID_RUNTIME {json.dumps(payload)}")
@@ -147,3 +164,67 @@ def test_trial_fails_closed_on_missing_rank_lifecycle(tmp_path: Path) -> None:
 
     assert receipt["status"] == "failed"
     assert "rank 1 has no initialized telemetry" in receipt["failures"]
+
+
+def test_trial_fails_closed_on_mixed_standalone_engine_bundle(tmp_path: Path) -> None:
+    standalone, engine, training = _inputs(tmp_path)
+    value = json.loads(standalone.read_text(encoding="utf-8"))
+    value["provenance"]["artifacts"]["engine_receipt"]["sha256"] = "0" * 64
+    standalone.write_text(json.dumps(value), encoding="utf-8")
+
+    receipt = MODULE.qualify(
+        standalone,
+        engine,
+        training,
+        world_size=2,
+        min_outer_steps=2,
+    )
+
+    assert receipt["status"] == "failed"
+    assert (
+        "standalone qualification used a different engine receipt"
+        in receipt["failures"]
+    )
+
+
+def test_trial_fails_closed_on_compiled_dit(tmp_path: Path) -> None:
+    standalone, engine, training = _inputs(tmp_path)
+    text = training.read_text(encoding="utf-8")
+    training.write_text(
+        text.replace('"enabled": false', '"enabled": true'),
+        encoding="utf-8",
+    )
+
+    receipt = MODULE.qualify(
+        standalone,
+        engine,
+        training,
+        world_size=2,
+        min_outer_steps=2,
+    )
+
+    assert receipt["status"] == "failed"
+    assert "rank 0 enabled an unsupported compiled DiT" in receipt["failures"]
+
+
+def test_trial_fails_closed_on_tensorrt_dit(tmp_path: Path) -> None:
+    standalone, engine, training = _inputs(tmp_path)
+    text = training.read_text(encoding="utf-8")
+    training.write_text(
+        text.replace(
+            '"tensorrt_backbone":',
+            '"tensorrt_dit": {"enabled": true}, "tensorrt_backbone":',
+        ),
+        encoding="utf-8",
+    )
+
+    receipt = MODULE.qualify(
+        standalone,
+        engine,
+        training,
+        world_size=2,
+        min_outer_steps=2,
+    )
+
+    assert receipt["status"] == "failed"
+    assert "rank 0 enabled an unsupported TensorRT DiT" in receipt["failures"]

@@ -134,10 +134,16 @@ log-probability or value equivalence.
 Enable the RLinf Candidate
 --------------------------
 
-Make the TensorRT Python packages visible through a dedicated overlay, then
-bind the qualified engine directory and receipt hash:
+Materialize the TensorRT Python packages into a dedicated overlay using the
+same interpreter that will run RLinf, then bind the qualified engine directory
+and receipt hash:
 
 .. code-block:: bash
+
+   python toolkits/eos/gr00t_trocar/tensorrt/prepare_runtime_overlay.py \
+     materialize \
+     --source-site-packages /path/to/builder/site-packages \
+     --output /path/to/tensorrt-python-overlay
 
    export RLINF_GROOT_TRT_RUNTIME_OVERLAY=/path/to/tensorrt-python-overlay
    export RLINF_GROOT_TRT_ENGINE_DIR="$BUILD_ROOT/engines"
