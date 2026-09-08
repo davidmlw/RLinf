@@ -1415,11 +1415,58 @@ def _hybrid_artifact_environment(site: Mapping[str, Any]) -> dict[str, str]:
         raise WorkflowError(
             "TensorRT overlay manifest parent is absent from runtime.python_deps"
         )
-    return {
+    environment = {
         "RLINF_GROOT_TRT_RUNTIME_OVERLAY": str(overlay_dir),
         "RLINF_GROOT_TRT_ENGINE_DIR": str(engine_dir),
         "RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256": receipt["sha256"],
     }
+
+    refit_receipts = [
+        item
+        for item in files
+        if Path(item["path"]).name
+        == "rlinf-refittable-dit-engine-receipt.json"
+    ]
+    parameter_maps = [
+        item
+        for item in files
+        if Path(item["path"]).name == "refittable-dit-parameter-map.json"
+    ]
+    refit_qualifications = [
+        item
+        for item in files
+        if Path(item["path"]).name == "refit-lifecycle-receipt.json"
+    ]
+    if not refit_receipts and not parameter_maps and not refit_qualifications:
+        return environment
+    if (
+        len(refit_receipts) != 1
+        or len(parameter_maps) != 1
+        or len(refit_qualifications) != 1
+    ):
+        raise WorkflowError(
+            "refittable DiT runtime requires exactly one engine receipt, "
+            "parameter map, and lifecycle qualification in provenance.files"
+        )
+    refit_receipt = Path(refit_receipts[0]["path"])
+    parameter_map = Path(parameter_maps[0]["path"])
+    if refit_receipt.parent.name != "engine":
+        raise WorkflowError(
+            "refittable DiT engine receipt must be inside the build root's "
+            "engine directory"
+        )
+    refit_root = refit_receipt.parent.parent
+    if parameter_map.parent != refit_root:
+        raise WorkflowError(
+            "refittable DiT parameter map must be in the engine build root"
+        )
+    environment.update(
+        {
+            "RLINF_GROOT_TRT_DIT_ROOT": str(refit_root),
+            "RLINF_GROOT_TRT_DIT_QUALIFICATION": refit_qualifications[0]["path"],
+        }
+    )
+    return environment
 
 
 def _archive_ray_failure_logs(ray_temp: Path, attempt: Path) -> Path | None:

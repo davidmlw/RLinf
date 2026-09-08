@@ -26,8 +26,12 @@
     },
     "experimental": {
       "refittable_tensorrt_dit": {
+        "frozen_backbone": "persistent_tensorrt_vit_llm",
+        "action_head": "refittable_tensorrt_dit_plus_pytorch_remainder",
         "deployment_action_parity": "passed",
-        "ppo_identity": "failed"
+        "ppo_identity": "failed",
+        "scope": "approximate_behavior_systems_and_performance_only",
+        "silent_fallback": false
       }
     },
     "benchmark_only": {
@@ -81,7 +85,11 @@
   "runtime_environment": {
     "RLINF_GROOT_TRT_RUNTIME_OVERLAY": "directory containing rlinf-tensorrt-overlay.json",
     "RLINF_GROOT_TRT_ENGINE_DIR": "qualified two-engine bundle directory",
-    "RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256": "lowercase SHA-256 of rlinf-engine-receipt.json"
+    "RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256": "lowercase SHA-256 of rlinf-engine-receipt.json",
+    "RLINF_GROOT_TRT_DIT_ROOT": "experimental refittable DiT build root",
+    "RLINF_GROOT_TRT_DIT_QUALIFICATION": "refit-lifecycle-receipt.json qualified against the selected build",
+    "RLINF_GROOT_TRT_DIT_DIAGNOSTIC": "set to 1 for revision-zero eager-shadow diagnostics",
+    "RLINF_GROOT_TRT_DIT_ONLINE": "set to 1 for approximate-behavior online refit; mutually exclusive with diagnostic mode"
   },
   "qualification": {
     "standalone": {

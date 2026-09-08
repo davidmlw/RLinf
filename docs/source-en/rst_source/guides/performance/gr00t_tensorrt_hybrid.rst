@@ -23,7 +23,9 @@ The implementation is Python and uses the TensorRT Python runtime. It does not
 depend on Praxis, Poiesis, Rust, or AOTI. PT2 executors and a refittable
 TensorRT DiT are experimental: they improve standalone inference latency but
 have not passed the same-revision PPO ratio/KL gate. Do not use them for PPO
-training without a new qualification receipt.
+training without a new qualification receipt. See
+:doc:`Experimental Refittable DiT <gr00t_tensorrt_refittable_dit>` for the
+separately gated research backend.
 
 .. warning::
 

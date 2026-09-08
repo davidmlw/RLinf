@@ -635,6 +635,66 @@ def test_hybrid_artifacts_require_complete_provenance(tmp_path: Path) -> None:
         MODULE._ray_worker_environment(site)
 
 
+def test_ray_workers_resolve_optional_refittable_dit_bundle(
+    tmp_path: Path,
+) -> None:
+    site_path = _site(tmp_path)
+    value = json.loads(site_path.read_text(encoding="utf-8"))
+    overlay = tmp_path / "tensorrt-overlay"
+    engines = tmp_path / "backbone-engines"
+    refit_root = tmp_path / "refittable-dit"
+    refit_engine = refit_root / "engine"
+    qualification_root = tmp_path / "qualification"
+    for directory in (overlay, engines, refit_engine, qualification_root):
+        directory.mkdir(parents=True)
+    paths = {
+        "overlay": overlay / "rlinf-tensorrt-overlay.json",
+        "backbone": engines / "rlinf-engine-receipt.json",
+        "refit": refit_engine / "rlinf-refittable-dit-engine-receipt.json",
+        "map": refit_root / "refittable-dit-parameter-map.json",
+        "qualification": qualification_root / "refit-lifecycle-receipt.json",
+    }
+    for path in paths.values():
+        path.write_text("{}\n", encoding="utf-8")
+    value["runtime"]["python_deps"].append(str(overlay))
+    for name, path in paths.items():
+        value["provenance"]["files"].append(
+            {"name": name, "path": str(path), "sha256": _sha256(path)}
+        )
+    site_path.write_text(json.dumps(value), encoding="utf-8")
+
+    env = MODULE._ray_worker_environment(MODULE._load_site(site_path))
+
+    assert env["RLINF_GROOT_TRT_DIT_ROOT"] == str(refit_root)
+    assert env["RLINF_GROOT_TRT_DIT_QUALIFICATION"] == str(paths["qualification"])
+
+
+def test_refittable_dit_bundle_requires_complete_provenance(tmp_path: Path) -> None:
+    site_path = _site(tmp_path)
+    value = json.loads(site_path.read_text(encoding="utf-8"))
+    overlay = tmp_path / "tensorrt-overlay"
+    engines = tmp_path / "backbone-engines"
+    refit_engine = tmp_path / "refittable-dit" / "engine"
+    for directory in (overlay, engines, refit_engine):
+        directory.mkdir(parents=True)
+    paths = (
+        overlay / "rlinf-tensorrt-overlay.json",
+        engines / "rlinf-engine-receipt.json",
+        refit_engine / "rlinf-refittable-dit-engine-receipt.json",
+    )
+    for path in paths:
+        path.write_text("{}\n", encoding="utf-8")
+        value["provenance"]["files"].append(
+            {"name": path.stem, "path": str(path), "sha256": _sha256(path)}
+        )
+    value["runtime"]["python_deps"].append(str(overlay))
+    site_path.write_text(json.dumps(value), encoding="utf-8")
+
+    site = MODULE._load_site(site_path)
+    with pytest.raises(MODULE.WorkflowError, match="refittable DiT runtime"):
+        MODULE._ray_worker_environment(site)
+
+
 def test_ray_failure_logs_are_archived_before_cleanup(tmp_path: Path) -> None:
     ray_temp = tmp_path / "ray"
     logs = ray_temp / "session_latest" / "logs"

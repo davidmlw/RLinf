@@ -148,21 +148,36 @@ sha256sum \
   "$trt_engines/llm_bf16.engine" \
   >"$W73_ATTEMPT_ROOT/runtime/tensorrt-artifacts.sha256"
 
-w83_dit_root="/lustre/fsw/coreai_devtech_all/liweim/rlinf-workspace/runs/W83/W83-refittable-dit-build-r3-5972556"
-w83_trt_dit_diagnostic="${W83_TRT_DIT_DIAGNOSTIC:-0}"
-w83_trt_dit_online="${W83_TRT_DIT_ONLINE:-0}"
-w83_trt_dit_lineage_mode="${W83_TRT_DIT_LINEAGE_MODE:-qualification_sha256}"
-case "$w83_trt_dit_diagnostic:$w83_trt_dit_online" in
+trt_dit_diagnostic="${RLINF_GROOT_TRT_DIT_DIAGNOSTIC:-0}"
+trt_dit_online="${RLINF_GROOT_TRT_DIT_ONLINE:-0}"
+trt_dit_lineage_mode="${RLINF_GROOT_TRT_DIT_LINEAGE_MODE:-qualification_sha256}"
+case "$trt_dit_diagnostic:$trt_dit_online" in
   0:0) ;;
   1:0|0:1)
-    sha256sum \
-      "$w83_dit_root/engine/rlinf-refittable-dit-engine-receipt.json" \
-      "$w83_dit_root/refittable-dit-parameter-map.json" \
-      "$w83_dit_root/engine/dit_bf16_refit.engine" \
-      >"$W73_ATTEMPT_ROOT/runtime/w83-refittable-dit-artifacts.sha256"
+    for name in RLINF_GROOT_TRT_DIT_ROOT RLINF_GROOT_TRT_DIT_QUALIFICATION; do
+      if [[ -z "${!name:-}" ]]; then
+        printf 'missing required environment variable: %s\n' "$name" >&2
+        exit 2
+      fi
+    done
+    trt_dit_bundle="$W73_ATTEMPT_ROOT/runtime/refittable-dit-bundle.json"
+    "$W73_RUNTIME_PYTHON" \
+      "$W73_SOURCE_ROOT/toolkits/eos/gr00t_trocar/tensorrt/verify_refittable_dit_bundle.py" \
+      --build-root "$RLINF_GROOT_TRT_DIT_ROOT" \
+      --qualification "$RLINF_GROOT_TRT_DIT_QUALIFICATION" \
+      --output "$trt_dit_bundle" \
+      >"$W73_ATTEMPT_ROOT/runtime/refittable-dit-bundle.out"
+    mapfile -t trt_dit_values < <(
+      "$W73_RUNTIME_PYTHON" -c \
+        'import json,sys; x=json.load(open(sys.argv[1])); print(x["sha256"]["engine_receipt"]); print(x["sha256"]["parameter_map"]); print(x["source_digest_revision_0"])' \
+        "$trt_dit_bundle"
+    )
+    trt_dit_receipt_sha256="${trt_dit_values[0]}"
+    trt_dit_parameter_map_sha256="${trt_dit_values[1]}"
+    trt_dit_source_digest_revision_0="${trt_dit_values[2]}"
     ;;
   *)
-    printf 'exactly zero or one W83 TensorRT DiT mode must be enabled\n' >&2
+    printf 'exactly zero or one TensorRT DiT mode must be enabled\n' >&2
     exit 2
     ;;
 esac
@@ -198,48 +213,48 @@ overrides=(
 if [[ -n "$W73_RESUME_DIR" ]]; then
   overrides+=(runner.resume_dir="$W73_RESUME_DIR")
 fi
-if [[ "$w83_trt_dit_diagnostic" == 1 ]]; then
+if [[ "$trt_dit_diagnostic" == 1 ]]; then
   overrides+=(
-    runner.logger.experiment_name=w83_n1d7_trt_dit_identity
+    runner.logger.experiment_name=n1d7_trt_dit_identity_diagnostic
     ++rollout.model.tensorrt_dit_diagnostic.enabled=true
-    ++rollout.model.tensorrt_dit_diagnostic.engine_path="$w83_dit_root/engine/dit_bf16_refit.engine"
-    ++rollout.model.tensorrt_dit_diagnostic.receipt_path="$w83_dit_root/engine/rlinf-refittable-dit-engine-receipt.json"
-    ++rollout.model.tensorrt_dit_diagnostic.receipt_sha256=774652d469c47884c6756fe98196884df74cdc129bd611afcf7ea949be7cf024
-    ++rollout.model.tensorrt_dit_diagnostic.parameter_map_path="$w83_dit_root/refittable-dit-parameter-map.json"
-    ++rollout.model.tensorrt_dit_diagnostic.parameter_map_sha256=df7c72b90629ff6343f52c066a03d430728cc7cd605d12c1b884851fed48c935
-    ++rollout.model.tensorrt_dit_diagnostic.source_digest_revision_0=dcadd3c8a2bf405e53dc23aded49c536d0315f4d68f86417feb59a321bd2aaca
+    ++rollout.model.tensorrt_dit_diagnostic.engine_path="$RLINF_GROOT_TRT_DIT_ROOT/engine/dit_bf16_refit.engine"
+    ++rollout.model.tensorrt_dit_diagnostic.receipt_path="$RLINF_GROOT_TRT_DIT_ROOT/engine/rlinf-refittable-dit-engine-receipt.json"
+    ++rollout.model.tensorrt_dit_diagnostic.receipt_sha256="$trt_dit_receipt_sha256"
+    ++rollout.model.tensorrt_dit_diagnostic.parameter_map_path="$RLINF_GROOT_TRT_DIT_ROOT/refittable-dit-parameter-map.json"
+    ++rollout.model.tensorrt_dit_diagnostic.parameter_map_sha256="$trt_dit_parameter_map_sha256"
+    ++rollout.model.tensorrt_dit_diagnostic.source_digest_revision_0="$trt_dit_source_digest_revision_0"
     ++rollout.model.tensorrt_dit_diagnostic.revision=0
     ++rollout.model.tensorrt_dit_diagnostic.runtime_version=10.15.1.29
     ++rollout.model.tensorrt_dit_diagnostic.runtime_distribution=tensorrt-cu12
     ++rollout.model.tensorrt_dit_diagnostic.compute_capability='[9,0]'
     ++rollout.model.tensorrt_dit_diagnostic.shadow_eager=true
   )
-  printf 'W83_TRT_DIT_DIAGNOSTIC=1\n'
+  printf 'RLINF_GROOT_TRT_DIT_DIAGNOSTIC=1\n'
 fi
-if [[ "$w83_trt_dit_online" == 1 ]]; then
-  case "$w83_trt_dit_lineage_mode" in
+if [[ "$trt_dit_online" == 1 ]]; then
+  case "$trt_dit_lineage_mode" in
     qualification_sha256|gpu_transform_validation) ;;
     *)
-      printf 'invalid W83_TRT_DIT_LINEAGE_MODE: %s\n' \
-        "$w83_trt_dit_lineage_mode" >&2
+      printf 'invalid RLINF_GROOT_TRT_DIT_LINEAGE_MODE: %s\n' \
+        "$trt_dit_lineage_mode" >&2
       exit 2
       ;;
   esac
   overrides+=(
-    runner.logger.experiment_name=w83_n1d7_online_refittable_trt_dit
+    runner.logger.experiment_name=n1d7_online_refittable_trt_dit
     ++rollout.model.tensorrt_dit.enabled=true
-    ++rollout.model.tensorrt_dit.engine_path="$w83_dit_root/engine/dit_bf16_refit.engine"
-    ++rollout.model.tensorrt_dit.receipt_path="$w83_dit_root/engine/rlinf-refittable-dit-engine-receipt.json"
-    ++rollout.model.tensorrt_dit.receipt_sha256=774652d469c47884c6756fe98196884df74cdc129bd611afcf7ea949be7cf024
-    ++rollout.model.tensorrt_dit.parameter_map_path="$w83_dit_root/refittable-dit-parameter-map.json"
-    ++rollout.model.tensorrt_dit.parameter_map_sha256=df7c72b90629ff6343f52c066a03d430728cc7cd605d12c1b884851fed48c935
-    ++rollout.model.tensorrt_dit.source_digest_revision_0=dcadd3c8a2bf405e53dc23aded49c536d0315f4d68f86417feb59a321bd2aaca
+    ++rollout.model.tensorrt_dit.engine_path="$RLINF_GROOT_TRT_DIT_ROOT/engine/dit_bf16_refit.engine"
+    ++rollout.model.tensorrt_dit.receipt_path="$RLINF_GROOT_TRT_DIT_ROOT/engine/rlinf-refittable-dit-engine-receipt.json"
+    ++rollout.model.tensorrt_dit.receipt_sha256="$trt_dit_receipt_sha256"
+    ++rollout.model.tensorrt_dit.parameter_map_path="$RLINF_GROOT_TRT_DIT_ROOT/refittable-dit-parameter-map.json"
+    ++rollout.model.tensorrt_dit.parameter_map_sha256="$trt_dit_parameter_map_sha256"
+    ++rollout.model.tensorrt_dit.source_digest_revision_0="$trt_dit_source_digest_revision_0"
     ++rollout.model.tensorrt_dit.revision=0
     ++rollout.model.tensorrt_dit.runtime_version=10.15.1.29
     ++rollout.model.tensorrt_dit.runtime_distribution=tensorrt-cu12
     ++rollout.model.tensorrt_dit.compute_capability='[9,0]'
     ++rollout.model.tensorrt_dit.online_refit=true
-    ++rollout.model.tensorrt_dit.lineage_receipt_mode="$w83_trt_dit_lineage_mode"
+    ++rollout.model.tensorrt_dit.lineage_receipt_mode="$trt_dit_lineage_mode"
     ++rollout.model.tensorrt_dit.probe_each_revision=true
     ++rollout.model.tensorrt_dit.minimum_probe_cosine=0.999
     ++rollout.model.tensorrt_dit.maximum_probe_relative_l2=0.05
@@ -247,22 +262,22 @@ if [[ "$w83_trt_dit_online" == 1 ]]; then
     ++rollout.model.tensorrt_dit.ppo_authority_status=failed_ratio_kl_approximate_behavior_only
     ++rollout.model.tensorrt_dit.shadow_eager=false
   )
-  printf 'W83_TRT_DIT_ONLINE=1\n'
-  printf 'W83_TRT_DIT_LINEAGE_MODE=%s\n' "$w83_trt_dit_lineage_mode"
-  printf 'W83_PPO_AUTHORITY=failed_ratio_kl_approximate_behavior_only\n'
+  printf 'RLINF_GROOT_TRT_DIT_ONLINE=1\n'
+  printf 'RLINF_GROOT_TRT_DIT_LINEAGE_MODE=%s\n' "$trt_dit_lineage_mode"
+  printf 'RLINF_GROOT_TRT_DIT_PPO_AUTHORITY=failed_ratio_kl_approximate_behavior_only\n'
 fi
-case "${W83_EAGER_DIT_TIMING:-0}" in
+case "${RLINF_GROOT_EAGER_DIT_TIMING:-0}" in
   0) ;;
   1)
-    if [[ "$w83_trt_dit_diagnostic" == 1 || "$w83_trt_dit_online" == 1 ]]; then
-      printf 'W83_EAGER_DIT_TIMING cannot be combined with TensorRT DiT\n' >&2
+    if [[ "$trt_dit_diagnostic" == 1 || "$trt_dit_online" == 1 ]]; then
+      printf 'RLINF_GROOT_EAGER_DIT_TIMING cannot be combined with TensorRT DiT\n' >&2
       exit 2
     fi
     overrides+=(++rollout.model.enable_eager_dit_timing=true)
-    printf 'W83_EAGER_DIT_TIMING=1\n'
+    printf 'RLINF_GROOT_EAGER_DIT_TIMING=1\n'
     ;;
   *)
-    printf 'W83_EAGER_DIT_TIMING must be 0 or 1\n' >&2
+    printf 'RLINF_GROOT_EAGER_DIT_TIMING must be 0 or 1\n' >&2
     exit 2
     ;;
 esac

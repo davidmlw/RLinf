@@ -24,6 +24,8 @@ efficiency becomes the bottleneck.
      - Decouple Env Workers from Rollout Workers for dynamic embodied rollout scheduling.
    * - :doc:`GR00T TensorRT Hybrid <gr00t_tensorrt_hybrid>`
      - Run a frozen TensorRT ViT/LLM backbone with a trainable PyTorch action head.
+   * - :doc:`Experimental GR00T Refittable DiT <gr00t_tensorrt_refittable_dit>`
+     - Evaluate online TensorRT DiT refits without promoting them to PPO training.
 
 .. toctree::
    :hidden:
@@ -35,3 +37,4 @@ efficiency becomes the bottleneck.
    LoRA <../lora>
    Env Decoupled Mode <../env_decoupled_mode>
    GR00T TensorRT Hybrid <gr00t_tensorrt_hybrid>
+   Experimental GR00T Refittable DiT <gr00t_tensorrt_refittable_dit>

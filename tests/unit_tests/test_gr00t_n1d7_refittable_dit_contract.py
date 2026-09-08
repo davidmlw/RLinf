@@ -555,8 +555,9 @@ def test_revision_zero_diagnostic_is_wired_to_existing_ppo_gate() -> None:
     assert "if contract is not None:" in verify_source
     assert "if contract is None:" not in verify_source
     assert "verify_online_update(applied_version)" in worker_source
-    assert "W83_TRT_DIT_DIAGNOSTIC" in runner_source
-    assert "W83_TRT_DIT_ONLINE" in runner_source
+    assert "RLINF_GROOT_TRT_DIT_DIAGNOSTIC" in runner_source
+    assert "RLINF_GROOT_TRT_DIT_ONLINE" in runner_source
+    assert "verify_refittable_dit_bundle.py" in runner_source
     assert "++rollout.model.tensorrt_dit.online_refit=true" in runner_source
     assert "++rollout.model.tensorrt_dit.lineage_receipt_mode=" in runner_source
     assert "++rollout.model.enable_eager_dit_timing=true" in runner_source
