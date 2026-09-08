@@ -268,6 +268,10 @@ def test_hybrid_runner_requires_explicit_failed_ppo_authority_opt_in() -> None:
         ROOT / "toolkits/eos/gr00t_trocar/run_n1d7_hybrid.sh"
     ).read_text(encoding="utf-8")
     assert "RLINF_GROOT_TRT_DIT_ALLOW_FAILED_PPO_AUTHORITY" in runner
+    assert (
+        'explicit_dit_ppo_opt_in="${RLINF_GROOT_TRT_DIT_ALLOW_FAILED_PPO_AUTHORITY:-0}"'
+        in runner
+    )
     assert "online TensorRT DiT requires explicit approximate-behavior opt-in" in runner
     assert (
         "overrides+=(actor.pre_update_same_revision_gate.enabled=false)"

@@ -282,7 +282,8 @@ case "${RLINF_GROOT_EAGER_DIT_TIMING:-0}" in
     ;;
 esac
 allow_failed_ppo_authority="${RLINF_GROOT_TRT_DIT_ALLOW_FAILED_PPO_AUTHORITY:-${W81_DISABLE_PRE_UPDATE_IDENTITY_GATE:-0}}"
-if [[ "$trt_dit_online" == 1 && "$allow_failed_ppo_authority" != 1 ]]; then
+explicit_dit_ppo_opt_in="${RLINF_GROOT_TRT_DIT_ALLOW_FAILED_PPO_AUTHORITY:-0}"
+if [[ "$trt_dit_online" == 1 && "$explicit_dit_ppo_opt_in" != 1 ]]; then
   printf 'online TensorRT DiT requires explicit approximate-behavior opt-in: RLINF_GROOT_TRT_DIT_ALLOW_FAILED_PPO_AUTHORITY=1\n' >&2
   exit 2
 fi
