@@ -316,6 +316,7 @@ def test_hybrid_runner_supports_explicit_target_hardware_and_tmp_root() -> None:
     )
     assert "RLINF_SHORT_TMP_ROOT:-/workspace" in runner
     assert "RLINF_SHORT_TMP_ROOT must be an absolute path" in runner
+    assert 'w73-${SLURM_JOB_ID:-manual-$$}' in runner
 
 
 def test_w81_standalone_ablation_separates_trt_and_compile() -> None:

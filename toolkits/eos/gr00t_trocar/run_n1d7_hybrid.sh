@@ -65,7 +65,7 @@ case "$short_tmp_root" in
     exit 2
     ;;
 esac
-short_tmp="$short_tmp_root/w73-${SLURM_JOB_ID:-manual}"
+short_tmp="$short_tmp_root/w73-${SLURM_JOB_ID:-manual-$$}"
 mkdir -p "$short_tmp"
 sampler_pid=
 cleanup() {
