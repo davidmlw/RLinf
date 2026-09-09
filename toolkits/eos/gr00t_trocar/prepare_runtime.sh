@@ -139,7 +139,8 @@ if [[ -f "$manifest" ]]; then
     "$dependency_inputs_sha" \
     "$W73_FLASH_ATTN_WHEEL_SHA256" \
     "$W73_TORCHCODEC_WHEEL_SHA256" \
-    "$(spec_value transformers_version)" <<'PY'
+    "$(spec_value transformers_version)" \
+    "$(spec_value_or torch_cuda_arch_list 9.0)" <<'PY'
 import hashlib
 import json
 import sys
@@ -170,6 +171,8 @@ if manifest.get("torchcodec_wheel_sha256") != sys.argv[9]:
     raise SystemExit("runtime TorchCodec wheel hash mismatch")
 if manifest.get("transformers") != sys.argv[10]:
     raise SystemExit("runtime Transformers version mismatch")
+if manifest.get("torch_cuda_arch_list") != sys.argv[11]:
+    raise SystemExit("runtime CUDA architecture mismatch")
 PY
   PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
     "$(spec_value torch_version)" \
@@ -296,7 +299,7 @@ export UV_PYTHON_PREFERENCE=only-managed
 export UV_TORCH_BACKEND="$(spec_value torch_backend)"
 export ISAAC_LAB_PATH="$W73_ISAACLAB_ROOT"
 export GR00T_PATH="$W73_GROOT_ROOT"
-export TORCH_CUDA_ARCH_LIST=9.0
+export TORCH_CUDA_ARCH_LIST="$(spec_value_or torch_cuda_arch_list 9.0)"
 export MAX_JOBS=4
 export NVCC_THREADS=4
 
@@ -377,7 +380,8 @@ PYTHONPATH= "$W73_RUNTIME_ROOT/bin/python" - \
   "$(spec_value numpy_version)" \
   "$(spec_value transformers_version)" \
   "$W73_FLASH_ATTN_WHEEL_SHA256" \
-  "$W73_TORCHCODEC_WHEEL_SHA256" <<'PY'
+  "$W73_TORCHCODEC_WHEEL_SHA256" \
+  "$TORCH_CUDA_ARCH_LIST" <<'PY'
 import importlib.metadata
 import json
 import os
@@ -413,6 +417,7 @@ expected_numpy = sys.argv[15]
 expected_transformers = sys.argv[16]
 flash_attn_wheel_sha256 = sys.argv[17]
 torchcodec_wheel_sha256 = sys.argv[18]
+torch_cuda_arch_list = sys.argv[19]
 
 if expected_transformers == "4.51.3":
     from transformers.image_utils import VideoInput
@@ -462,6 +467,7 @@ value = {
     "torchvision": torchvision.__version__,
     "torchaudio": torchaudio.__version__,
     "torch_cuda": torch.version.cuda,
+    "torch_cuda_arch_list": torch_cuda_arch_list,
     "flash_attn": flash_attn.__version__,
     "flash_attn_wheel_sha256": flash_attn_wheel_sha256,
     "torchcodec": torchcodec.__version__,
