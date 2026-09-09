@@ -283,6 +283,22 @@ def test_hybrid_runner_requires_explicit_failed_ppo_authority_opt_in() -> None:
     )
 
 
+def test_w88_vulkan_runner_keeps_b2_identity_diagnostic_fail_closed() -> None:
+    runner = (
+        ROOT / "toolkits/gr00t_trocar/run_vulkan_docker.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "W88_B2_IDENTITY_DIAGNOSTIC must be 0 or 1" in runner
+    assert 'W88_B2_IDENTITY_DIAGNOSTIC="$b2_identity_diagnostic"' in runner
+    assert (
+        'if os.environ["W88_B2_IDENTITY_DIAGNOSTIC"] != "1":' in runner
+    )
+    assert (
+        'config["actor"]["pre_update_same_revision_gate"]["enabled"] = False'
+        in runner
+    )
+
+
 def test_hybrid_runner_requires_portable_tensorrt_artifact_inputs() -> None:
     runner = (
         ROOT / "toolkits/eos/gr00t_trocar/run_n1d7_hybrid.sh"
