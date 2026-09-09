@@ -27,6 +27,7 @@ max_epochs=${W88_MAX_EPOCHS:-1}
 num_envs=${W88_NUM_ENVS:-64}
 run_id=${W88_RUN_ID:-$(basename "$W88_RUN_ROOT")}
 arm=${W88_ARM:-control}
+b2_identity_diagnostic=${W88_B2_IDENTITY_DIAGNOSTIC:-0}
 container=$(printf 'w88-%s' "$run_id" | tr '[:upper:]_' '[:lower:]-')
 output="$W88_RUN_ROOT/output"
 config_in_container=/workspace/isaaclab/source/isaaclab_tasks/isaaclab_tasks/contrib/assemble_trocar/config/isaaclab_ppo_gr00t_assemble_trocar_prod.yaml
@@ -35,6 +36,12 @@ assets_in_container=/workspace/isaaclab/source/isaaclab/isaaclab/utils/assets.py
 python_path=/w88-overlay:/workspace/gr00t-n17:/workspace/rlinf-src
 docker_args=()
 mkdir -p "$W88_RUN_ROOT"
+
+if [[ "$b2_identity_diagnostic" != 0 && "$b2_identity_diagnostic" != 1 ]]; then
+  printf 'W88_B2_IDENTITY_DIAGNOSTIC must be 0 or 1: %s\n' \
+    "$b2_identity_diagnostic" >&2
+  exit 2
+fi
 
 case "$arm" in
   control)
@@ -105,6 +112,7 @@ W88_BACKBONE_RECEIPT_SHA256="${W88_TRT_ENGINE_RECEIPT_SHA256:-}" \
 W88_DIT_RECEIPT_SHA256="${dit_values[0]:-}" \
 W88_DIT_PARAMETER_MAP_SHA256="${dit_values[1]:-}" \
 W88_DIT_SOURCE_DIGEST="${dit_values[2]:-}" \
+W88_B2_IDENTITY_DIAGNOSTIC="$b2_identity_diagnostic" \
 python3 - <<'PY'
 import os
 from pathlib import Path
@@ -154,7 +162,8 @@ if arm == "b2":
         "ppo_authority_status": "failed_ratio_kl_approximate_behavior_only",
         "shadow_eager": False,
     }
-    config["actor"]["pre_update_same_revision_gate"]["enabled"] = False
+    if os.environ["W88_B2_IDENTITY_DIAGNOSTIC"] != "1":
+        config["actor"]["pre_update_same_revision_gate"]["enabled"] = False
 
 target.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 PY
