@@ -208,7 +208,7 @@ rollout:
     queue_size: 0
   mode: colocate
   backend: huggingface
-  enable_offload: true
+  enable_offload: false
   enable_torch_compile: false
   torch_compile_mode: max-autotune-no-cudagraphs
   pipeline_stage_num: 1
