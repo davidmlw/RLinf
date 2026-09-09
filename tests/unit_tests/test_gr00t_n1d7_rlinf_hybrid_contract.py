@@ -235,6 +235,7 @@ def test_w88_vulkan_runner_keeps_b2_identity_diagnostic_fail_closed() -> None:
         'config["actor"]["pre_update_same_revision_gate"]["enabled"] = False'
         in runner
     )
+    assert '"minimum_free_device_bytes": 8589934592' in runner
 
 
 def test_hybrid_runner_supports_explicit_target_hardware_and_tmp_root() -> None:
