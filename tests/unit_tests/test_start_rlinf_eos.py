@@ -796,6 +796,7 @@ def test_prepare_runtime_reuses_only_matching_package_freeze(tmp_path: Path) -> 
         "flash_attn_wheel_sha256": _sha256(flash_attn_wheel),
         "torchcodec_wheel_sha256": _sha256(torchcodec_wheel),
         "transformers": spec["transformers_version"],
+        "torch_cuda_arch_list": "9.0",
     }
     (runtime / "rlinf-runtime-manifest.json").write_text(
         json.dumps(manifest), encoding="utf-8"
@@ -837,6 +838,10 @@ def test_prepare_runtime_requires_uv_managed_python() -> None:
 
     assert 'UV_PYTHON_INSTALL_DIR="$runtime_parent/.uv-python"' in script
     assert "UV_PYTHON_PREFERENCE=only-managed" in script
+    assert (
+        'TORCH_CUDA_ARCH_LIST="$(spec_value_or torch_cuda_arch_list 9.0)"'
+        in script
+    )
     assert (
         'cd "$runtime_parent"\n'
         'git -C "$W73_SOURCE_ROOT" worktree remove --force "$build_source"' in script
