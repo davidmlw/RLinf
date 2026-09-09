@@ -34,7 +34,6 @@ extension_in_container=/workspace/isaaclab/source/isaaclab_contrib/isaaclab_cont
 assets_in_container=/workspace/isaaclab/source/isaaclab/isaaclab/utils/assets.py
 python_path=/w88-overlay:/workspace/gr00t-n17:/workspace/rlinf-src
 docker_args=()
-train_overrides=()
 mkdir -p "$W88_RUN_ROOT"
 
 case "$arm" in
@@ -73,18 +72,6 @@ case "$arm" in
       -v "$W88_TRT_RUNTIME_OVERLAY:/w88-trt-overlay:ro"
       -v "$W88_TRT_ENGINE_DIR:/w88-trt-engine:ro"
     )
-    train_overrides+=(
-      runner.logger.experiment_name="w88_n1d7_vulkan_$arm"
-      ++rollout.model.tensorrt_backbone.enabled=true
-      ++rollout.model.tensorrt_backbone.engine_dir=/w88-trt-engine
-      ++rollout.model.tensorrt_backbone.receipt_path=/w88-trt-engine/rlinf-engine-receipt.json
-      ++rollout.model.tensorrt_backbone.receipt_sha256="$W88_TRT_ENGINE_RECEIPT_SHA256"
-      ++rollout.model.tensorrt_backbone.static_batch_size=8
-      ++rollout.model.tensorrt_backbone.sequence_opt=208
-      ++rollout.model.tensorrt_backbone.runtime_version=10.15.1.29
-      ++rollout.model.tensorrt_backbone.runtime_distribution=tensorrt-cu12
-      ++rollout.model.tensorrt_backbone.compute_capability='[8,9]'
-    )
     ;;
   *)
     printf 'W88_ARM must be control, a, or b2: %s\n' "$arm" >&2
@@ -108,34 +95,69 @@ if [[ "$arm" == b2 ]]; then
   docker_args+=(
     -v "$W88_TRT_DIT_ROOT:/w88-trt-dit:ro"
   )
-  train_overrides+=(
-    ++rollout.model.tensorrt_dit.enabled=true
-    ++rollout.model.tensorrt_dit.engine_path=/w88-trt-dit/engine/dit_bf16_refit.engine
-    ++rollout.model.tensorrt_dit.receipt_path=/w88-trt-dit/engine/rlinf-refittable-dit-engine-receipt.json
-    ++rollout.model.tensorrt_dit.receipt_sha256="${dit_values[0]}"
-    ++rollout.model.tensorrt_dit.parameter_map_path=/w88-trt-dit/refittable-dit-parameter-map.json
-    ++rollout.model.tensorrt_dit.parameter_map_sha256="${dit_values[1]}"
-    ++rollout.model.tensorrt_dit.source_digest_revision_0="${dit_values[2]}"
-    ++rollout.model.tensorrt_dit.revision=0
-    ++rollout.model.tensorrt_dit.runtime_version=10.15.1.29
-    ++rollout.model.tensorrt_dit.runtime_distribution=tensorrt-cu12
-    ++rollout.model.tensorrt_dit.compute_capability='[8,9]'
-    ++rollout.model.tensorrt_dit.online_refit=true
-    ++rollout.model.tensorrt_dit.lineage_receipt_mode=gpu_transform_validation
-    ++rollout.model.tensorrt_dit.probe_each_revision=true
-    ++rollout.model.tensorrt_dit.minimum_probe_cosine=0.999
-    ++rollout.model.tensorrt_dit.maximum_probe_relative_l2=0.05
-    ++rollout.model.tensorrt_dit.minimum_free_device_bytes=4294967296
-    ++rollout.model.tensorrt_dit.ppo_authority_status=failed_ratio_kl_approximate_behavior_only
-    ++rollout.model.tensorrt_dit.shadow_eager=false
-    actor.pre_update_same_revision_gate.enabled=false
-  )
 fi
 
-quoted_train_overrides=
-if ((${#train_overrides[@]})); then
-  printf -v quoted_train_overrides ' %q' "${train_overrides[@]}"
-fi
+resolved_config="$W88_RUN_ROOT/config.yaml"
+W88_BASE_CONFIG="$W88_CONFIG" \
+W88_RESOLVED_CONFIG="$resolved_config" \
+W88_SELECTED_ARM="$arm" \
+W88_BACKBONE_RECEIPT_SHA256="${W88_TRT_ENGINE_RECEIPT_SHA256:-}" \
+W88_DIT_RECEIPT_SHA256="${dit_values[0]:-}" \
+W88_DIT_PARAMETER_MAP_SHA256="${dit_values[1]:-}" \
+W88_DIT_SOURCE_DIGEST="${dit_values[2]:-}" \
+python3 - <<'PY'
+import os
+from pathlib import Path
+
+import yaml
+
+source = Path(os.environ["W88_BASE_CONFIG"])
+target = Path(os.environ["W88_RESOLVED_CONFIG"])
+arm = os.environ["W88_SELECTED_ARM"]
+config = yaml.safe_load(source.read_text(encoding="utf-8"))
+config["runner"]["logger"]["experiment_name"] = f"w88_n1d7_vulkan_{arm}"
+
+if arm in {"a", "b2"}:
+    config["rollout"]["model"]["tensorrt_backbone"] = {
+        "enabled": True,
+        "engine_dir": "/w88-trt-engine",
+        "receipt_path": "/w88-trt-engine/rlinf-engine-receipt.json",
+        "receipt_sha256": os.environ["W88_BACKBONE_RECEIPT_SHA256"],
+        "static_batch_size": 8,
+        "sequence_opt": 208,
+        "runtime_version": "10.15.1.29",
+        "runtime_distribution": "tensorrt-cu12",
+        "compute_capability": [8, 9],
+    }
+
+if arm == "b2":
+    config["rollout"]["model"]["tensorrt_dit"] = {
+        "enabled": True,
+        "engine_path": "/w88-trt-dit/engine/dit_bf16_refit.engine",
+        "receipt_path": (
+            "/w88-trt-dit/engine/rlinf-refittable-dit-engine-receipt.json"
+        ),
+        "receipt_sha256": os.environ["W88_DIT_RECEIPT_SHA256"],
+        "parameter_map_path": "/w88-trt-dit/refittable-dit-parameter-map.json",
+        "parameter_map_sha256": os.environ["W88_DIT_PARAMETER_MAP_SHA256"],
+        "source_digest_revision_0": os.environ["W88_DIT_SOURCE_DIGEST"],
+        "revision": 0,
+        "runtime_version": "10.15.1.29",
+        "runtime_distribution": "tensorrt-cu12",
+        "compute_capability": [8, 9],
+        "online_refit": True,
+        "lineage_receipt_mode": "gpu_transform_validation",
+        "probe_each_revision": True,
+        "minimum_probe_cosine": 0.999,
+        "maximum_probe_relative_l2": 0.05,
+        "minimum_free_device_bytes": 4294967296,
+        "ppo_authority_status": "failed_ratio_kl_approximate_behavior_only",
+        "shadow_eager": False,
+    }
+    config["actor"]["pre_update_same_revision_gate"]["enabled"] = False
+
+target.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+PY
 
 if [[ "$(git -C "$W88_SOURCE_ROOT" status --short)" ]]; then
   printf 'RLinf source must be clean\n' >&2
@@ -160,10 +182,8 @@ done
 
 mkdir -p "$W88_RUN_ROOT" "$output" "$W88_RUN_ROOT/gpu"
 chmod 0777 "$W88_RUN_ROOT" "$output" "$W88_RUN_ROOT/gpu"
-cp "$W88_CONFIG" "$W88_RUN_ROOT/config.yaml"
 cp "$0" "$W88_RUN_ROOT/launcher.sh"
 printf '%s\n' "$arm" >"$W88_RUN_ROOT/arm"
-printf '%s\n' "${train_overrides[@]}" >"$W88_RUN_ROOT/hydra-overrides.txt"
 git -C "$W88_SOURCE_ROOT" rev-parse HEAD >"$W88_RUN_ROOT/source.sha"
 "$W88_DOCKER" image inspect "$W88_IMAGE" >"$W88_RUN_ROOT/image-inspect.json"
 sha256sum \
@@ -244,7 +264,7 @@ sampler_pid=$!
   -v "$W88_MODEL_VIEW:/models/GR00T-N1.7-3B:ro" \
   -v "$W88_ASSET_CACHE:/tmp/Assets" \
   -v "$output:/workspace/isaaclab/output" \
-  -v "$W88_CONFIG:$config_in_container:ro" \
+  -v "$resolved_config:$config_in_container:ro" \
   -v "$W88_VULKAN_BASE_EXTENSION:$extension_in_container:ro" \
   -v "$W88_VULKAN_ASSETS:$assets_in_container:ro" \
   "$W88_IMAGE" -lc "
@@ -269,6 +289,6 @@ PY
   --config_name isaaclab_ppo_gr00t_assemble_trocar_prod \
   --model_path /models/GR00T-N1.7-3B \
   --num_envs $num_envs \
-  --max_epochs $max_epochs$quoted_train_overrides \
+  --max_epochs $max_epochs \
   2>&1 | tee /workspace/isaaclab/output/bench.log
 "
