@@ -299,6 +299,25 @@ def test_hybrid_runner_requires_portable_tensorrt_artifact_inputs() -> None:
     assert "sha256sum --check --status" in runner
 
 
+def test_hybrid_runner_supports_explicit_target_hardware_and_tmp_root() -> None:
+    runner = (
+        ROOT / "toolkits/eos/gr00t_trocar/run_n1d7_hybrid.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "RLINF_GROOT_TRT_COMPUTE_CAPABILITY:-[9,0]" in runner
+    assert "RLINF_GROOT_TRT_COMPUTE_CAPABILITY must look like [9,0]" in runner
+    assert (
+        'rollout.model.tensorrt_backbone.compute_capability="$trt_compute_capability"'
+        in runner
+    )
+    assert (
+        'rollout.model.tensorrt_dit.compute_capability="$trt_compute_capability"'
+        in runner
+    )
+    assert "RLINF_SHORT_TMP_ROOT:-/workspace" in runner
+    assert "RLINF_SHORT_TMP_ROOT must be an absolute path" in runner
+
+
 def test_w81_standalone_ablation_separates_trt_and_compile() -> None:
     ablation = _contract()["performance"]["standalone_factorial_ablation"]
 

@@ -54,9 +54,18 @@ mkdir -p \
   "$W73_ATTEMPT_ROOT/runtime" \
   "$W73_HF_CACHE"
 
-# Ray's AF_UNIX socket limit makes an attempt-owned Lustre TMPDIR unsafe. Keep
-# this forced short-path use isolated and remove it during shell cleanup.
-short_tmp="/workspace/w73-${SLURM_JOB_ID:-manual}"
+# Ray's AF_UNIX socket limit makes a long attempt-owned TMPDIR unsafe. Keep this
+# forced short-path use isolated and remove it during shell cleanup. Non-EOS
+# hosts can select an owned short-path root without changing the workload.
+short_tmp_root="${RLINF_SHORT_TMP_ROOT:-/workspace}"
+case "$short_tmp_root" in
+  /*) ;;
+  *)
+    printf 'RLINF_SHORT_TMP_ROOT must be an absolute path\n' >&2
+    exit 2
+    ;;
+esac
+short_tmp="$short_tmp_root/w73-${SLURM_JOB_ID:-manual}"
 mkdir -p "$short_tmp"
 sampler_pid=
 cleanup() {
@@ -151,6 +160,11 @@ sha256sum \
 trt_dit_diagnostic="${RLINF_GROOT_TRT_DIT_DIAGNOSTIC:-0}"
 trt_dit_online="${RLINF_GROOT_TRT_DIT_ONLINE:-0}"
 trt_dit_lineage_mode="${RLINF_GROOT_TRT_DIT_LINEAGE_MODE:-qualification_sha256}"
+trt_compute_capability="${RLINF_GROOT_TRT_COMPUTE_CAPABILITY:-[9,0]}"
+if [[ ! "$trt_compute_capability" =~ ^\[[0-9]+,[0-9]+\]$ ]]; then
+  printf 'RLINF_GROOT_TRT_COMPUTE_CAPABILITY must look like [9,0]\n' >&2
+  exit 2
+fi
 case "$trt_dit_diagnostic:$trt_dit_online" in
   0:0) ;;
   1:0|0:1)
@@ -209,6 +223,7 @@ overrides=(
   rollout.model.backbone_model_path="$W77_BACKBONE_MODEL_ROOT"
   actor.model.model_path="$W73_MODEL_ROOT"
   actor.model.backbone_model_path="$W77_BACKBONE_MODEL_ROOT"
+  rollout.model.tensorrt_backbone.compute_capability="$trt_compute_capability"
 )
 if [[ -n "$W73_RESUME_DIR" ]]; then
   overrides+=(runner.resume_dir="$W73_RESUME_DIR")
@@ -226,7 +241,7 @@ if [[ "$trt_dit_diagnostic" == 1 ]]; then
     ++rollout.model.tensorrt_dit_diagnostic.revision=0
     ++rollout.model.tensorrt_dit_diagnostic.runtime_version=10.15.1.29
     ++rollout.model.tensorrt_dit_diagnostic.runtime_distribution=tensorrt-cu12
-    ++rollout.model.tensorrt_dit_diagnostic.compute_capability='[9,0]'
+    ++rollout.model.tensorrt_dit_diagnostic.compute_capability="$trt_compute_capability"
     ++rollout.model.tensorrt_dit_diagnostic.shadow_eager=true
   )
   printf 'RLINF_GROOT_TRT_DIT_DIAGNOSTIC=1\n'
@@ -252,7 +267,7 @@ if [[ "$trt_dit_online" == 1 ]]; then
     ++rollout.model.tensorrt_dit.revision=0
     ++rollout.model.tensorrt_dit.runtime_version=10.15.1.29
     ++rollout.model.tensorrt_dit.runtime_distribution=tensorrt-cu12
-    ++rollout.model.tensorrt_dit.compute_capability='[9,0]'
+    ++rollout.model.tensorrt_dit.compute_capability="$trt_compute_capability"
     ++rollout.model.tensorrt_dit.online_refit=true
     ++rollout.model.tensorrt_dit.lineage_receipt_mode="$trt_dit_lineage_mode"
     ++rollout.model.tensorrt_dit.probe_each_revision=true
