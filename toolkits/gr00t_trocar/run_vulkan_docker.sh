@@ -26,11 +26,116 @@ done
 max_epochs=${W88_MAX_EPOCHS:-1}
 num_envs=${W88_NUM_ENVS:-64}
 run_id=${W88_RUN_ID:-$(basename "$W88_RUN_ROOT")}
+arm=${W88_ARM:-control}
 container=$(printf 'w88-%s' "$run_id" | tr '[:upper:]_' '[:lower:]-')
 output="$W88_RUN_ROOT/output"
 config_in_container=/workspace/isaaclab/source/isaaclab_tasks/isaaclab_tasks/contrib/assemble_trocar/config/isaaclab_ppo_gr00t_assemble_trocar_prod.yaml
 extension_in_container=/workspace/isaaclab/source/isaaclab_contrib/isaaclab_contrib/rl/rlinf/extension.py
 assets_in_container=/workspace/isaaclab/source/isaaclab/isaaclab/utils/assets.py
+python_path=/w88-overlay:/workspace/gr00t-n17:/workspace/rlinf-src
+docker_args=()
+train_overrides=()
+mkdir -p "$W88_RUN_ROOT"
+
+case "$arm" in
+  control)
+    ;;
+  a|b2)
+    trt_required=(
+      W88_TRT_RUNTIME_OVERLAY
+      W88_TRT_ENGINE_DIR
+      W88_TRT_ENGINE_RECEIPT_SHA256
+    )
+    if [[ "$arm" == b2 ]]; then
+      trt_required+=(
+        W88_TRT_DIT_ROOT
+        W88_TRT_DIT_QUALIFICATION
+      )
+    fi
+    for name in "${trt_required[@]}"; do
+      if [[ -z "${!name:-}" ]]; then
+        printf 'missing required environment variable for arm %s: %s\n' \
+          "$arm" "$name" >&2
+        exit 2
+      fi
+    done
+    test -d "$W88_TRT_RUNTIME_OVERLAY"
+    test -d "$W88_TRT_ENGINE_DIR"
+    test -f "$W88_TRT_ENGINE_DIR/rlinf-engine-receipt.json"
+    printf '%s  %s\n' \
+      "$W88_TRT_ENGINE_RECEIPT_SHA256" \
+      "$W88_TRT_ENGINE_DIR/rlinf-engine-receipt.json" \
+      | sha256sum --check --status
+    python_path=/w88-trt-overlay:$python_path
+    docker_args+=(
+      -e RLINF_GROOT_TRT_ENGINE_DIR=/w88-trt-engine
+      -e RLINF_GROOT_TRT_ENGINE_RECEIPT_SHA256="$W88_TRT_ENGINE_RECEIPT_SHA256"
+      -v "$W88_TRT_RUNTIME_OVERLAY:/w88-trt-overlay:ro"
+      -v "$W88_TRT_ENGINE_DIR:/w88-trt-engine:ro"
+    )
+    train_overrides+=(
+      runner.logger.experiment_name="w88_n1d7_vulkan_$arm"
+      ++rollout.model.tensorrt_backbone.enabled=true
+      ++rollout.model.tensorrt_backbone.engine_dir=/w88-trt-engine
+      ++rollout.model.tensorrt_backbone.receipt_path=/w88-trt-engine/rlinf-engine-receipt.json
+      ++rollout.model.tensorrt_backbone.receipt_sha256="$W88_TRT_ENGINE_RECEIPT_SHA256"
+      ++rollout.model.tensorrt_backbone.static_batch_size=8
+      ++rollout.model.tensorrt_backbone.sequence_opt=208
+      ++rollout.model.tensorrt_backbone.runtime_version=10.15.1.29
+      ++rollout.model.tensorrt_backbone.runtime_distribution=tensorrt-cu12
+      ++rollout.model.tensorrt_backbone.compute_capability='[8,9]'
+    )
+    ;;
+  *)
+    printf 'W88_ARM must be control, a, or b2: %s\n' "$arm" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$arm" == b2 ]]; then
+  test -f "$W88_TRT_DIT_QUALIFICATION"
+  bundle="$W88_RUN_ROOT/refittable-dit-bundle.json"
+  python3 \
+    "$W88_SOURCE_ROOT/toolkits/eos/gr00t_trocar/tensorrt/verify_refittable_dit_bundle.py" \
+    --build-root "$W88_TRT_DIT_ROOT" \
+    --qualification "$W88_TRT_DIT_QUALIFICATION" \
+    --output "$bundle" >/dev/null
+  mapfile -t dit_values < <(
+    python3 -c \
+      'import json,sys; x=json.load(open(sys.argv[1])); print(x["sha256"]["engine_receipt"]); print(x["sha256"]["parameter_map"]); print(x["source_digest_revision_0"])' \
+      "$bundle"
+  )
+  docker_args+=(
+    -v "$W88_TRT_DIT_ROOT:/w88-trt-dit:ro"
+  )
+  train_overrides+=(
+    ++rollout.model.tensorrt_dit.enabled=true
+    ++rollout.model.tensorrt_dit.engine_path=/w88-trt-dit/engine/dit_bf16_refit.engine
+    ++rollout.model.tensorrt_dit.receipt_path=/w88-trt-dit/engine/rlinf-refittable-dit-engine-receipt.json
+    ++rollout.model.tensorrt_dit.receipt_sha256="${dit_values[0]}"
+    ++rollout.model.tensorrt_dit.parameter_map_path=/w88-trt-dit/refittable-dit-parameter-map.json
+    ++rollout.model.tensorrt_dit.parameter_map_sha256="${dit_values[1]}"
+    ++rollout.model.tensorrt_dit.source_digest_revision_0="${dit_values[2]}"
+    ++rollout.model.tensorrt_dit.revision=0
+    ++rollout.model.tensorrt_dit.runtime_version=10.15.1.29
+    ++rollout.model.tensorrt_dit.runtime_distribution=tensorrt-cu12
+    ++rollout.model.tensorrt_dit.compute_capability='[8,9]'
+    ++rollout.model.tensorrt_dit.online_refit=true
+    ++rollout.model.tensorrt_dit.lineage_receipt_mode=gpu_transform_validation
+    ++rollout.model.tensorrt_dit.probe_each_revision=true
+    ++rollout.model.tensorrt_dit.minimum_probe_cosine=0.999
+    ++rollout.model.tensorrt_dit.maximum_probe_relative_l2=0.05
+    ++rollout.model.tensorrt_dit.minimum_free_device_bytes=4294967296
+    ++rollout.model.tensorrt_dit.ppo_authority_status=failed_ratio_kl_approximate_behavior_only
+    ++rollout.model.tensorrt_dit.shadow_eager=false
+    actor.pre_update_same_revision_gate.enabled=false
+  )
+fi
+
+quoted_train_overrides=
+if ((${#train_overrides[@]})); then
+  printf -v quoted_train_overrides ' %q' "${train_overrides[@]}"
+fi
 
 if [[ "$(git -C "$W88_SOURCE_ROOT" status --short)" ]]; then
   printf 'RLinf source must be clean\n' >&2
@@ -57,6 +162,8 @@ mkdir -p "$W88_RUN_ROOT" "$output" "$W88_RUN_ROOT/gpu"
 chmod 0777 "$W88_RUN_ROOT" "$output" "$W88_RUN_ROOT/gpu"
 cp "$W88_CONFIG" "$W88_RUN_ROOT/config.yaml"
 cp "$0" "$W88_RUN_ROOT/launcher.sh"
+printf '%s\n' "$arm" >"$W88_RUN_ROOT/arm"
+printf '%s\n' "${train_overrides[@]}" >"$W88_RUN_ROOT/hydra-overrides.txt"
 git -C "$W88_SOURCE_ROOT" rev-parse HEAD >"$W88_RUN_ROOT/source.sha"
 "$W88_DOCKER" image inspect "$W88_IMAGE" >"$W88_RUN_ROOT/image-inspect.json"
 sha256sum \
@@ -113,6 +220,7 @@ sampler_pid=$!
   --cap-add=SYS_ADMIN \
   --cap-add=SYS_PTRACE \
   --security-opt seccomp=unconfined \
+  "${docker_args[@]}" \
   -e OMNI_KIT_ACCEPT_EULA=yes \
   -e ACCEPT_EULA=Y \
   -e PRIVACY_CONSENT=Y \
@@ -128,7 +236,7 @@ sampler_pid=$!
   -e RLINF_CONFIG_FILE="$config_in_container" \
   -e W77_BACKBONE_MODEL_ROOT="$W88_MODEL_INPUT_ROOT/Cosmos-Reason2-2B" \
   -e W77_TROCAR_METADATA="$W88_TROCAR_METADATA" \
-  -e PYTHONPATH=/w88-overlay:/workspace/gr00t-n17:/workspace/rlinf-src \
+  -e PYTHONPATH="$python_path" \
   -v "$W88_SOURCE_ROOT:/workspace/rlinf-src:ro" \
   -v "$W88_GROOT_ROOT:/workspace/gr00t-n17:ro" \
   -v "$W88_PYTHON_OVERLAY:/w88-overlay:ro" \
@@ -161,6 +269,6 @@ PY
   --config_name isaaclab_ppo_gr00t_assemble_trocar_prod \
   --model_path /models/GR00T-N1.7-3B \
   --num_envs $num_envs \
-  --max_epochs $max_epochs \
+  --max_epochs $max_epochs$quoted_train_overrides \
   2>&1 | tee /workspace/isaaclab/output/bench.log
 "

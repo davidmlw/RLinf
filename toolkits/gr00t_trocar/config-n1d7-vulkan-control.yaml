@@ -209,6 +209,8 @@ rollout:
   mode: colocate
   backend: huggingface
   enable_offload: true
+  enable_torch_compile: false
+  torch_compile_mode: max-autotune-no-cudagraphs
   pipeline_stage_num: 1
   pinned_feature_ipc_batch_blocks: 16
   pinned_feature_ipc_timeout_seconds: 300.0
@@ -241,6 +243,19 @@ actor:
   micro_batch_size: 32
   global_batch_size: 2048
   seed: 64001
+  pre_update_same_revision_gate:
+    enabled: true
+    steps:
+      - 0
+    thresholds:
+      ratio_mean_abs_from_one_max: 0.0001
+      ratio_max_abs_from_one_max: 0.1
+      kl_mean_abs_max: 0.0001
+      kl_max_abs_max: 0.1
+      ratio_abs_gt_1e-3_fraction_max: 0.001
+      kl_abs_gt_1e-3_fraction_max: 0.001
+      value_mean_abs_max: 0.0005
+      value_max_abs_max: 0.01
   enable_offload: false
   model:
     model_type: gr00t_n1d7
@@ -278,7 +293,7 @@ actor:
       disable_dropout: true
       use_vlm_value: false
       value_vlm_mode: mean_token
-      padding_value: 1024
+      padding_value: 208
   optim:
     lr: 2.0e-05
     value_lr: 0.0001
@@ -319,6 +334,8 @@ actor:
       growth_interval: null
 weight_syncer:
   type: patch
+  state_dict_prefixes:
+    - action_head
   patch:
     snapshot_device: cpu
     delta_encoding: true
