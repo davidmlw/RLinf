@@ -336,7 +336,7 @@ def validate_site(site_path: Path) -> dict[str, Any]:
             raise LaunchError(f"{label} is outside the verified model bundle")
     file_authorities = {
         "resolved_config": "config_root",
-        "trocar_metadata": "config_root",
+        "trocar_metadata": "overrides_root",
         "extension": "overrides_root",
         "assets_override": "overrides_root",
     }

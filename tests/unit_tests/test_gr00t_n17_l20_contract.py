@@ -476,7 +476,7 @@ def test_w96_static_site_validates_all_nine_immutable_roots(tmp_path) -> None:
         ),
         encoding="ascii",
     )
-    metadata = roots["config.json"] / "metadata.json"
+    metadata = roots["overrides.json"] / "metadata.json"
     metadata.write_text("{}\n", encoding="ascii")
     extension = roots["overrides.json"] / "extension.py"
     extension.write_text("\n", encoding="ascii")
