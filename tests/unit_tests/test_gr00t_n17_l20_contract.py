@@ -798,6 +798,7 @@ def test_q2_smoke_is_eager_true_b8_without_trt_or_nsys() -> None:
         "from isaaclab.app import AppLauncher", env_start
     )
     assert "/workspace/isaaclab/apps/isaaclab.python.headless.rendering.kit" in source
+    assert '"app_created": False' in source
 
 
 def test_q2_argv_sets_exact_isaac_launcher_environment(tmp_path) -> None:
@@ -839,6 +840,43 @@ def test_q2_argv_sets_exact_isaac_launcher_environment(tmp_path) -> None:
         assert argv.count(assignment) == 1
         assert argv[argv.index(assignment) - 1] == "-e"
     assert not any("setup_conda_env.sh" in argument for argument in argv)
+
+
+def test_q2_uses_standard_isaac_wrapper_only_for_bootstrap_and_env() -> None:
+    module = _load_module("w96_l20_launcher_q2_interpreters", L20_LAUNCHER_PATH)
+    source = L20_LAUNCHER_PATH.read_text(encoding="utf-8")
+    q2_source = source[source.index("def run_q2(") :]
+    runtime = q2_source.index("l20_runtime_probe.py")
+    bootstrap = q2_source.index("bootstrap --output /w96-run/q2-bootstrap.json")
+    model = q2_source.index("model --model /models/GR00T-N1.7-3B")
+    env = q2_source.index("env --output /w96-run/q2-env.json")
+    assert runtime < bootstrap < model < env
+    assert module.EXPECTED_ISAAC_PYTHON_WRAPPER == "/isaac-sim/python.sh"
+    assert (
+        '{EXPECTED_ISAAC_PYTHON_WRAPPER} "\n'
+        '        "/workspace/rlinf-src/toolkits/gr00t_trocar/w95/l20_q2_smoke.py "\n'
+        '        "bootstrap'
+    ) in q2_source
+    assert q2_source.count('f"{EXPECTED_ISAAC_PYTHON_WRAPPER} "') == 2
+    assert "setup_conda_env.sh" not in q2_source
+
+
+def test_q2_bootstrap_rejects_missing_wrapper_and_foreign_origins(
+    tmp_path, monkeypatch
+) -> None:
+    module = _load_module("w96_q2_bootstrap_helpers", L20_Q2_SMOKE_PATH)
+    missing = module._file_receipt(tmp_path / "missing-python.sh")
+    assert missing["status"] == "failed"
+
+    foreign = tmp_path / "foreign" / "module.py"
+    foreign.parent.mkdir()
+    foreign.write_text("", encoding="ascii")
+    fake_module = type("FakeModule", (), {"__file__": str(foreign)})()
+    monkeypatch.setattr(module.importlib, "import_module", lambda _name: fake_module)
+    module.MODULE_AUTHORITIES = {"isaacsim": (str(tmp_path / "isaac-sim"),)}
+    origin = module._module_receipt("isaacsim")
+    assert origin["status"] == "failed"
+    assert origin["authority_matches"] is False
 
 
 def test_q2_pre_app_contract_accepts_exact_readable_paths(
@@ -973,9 +1011,13 @@ def _exercise_failed_container_cleanup(tmp_path, monkeypatch, responses):
     try:
         module._run_container(site, run_root, "q1", "true")
     except module.LaunchError as error:
-        return str(error), json.loads(
-            (run_root / "receipts/cleanup.json").read_text(encoding="ascii")
-        ), calls
+        return (
+            str(error),
+            json.loads(
+                (run_root / "receipts/cleanup.json").read_text(encoding="ascii")
+            ),
+            calls,
+        )
     raise AssertionError("cleanup failure did not fail closed")
 
 

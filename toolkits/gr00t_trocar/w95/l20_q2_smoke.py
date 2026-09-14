@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import os
+import site
 import sys
 import traceback
 from pathlib import Path
@@ -36,6 +38,22 @@ ISAAC_LAUNCHER_ENVIRONMENT = {
 ISAAC_RENDERING_EXPERIENCE = Path(
     "/workspace/isaaclab/apps/isaaclab.python.headless.rendering.kit"
 )
+ISAAC_PYTHON_WRAPPER = Path("/isaac-sim/python.sh")
+ISAAC_SETUP_SCRIPT = Path("/isaac-sim/setup_python_env.sh")
+ISAAC_VERSION_AUTHORITY = Path("/isaac-sim/VERSION")
+FROZEN_W96_PYTHON_PREFIXES = (
+    "/w96-overlay",
+    "/w96-trt-runtime",
+    "/workspace/gr00t-n17",
+    "/workspace/rlinf-src",
+)
+MODULE_AUTHORITIES = {
+    "isaacsim": ("/isaac-sim",),
+    "isaacsim.simulation_app": ("/isaac-sim",),
+    "isaaclab": ("/workspace/isaaclab/source/isaaclab",),
+    "isaaclab_tasks": ("/workspace/isaaclab/source/isaaclab_tasks",),
+    "torch": ("/isaac-sim",),
+}
 
 
 class _EnvSmokeError(RuntimeError):
@@ -46,6 +64,146 @@ class _EnvSmokeError(RuntimeError):
 
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _file_receipt(path: Path) -> dict[str, Any]:
+    receipt: dict[str, Any] = {"literal": str(path)}
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        receipt.update(status="failed", resolved=None, error=str(error))
+        return receipt
+    is_file = resolved.is_file()
+    readable = os.access(resolved, os.R_OK)
+    receipt.update(
+        status="passed" if is_file and readable else "failed",
+        resolved=str(resolved),
+        is_file=is_file,
+        readable=readable,
+        size=resolved.stat().st_size if is_file else None,
+        sha256=(_sha256_bytes(resolved.read_bytes()) if is_file and readable else None),
+    )
+    return receipt
+
+
+def _under_authority(path: Path, authorities: tuple[str, ...]) -> bool:
+    return any(path == Path(root) or path.is_relative_to(root) for root in authorities)
+
+
+def _module_receipt(name: str, *, import_now: bool = True) -> dict[str, Any]:
+    if import_now:
+        module = importlib.import_module(name)
+        literal = getattr(module, "__file__", None)
+        resolution = "import"
+    else:
+        spec = importlib.util.find_spec(name)
+        literal = spec.origin if spec is not None else None
+        resolution = "find_spec"
+    authorities = MODULE_AUTHORITIES[name]
+    receipt: dict[str, Any] = {
+        "module": name,
+        "literal": literal,
+        "resolution": resolution,
+        "expected_authorities": list(authorities),
+    }
+    if not literal:
+        receipt.update(status="failed", resolved=None, authority_matches=False)
+        return receipt
+    try:
+        resolved = Path(literal).resolve(strict=True)
+    except OSError as error:
+        receipt.update(
+            status="failed",
+            resolved=None,
+            authority_matches=False,
+            error=str(error),
+        )
+        return receipt
+    authority_matches = _under_authority(resolved, authorities)
+    receipt.update(
+        status="passed" if authority_matches else "failed",
+        resolved=str(resolved),
+        authority_matches=authority_matches,
+    )
+    return receipt
+
+
+def run_bootstrap(_args: argparse.Namespace) -> dict[str, Any]:
+    launcher_contract = _isaac_launcher_contract_receipt()
+    files = {
+        "python_wrapper": _file_receipt(ISAAC_PYTHON_WRAPPER),
+        "setup_script": _file_receipt(ISAAC_SETUP_SCRIPT),
+        "version_authority": _file_receipt(ISAAC_VERSION_AUTHORITY),
+    }
+    modules = {
+        "isaacsim": _module_receipt("isaacsim"),
+        "isaacsim.simulation_app": _module_receipt("isaacsim.simulation_app"),
+        "isaaclab": _module_receipt("isaaclab", import_now=False),
+        "isaaclab_tasks": _module_receipt("isaaclab_tasks", import_now=False),
+        "torch": _module_receipt("torch", import_now=False),
+    }
+    simulation_app = importlib.import_module("isaacsim.simulation_app").SimulationApp
+    simulation_app_module = simulation_app.__module__
+
+    pythonpath = os.environ.get("PYTHONPATH", "")
+    pythonpath_entries = [entry for entry in pythonpath.split(os.pathsep) if entry]
+    missing_frozen_prefixes = [
+        prefix
+        for prefix in FROZEN_W96_PYTHON_PREFIXES
+        if prefix not in pythonpath_entries
+    ]
+    foreign_pythonpath_entries = [
+        entry
+        for entry in pythonpath_entries
+        if not _under_authority(
+            Path(entry), (*FROZEN_W96_PYTHON_PREFIXES, "/isaac-sim")
+        )
+    ]
+    user_site = site.getusersitepackages()
+    forbidden_sys_path_entries = [
+        entry
+        for entry in sys.path
+        if entry
+        and (
+            Path(entry) == Path("/tmp")
+            or Path(entry).is_relative_to("/tmp")
+            or Path(entry) == Path(user_site)
+            or Path(entry).is_relative_to(user_site)
+        )
+    ]
+    paths = {
+        "executable_literal": sys.executable,
+        "executable_resolved": str(Path(sys.executable).resolve(strict=True)),
+        "pythonpath": pythonpath,
+        "pythonpath_entries": pythonpath_entries,
+        "ld_library_path": os.environ.get("LD_LIBRARY_PATH", ""),
+        "sys_path": list(sys.path),
+        "user_site": user_site,
+        "user_site_enabled": site.ENABLE_USER_SITE,
+        "missing_frozen_prefixes": missing_frozen_prefixes,
+        "foreign_pythonpath_entries": foreign_pythonpath_entries,
+        "forbidden_sys_path_entries": forbidden_sys_path_entries,
+    }
+    gate = (
+        launcher_contract["status"] == "passed"
+        and all(item["status"] == "passed" for item in files.values())
+        and all(item["status"] == "passed" for item in modules.values())
+        and simulation_app_module.startswith("isaacsim.")
+        and not missing_frozen_prefixes
+        and not foreign_pythonpath_entries
+        and not forbidden_sys_path_entries
+        and site.ENABLE_USER_SITE is False
+    )
+    return {
+        "schema": "rlinf.w96.q2-isaac-bootstrap/v1",
+        "status": "passed" if gate else "failed",
+        "app_created": False,
+        "launcher_contract": launcher_contract,
+        "files": files,
+        "modules": modules,
+        "simulation_app_class_module": simulation_app_module,
+        "paths": paths,
+    }
 
 
 def _array_receipt(value: Any) -> dict[str, Any]:
@@ -102,9 +260,7 @@ def _isaac_launcher_contract_receipt() -> dict[str, Any]:
             )
         else:
             is_directory = resolved is not None and resolved.is_dir()
-            readable = resolved is not None and os.access(
-                resolved, os.R_OK | os.X_OK
-            )
+            readable = resolved is not None and os.access(resolved, os.R_OK | os.X_OK)
             passed = entry["literal_matches"] and is_directory and readable
             entry.update(
                 status="passed" if passed else "failed",
@@ -114,9 +270,7 @@ def _isaac_launcher_contract_receipt() -> dict[str, Any]:
             )
         environment[name] = entry
 
-    experience: dict[str, Any] = {
-        "expected_literal": str(ISAAC_RENDERING_EXPERIENCE)
-    }
+    experience: dict[str, Any] = {"expected_literal": str(ISAAC_RENDERING_EXPERIENCE)}
     try:
         resolved_experience = ISAAC_RENDERING_EXPERIENCE.resolve(strict=True)
     except OSError as error:
@@ -323,9 +477,16 @@ def main() -> int:
     env = subparsers.add_parser("env")
     env.add_argument("--seed", type=int, default=64201)
     env.add_argument("--output", type=Path, required=True)
+    bootstrap = subparsers.add_parser("bootstrap")
+    bootstrap.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
-        receipt = run_model(args) if args.command == "model" else run_env(args)
+        if args.command == "model":
+            receipt = run_model(args)
+        elif args.command == "bootstrap":
+            receipt = run_bootstrap(args)
+        else:
+            receipt = run_env(args)
     except Exception as error:
         traceback.print_exc()
         receipt = {

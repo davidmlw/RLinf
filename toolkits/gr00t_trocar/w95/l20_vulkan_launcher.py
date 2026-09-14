@@ -58,6 +58,7 @@ EXPECTED_PYTHONPATH = (
     "/w96-overlay:/w96-trt-runtime:/workspace/gr00t-n17:/workspace/rlinf-src"
 )
 EXPECTED_PYTHON_EXECUTABLE = "/isaac-sim/kit/python/bin/python3"
+EXPECTED_ISAAC_PYTHON_WRAPPER = "/isaac-sim/python.sh"
 Q2_ISAAC_ENVIRONMENT = {
     "ISAAC_PATH": "/isaac-sim",
     "EXP_PATH": "/isaac-sim/apps",
@@ -950,23 +951,32 @@ def run_q2(site_path: Path, run_root: Path, q1_path: Path) -> dict[str, Any]:
         f"{EXPECTED_PYTHON_EXECUTABLE} "
         "/workspace/rlinf-src/toolkits/gr00t_trocar/w95/l20_runtime_probe.py "
         "--output /w96-run/q2-runtime.json; "
+        f"{EXPECTED_ISAAC_PYTHON_WRAPPER} "
+        "/workspace/rlinf-src/toolkits/gr00t_trocar/w95/l20_q2_smoke.py "
+        "bootstrap --output /w96-run/q2-bootstrap.json; "
         f"{EXPECTED_PYTHON_EXECUTABLE} "
         "/workspace/rlinf-src/toolkits/gr00t_trocar/w95/l20_q2_smoke.py "
         "model --model /models/GR00T-N1.7-3B "
         "--backbone-model /w96-model-inputs/Cosmos-Reason2-2B "
         "--metadata /w96-inputs/trocar/metadata.json "
         "--output /w96-run/q2-model.json; "
-        f"{EXPECTED_PYTHON_EXECUTABLE} "
+        f"{EXPECTED_ISAAC_PYTHON_WRAPPER} "
         "/workspace/rlinf-src/toolkits/gr00t_trocar/w95/l20_q2_smoke.py "
         "env --output /w96-run/q2-env.json"
     )
     extra_args = _q2_extra_docker_args(site["inputs"])
     container = _run_container(site, run_root, "q2", command, extra_args=extra_args)
     model = _load(run_root / "q2-model.json")
+    bootstrap = _load(run_root / "q2-bootstrap.json")
     env = _load(run_root / "q2-env.json")
     runtime = _load(run_root / "q2-runtime.json")
-    if any(receipt.get("status") != "passed" for receipt in (runtime, model, env)):
-        raise LaunchError("Q2 runtime, model or environment receipt did not pass")
+    if any(
+        receipt.get("status") != "passed"
+        for receipt in (runtime, bootstrap, model, env)
+    ):
+        raise LaunchError(
+            "Q2 runtime, bootstrap, model or environment receipt did not pass"
+        )
     result = {
         "schema": Q2_SCHEMA,
         "status": "passed",
@@ -983,6 +993,10 @@ def run_q2(site_path: Path, run_root: Path, q1_path: Path) -> dict[str, Any]:
         "model": {
             "path": str(run_root / "q2-model.json"),
             "sha256": _sha256(run_root / "q2-model.json"),
+        },
+        "bootstrap": {
+            "path": str(run_root / "q2-bootstrap.json"),
+            "sha256": _sha256(run_root / "q2-bootstrap.json"),
         },
         "environment": {
             "path": str(run_root / "q2-env.json"),
