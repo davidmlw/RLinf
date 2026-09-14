@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib
+import importlib.metadata
 import importlib.util
 import json
 import os
@@ -42,6 +43,14 @@ ISAAC_RENDERING_EXPERIENCE = Path(
 ISAAC_PYTHON_WRAPPER = Path("/isaac-sim/python.sh")
 ISAAC_SETUP_SCRIPT = Path("/isaac-sim/setup_python_env.sh")
 ISAAC_VERSION_AUTHORITY = Path("/isaac-sim/VERSION")
+EXPECTED_KIT_PYTHON = Path("/isaac-sim/kit/python/bin/python3")
+EXPECTED_TORCH_ORIGIN = Path(
+    "/isaac-sim/kit/python/lib/python3.12/site-packages/torch/__init__.py"
+)
+EXPECTED_TORCH_ORIGIN_SHA256 = (
+    "51c90fe34a7cf869517d1bab4cd114498790e169ec668f1a154c35ec64117a5e"
+)
+EXPECTED_TORCH_VERSION = "2.10.0+cu128"
 FROZEN_W96_PYTHON_PREFIXES = (
     "/w96-overlay",
     "/w96-trt-runtime",
@@ -53,7 +62,6 @@ MODULE_AUTHORITIES = {
     "isaacsim.simulation_app": ("/isaac-sim",),
     "isaaclab": ("/workspace/isaaclab/source/isaaclab",),
     "isaaclab_tasks": ("/workspace/isaaclab/source/isaaclab_tasks",),
-    "torch": ("/isaac-sim",),
 }
 
 
@@ -91,21 +99,17 @@ def _under_authority(path: Path, authorities: tuple[str, ...]) -> bool:
     return any(path == Path(root) or path.is_relative_to(root) for root in authorities)
 
 
-def _module_receipt(name: str, *, import_now: bool = True) -> dict[str, Any]:
-    if import_now:
-        module = importlib.import_module(name)
-        literal = getattr(module, "__file__", None)
-        resolution = "import"
-    else:
-        spec = importlib.util.find_spec(name)
-        literal = spec.origin if spec is not None else None
-        resolution = "find_spec"
-    authorities = MODULE_AUTHORITIES[name]
+def _origin_receipt(
+    name: str, literal: str | None, *, resolution: str
+) -> dict[str, Any]:
+    exact_origin = EXPECTED_TORCH_ORIGIN if name == "torch" else None
+    authorities = MODULE_AUTHORITIES.get(name, ())
     receipt: dict[str, Any] = {
         "module": name,
         "literal": literal,
         "resolution": resolution,
         "expected_authorities": list(authorities),
+        "expected_exact_origin": str(exact_origin) if exact_origin else None,
     }
     if not literal:
         receipt.update(status="failed", resolved=None, authority_matches=False)
@@ -120,32 +124,38 @@ def _module_receipt(name: str, *, import_now: bool = True) -> dict[str, Any]:
             error=str(error),
         )
         return receipt
-    authority_matches = _under_authority(resolved, authorities)
+    authority_matches = (
+        resolved == exact_origin.resolve(strict=True)
+        if exact_origin is not None
+        else _under_authority(resolved, authorities)
+    )
+    origin_sha256 = _sha256_bytes(resolved.read_bytes())
+    expected_sha256 = EXPECTED_TORCH_ORIGIN_SHA256 if name == "torch" else None
+    hash_matches = expected_sha256 is None or origin_sha256 == expected_sha256
     receipt.update(
-        status="passed" if authority_matches else "failed",
+        status="passed" if authority_matches and hash_matches else "failed",
         resolved=str(resolved),
         authority_matches=authority_matches,
+        origin_sha256=origin_sha256,
+        expected_sha256=expected_sha256,
+        hash_matches=hash_matches,
     )
     return receipt
 
 
-def run_bootstrap(_args: argparse.Namespace) -> dict[str, Any]:
-    launcher_contract = _isaac_launcher_contract_receipt()
-    files = {
-        "python_wrapper": _file_receipt(ISAAC_PYTHON_WRAPPER),
-        "setup_script": _file_receipt(ISAAC_SETUP_SCRIPT),
-        "version_authority": _file_receipt(ISAAC_VERSION_AUTHORITY),
-    }
-    modules = {
-        "isaacsim": _module_receipt("isaacsim"),
-        "isaacsim.simulation_app": _module_receipt("isaacsim.simulation_app"),
-        "isaaclab": _module_receipt("isaaclab", import_now=False),
-        "isaaclab_tasks": _module_receipt("isaaclab_tasks", import_now=False),
-        "torch": _module_receipt("torch", import_now=False),
-    }
-    simulation_app = importlib.import_module("isaacsim.simulation_app").SimulationApp
-    simulation_app_module = simulation_app.__module__
+def _module_spec_receipt(name: str) -> dict[str, Any]:
+    spec = importlib.util.find_spec(name)
+    return _origin_receipt(
+        name, spec.origin if spec is not None else None, resolution="find_spec"
+    )
 
+
+def _imported_module_receipt(name: str) -> dict[str, Any]:
+    module = importlib.import_module(name)
+    return _origin_receipt(name, getattr(module, "__file__", None), resolution="import")
+
+
+def _python_paths_receipt() -> dict[str, Any]:
     pythonpath = os.environ.get("PYTHONPATH", "")
     pythonpath_entries = [entry for entry in pythonpath.split(os.pathsep) if entry]
     missing_frozen_prefixes = [
@@ -172,9 +182,25 @@ def run_bootstrap(_args: argparse.Namespace) -> dict[str, Any]:
             or Path(entry).is_relative_to(user_site)
         )
     ]
-    paths = {
+    executable = Path(sys.executable)
+    expected_executable = EXPECTED_KIT_PYTHON.resolve(strict=True)
+    executable_resolved = executable.resolve(strict=True)
+    same_executable = executable.samefile(EXPECTED_KIT_PYTHON)
+    return {
+        "status": "passed"
+        if (
+            same_executable
+            and not missing_frozen_prefixes
+            and not foreign_pythonpath_entries
+            and not forbidden_sys_path_entries
+            and site.ENABLE_USER_SITE is False
+        )
+        else "failed",
         "executable_literal": sys.executable,
-        "executable_resolved": str(Path(sys.executable).resolve(strict=True)),
+        "executable_resolved": str(executable_resolved),
+        "expected_executable_literal": str(EXPECTED_KIT_PYTHON),
+        "expected_executable_resolved": str(expected_executable),
+        "same_executable": same_executable,
         "pythonpath": pythonpath,
         "pythonpath_entries": pythonpath_entries,
         "ld_library_path": os.environ.get("LD_LIBRARY_PATH", ""),
@@ -185,26 +211,117 @@ def run_bootstrap(_args: argparse.Namespace) -> dict[str, Any]:
         "foreign_pythonpath_entries": foreign_pythonpath_entries,
         "forbidden_sys_path_entries": forbidden_sys_path_entries,
     }
-    gate = (
-        launcher_contract["status"] == "passed"
-        and all(item["status"] == "passed" for item in files.values())
-        and all(item["status"] == "passed" for item in modules.values())
-        and simulation_app_module.startswith("isaacsim.")
-        and not missing_frozen_prefixes
-        and not foreign_pythonpath_entries
-        and not forbidden_sys_path_entries
-        and site.ENABLE_USER_SITE is False
-    )
+
+
+def _torch_distribution_receipt() -> dict[str, Any]:
+    version = importlib.metadata.version("torch")
     return {
-        "schema": "rlinf.w96.q2-isaac-bootstrap/v1",
-        "status": "passed" if gate else "failed",
-        "app_created": False,
-        "launcher_contract": launcher_contract,
-        "files": files,
-        "modules": modules,
-        "simulation_app_class_module": simulation_app_module,
-        "paths": paths,
+        "name": "torch",
+        "version": version,
+        "expected_version": EXPECTED_TORCH_VERSION,
+        "version_matches": version == EXPECTED_TORCH_VERSION,
+        "status": "passed" if version == EXPECTED_TORCH_VERSION else "failed",
     }
+
+
+def _bootstrap_failure(
+    receipt: dict[str, Any], stage: str, error: Exception | str
+) -> dict[str, Any]:
+    receipt.update(
+        status="failed",
+        error_stage=stage,
+        error=str(error),
+        error_type=type(error).__name__ if isinstance(error, Exception) else None,
+    )
+    return receipt
+
+
+def run_bootstrap(_args: argparse.Namespace) -> dict[str, Any]:
+    receipt: dict[str, Any] = {
+        "schema": "rlinf.w96.q2-isaac-bootstrap/v1",
+        "status": "failed",
+        "app_created": False,
+    }
+    try:
+        receipt["launcher_contract"] = _isaac_launcher_contract_receipt()
+        receipt["files"] = {
+            "python_wrapper": _file_receipt(ISAAC_PYTHON_WRAPPER),
+            "setup_script": _file_receipt(ISAAC_SETUP_SCRIPT),
+            "version_authority": _file_receipt(ISAAC_VERSION_AUTHORITY),
+        }
+        receipt["paths"] = _python_paths_receipt()
+    except Exception as error:
+        return _bootstrap_failure(receipt, "static_contract", error)
+
+    specs: dict[str, Any] = {}
+    receipt["module_specs"] = specs
+    for name in ("isaacsim", "isaaclab", "isaaclab_tasks", "torch"):
+        try:
+            specs[name] = _module_spec_receipt(name)
+        except Exception as error:
+            specs[name] = {"module": name, "status": "failed", "error": str(error)}
+            return _bootstrap_failure(receipt, f"module_spec:{name}", error)
+    try:
+        receipt["torch_distribution"] = _torch_distribution_receipt()
+    except Exception as error:
+        return _bootstrap_failure(receipt, "torch_distribution", error)
+
+    static_gate = (
+        receipt["launcher_contract"]["status"] == "passed"
+        and all(item["status"] == "passed" for item in receipt["files"].values())
+        and receipt["paths"]["status"] == "passed"
+        and all(item["status"] == "passed" for item in specs.values())
+        and receipt["torch_distribution"]["status"] == "passed"
+    )
+    if not static_gate:
+        return _bootstrap_failure(receipt, "static_gate", "static gate did not pass")
+
+    imported: dict[str, Any] = {}
+    receipt["imported_modules"] = imported
+    for name in ("isaacsim", "torch"):
+        try:
+            imported[name] = _imported_module_receipt(name)
+        except Exception as error:
+            imported[name] = {"module": name, "status": "failed", "error": str(error)}
+            return _bootstrap_failure(receipt, f"module_import:{name}", error)
+    imported_torch_version = getattr(
+        importlib.import_module("torch"), "__version__", None
+    )
+    receipt["torch_imported_version"] = {
+        "version": imported_torch_version,
+        "expected_version": EXPECTED_TORCH_VERSION,
+        "version_matches": imported_torch_version == EXPECTED_TORCH_VERSION,
+    }
+    try:
+        specs["isaacsim.simulation_app"] = _module_spec_receipt(
+            "isaacsim.simulation_app"
+        )
+        imported["isaacsim.simulation_app"] = _imported_module_receipt(
+            "isaacsim.simulation_app"
+        )
+        simulation_app = importlib.import_module(
+            "isaacsim.simulation_app"
+        ).SimulationApp
+        receipt["simulation_app_class_module"] = simulation_app.__module__
+    except Exception as error:
+        return _bootstrap_failure(receipt, "simulation_app_import", error)
+
+    imported_gate = all(
+        item["status"] == "passed" for item in imported.values()
+    ) and all(
+        imported[name].get("resolved") == specs[name].get("resolved")
+        for name in imported
+    )
+    gate = (
+        imported_gate
+        and receipt["torch_imported_version"]["version_matches"]
+        and receipt["simulation_app_class_module"].startswith("isaacsim.")
+    )
+    receipt["status"] = "passed" if gate else "failed"
+    if not gate:
+        receipt["error_stage"] = "imported_gate"
+        receipt["error"] = "imported module gate did not pass"
+    return receipt
 
 
 def _array_receipt(value: Any) -> dict[str, Any]:

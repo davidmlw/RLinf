@@ -871,10 +871,8 @@ def test_q2_bootstrap_rejects_missing_wrapper_and_foreign_origins(
     foreign = tmp_path / "foreign" / "module.py"
     foreign.parent.mkdir()
     foreign.write_text("", encoding="ascii")
-    fake_module = type("FakeModule", (), {"__file__": str(foreign)})()
-    monkeypatch.setattr(module.importlib, "import_module", lambda _name: fake_module)
     module.MODULE_AUTHORITIES = {"isaacsim": (str(tmp_path / "isaac-sim"),)}
-    origin = module._module_receipt("isaacsim")
+    origin = module._origin_receipt("isaacsim", str(foreign), resolution="fixture")
     assert origin["status"] == "failed"
     assert origin["authority_matches"] is False
 
@@ -891,10 +889,110 @@ def test_q2_bootstrap_find_spec_branch_resolves_registered_origin(
     monkeypatch.setattr(module.importlib.util, "find_spec", lambda _name: spec)
     module.MODULE_AUTHORITIES = {"isaaclab": (str(authority),)}
 
-    receipt = module._module_receipt("isaaclab", import_now=False)
+    receipt = module._module_spec_receipt("isaaclab")
     assert receipt["status"] == "passed"
     assert receipt["resolution"] == "find_spec"
     assert receipt["authority_matches"] is True
+
+
+def test_q2_bootstrap_importlib_util_is_available_in_clean_process() -> None:
+    code = (
+        "namespace = {'__name__': 'not_main'}\n"
+        f"path = {str(L20_Q2_SMOKE_PATH)!r}\n"
+        "source = open(path, encoding='utf-8').read()\n"
+        "exec(compile(source, path, 'exec'), namespace)\n"
+        "assert hasattr(namespace['importlib'], 'util')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", code],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_q2_bootstrap_pins_torch_origin_hash_and_distribution(
+    tmp_path, monkeypatch
+) -> None:
+    module = _load_module("w96_q2_bootstrap_torch", L20_Q2_SMOKE_PATH)
+    origin = tmp_path / "torch" / "__init__.py"
+    origin.parent.mkdir()
+    origin.write_text("torch fixture\n", encoding="ascii")
+    module.EXPECTED_TORCH_ORIGIN = origin
+    module.EXPECTED_TORCH_ORIGIN_SHA256 = module._sha256_bytes(origin.read_bytes())
+    spec = type("FakeSpec", (), {"origin": str(origin)})()
+    monkeypatch.setattr(module.importlib.util, "find_spec", lambda _name: spec)
+    monkeypatch.setattr(
+        module.importlib.metadata,
+        "version",
+        lambda _name: module.EXPECTED_TORCH_VERSION,
+    )
+
+    assert module._module_spec_receipt("torch")["status"] == "passed"
+    assert module._torch_distribution_receipt()["status"] == "passed"
+
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda _name: "0.0")
+    assert module._torch_distribution_receipt()["status"] == "failed"
+    foreign = tmp_path / "pip_prebundle" / "torch" / "__init__.py"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("torch fixture\n", encoding="ascii")
+    spec.origin = str(foreign)
+    assert module._module_spec_receipt("torch")["status"] == "failed"
+
+
+def test_q2_bootstrap_requires_wrapper_to_resolve_to_kit_python(
+    tmp_path, monkeypatch
+) -> None:
+    module = _load_module("w96_q2_bootstrap_python", L20_Q2_SMOKE_PATH)
+    target = tmp_path / "python3.12"
+    target.write_text("", encoding="ascii")
+    expected = tmp_path / "python3"
+    expected.symlink_to(target.name)
+    module.EXPECTED_KIT_PYTHON = expected
+    monkeypatch.setattr(module.sys, "executable", str(target))
+    monkeypatch.setattr(module.site, "ENABLE_USER_SITE", False)
+    monkeypatch.setattr(
+        module.site, "getusersitepackages", lambda: str(tmp_path / "user-site")
+    )
+    monkeypatch.setenv("PYTHONPATH", ":".join(module.FROZEN_W96_PYTHON_PREFIXES))
+
+    assert module._python_paths_receipt()["status"] == "passed"
+    other = tmp_path / "other-python"
+    other.write_text("", encoding="ascii")
+    monkeypatch.setattr(module.sys, "executable", str(other))
+    assert module._python_paths_receipt()["status"] == "failed"
+
+
+def test_q2_bootstrap_import_failure_preserves_partial_receipt(monkeypatch) -> None:
+    module = _load_module("w96_q2_bootstrap_partial", L20_Q2_SMOKE_PATH)
+    monkeypatch.setattr(
+        module, "_isaac_launcher_contract_receipt", lambda: {"status": "passed"}
+    )
+    monkeypatch.setattr(module, "_file_receipt", lambda _path: {"status": "passed"})
+    monkeypatch.setattr(module, "_python_paths_receipt", lambda: {"status": "passed"})
+    monkeypatch.setattr(
+        module,
+        "_module_spec_receipt",
+        lambda name: {"module": name, "status": "passed", "resolved": name},
+    )
+    monkeypatch.setattr(
+        module, "_torch_distribution_receipt", lambda: {"status": "passed"}
+    )
+    monkeypatch.setattr(
+        module.importlib,
+        "import_module",
+        lambda name: (_ for _ in ()).throw(ModuleNotFoundError(name)),
+    )
+
+    receipt = module.run_bootstrap(type("Args", (), {})())
+    assert receipt["status"] == "failed"
+    assert receipt["error_stage"] == "module_import:isaacsim"
+    assert receipt["launcher_contract"]["status"] == "passed"
+    assert receipt["files"]
+    assert receipt["paths"]["status"] == "passed"
+    assert len(receipt["module_specs"]) == 4
 
 
 def test_q2_pre_app_contract_accepts_exact_readable_paths(
