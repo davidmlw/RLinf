@@ -19,6 +19,7 @@ import json
 import shutil
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import yaml
@@ -1156,6 +1157,160 @@ def test_q2_pre_app_contract_accepts_exact_readable_paths(
         item["literal_matches"] and item["readable_and_searchable"]
         for item in receipt["environment"].values()
     )
+
+
+def _install_env_smoke_modules(
+    module,
+    monkeypatch,
+    *,
+    application,
+    environment=None,
+    make_error=None,
+):
+    import torch
+
+    app_module = types.ModuleType("isaaclab.app")
+    app_module.AppLauncher = lambda **_kwargs: types.SimpleNamespace(app=application)
+    isaaclab_module = types.ModuleType("isaaclab")
+    isaaclab_module.__path__ = []
+    gym_module = types.ModuleType("gymnasium")
+
+    def make(*_args, **_kwargs):
+        if make_error is not None:
+            raise make_error
+        return environment
+
+    gym_module.make = make
+    tasks_module = types.ModuleType("isaaclab_tasks")
+    tasks_module.__path__ = []
+    tasks_utils = types.ModuleType("isaaclab_tasks.utils")
+    tasks_utils.load_cfg_from_registry = lambda *_args: types.SimpleNamespace(
+        seed=None,
+        scene=types.SimpleNamespace(num_envs=None),
+        sim=types.SimpleNamespace(device=None),
+    )
+    for name, value in {
+        "isaaclab": isaaclab_module,
+        "isaaclab.app": app_module,
+        "gymnasium": gym_module,
+        "isaaclab_tasks": tasks_module,
+        "isaaclab_tasks.utils": tasks_utils,
+        "torch": torch,
+    }.items():
+        monkeypatch.setitem(module.sys.modules, name, value)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(
+        module, "_isaac_launcher_contract_receipt", lambda: {"status": "passed"}
+    )
+    return torch
+
+
+class _CloseFixture:
+    def __init__(self, error=None) -> None:
+        self.error = error
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self.error is not None:
+            raise self.error
+
+
+class _EnvTurnFixture(_CloseFixture):
+    def __init__(self, torch_module, error=None) -> None:
+        super().__init__(error)
+        self.torch = torch_module
+        self.action_space = types.SimpleNamespace(shape=(1, 28))
+        self.device = "cpu"
+        self.unwrapped = self
+
+    def _observation(self):
+        return {
+            "front_camera": self.torch.zeros((1, 2, 2, 3)),
+            "left_wrist_camera": self.torch.zeros((1, 2, 2, 3)),
+            "right_wrist_camera": self.torch.zeros((1, 2, 2, 3)),
+        }
+
+    def reset(self):
+        return self._observation(), {}
+
+    def step(self, _action):
+        return (
+            self._observation(),
+            self.torch.tensor([0.0]),
+            self.torch.tensor([False]),
+            self.torch.tensor([False]),
+            {},
+        )
+
+
+def test_q2_env_preserves_primary_error_when_app_close_exits(
+    tmp_path, monkeypatch
+) -> None:
+    module = _load_module("w96_q2_env_primary_error", L20_Q2_SMOKE_PATH)
+    application = _CloseFixture(SystemExit(7))
+    _install_env_smoke_modules(
+        module,
+        monkeypatch,
+        application=application,
+        make_error=RuntimeError("gym make primary failure"),
+    )
+    output = tmp_path / "q2-env.json"
+    original_argv = module.sys.argv
+
+    receipt = module.run_env(types.SimpleNamespace(seed=64201, output=output))
+
+    assert receipt["status"] == "failed"
+    assert receipt["primary_error"]["type"] == "RuntimeError"
+    assert "gym make primary failure" in receipt["primary_error"]["traceback"]
+    assert receipt["cleanup"]["env"]["status"] == "not_required"
+    assert receipt["cleanup"]["simulation_app"]["status"] == "failed"
+    assert receipt["cleanup"]["simulation_app"]["error"]["type"] == "SystemExit"
+    assert application.close_calls == 1
+    assert module.sys.argv is original_argv
+    assert json.loads(output.read_text(encoding="utf-8")) == receipt
+    assert not list(tmp_path.glob(".q2-env.json.*.tmp"))
+
+
+def test_q2_env_attempts_both_closes_after_env_close_failure(
+    tmp_path, monkeypatch
+) -> None:
+    module = _load_module("w96_q2_env_close_failure", L20_Q2_SMOKE_PATH)
+    application = _CloseFixture()
+    torch = _install_env_smoke_modules(module, monkeypatch, application=application)
+    environment = _EnvTurnFixture(torch, RuntimeError("env close failure"))
+    module.sys.modules["gymnasium"].make = lambda *_args, **_kwargs: environment
+    output = tmp_path / "q2-env.json"
+
+    receipt = module.run_env(types.SimpleNamespace(seed=64201, output=output))
+
+    assert receipt["status"] == "cleanup_failed"
+    assert receipt["cleanup"]["env"]["status"] == "failed"
+    assert receipt["cleanup"]["simulation_app"]["status"] == "passed"
+    assert environment.close_calls == 1
+    assert application.close_calls == 1
+    assert json.loads(output.read_text(encoding="utf-8")) == receipt
+
+
+def test_q2_env_records_app_close_failure_without_false_pass(
+    tmp_path, monkeypatch
+) -> None:
+    module = _load_module("w96_q2_app_close_failure", L20_Q2_SMOKE_PATH)
+    application = _CloseFixture(KeyboardInterrupt("app close failure"))
+    torch = _install_env_smoke_modules(module, monkeypatch, application=application)
+    environment = _EnvTurnFixture(torch)
+    module.sys.modules["gymnasium"].make = lambda *_args, **_kwargs: environment
+    output = tmp_path / "q2-env.json"
+
+    receipt = module.run_env(types.SimpleNamespace(seed=64201, output=output))
+
+    assert receipt["status"] == "cleanup_failed"
+    assert receipt["cleanup"]["env"]["status"] == "passed"
+    assert receipt["cleanup"]["simulation_app"]["status"] == "failed"
+    assert receipt["cleanup"]["simulation_app"]["error"]["type"] == "KeyboardInterrupt"
+    assert environment.close_calls == 1
+    assert application.close_calls == 1
+    assert json.loads(output.read_text(encoding="utf-8")) == receipt
 
 
 def test_q2_pre_app_contract_rejects_missing_and_mismatched_values(

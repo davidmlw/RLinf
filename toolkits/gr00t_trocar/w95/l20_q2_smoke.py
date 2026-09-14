@@ -78,6 +78,41 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _exception_receipt(error: BaseException) -> dict[str, Any]:
+    return {
+        "type": type(error).__name__,
+        "type_module": type(error).__module__,
+        "message": str(error),
+        "traceback": traceback.format_exc(),
+    }
+
+
+def _close_receipt(resource: Any) -> dict[str, Any]:
+    if resource is None:
+        return {"required": False, "attempted": False, "status": "not_required"}
+    try:
+        resource.close()
+    except BaseException as error:
+        return {
+            "required": True,
+            "attempted": True,
+            "status": "failed",
+            "error": _exception_receipt(error),
+        }
+    return {"required": True, "attempted": True, "status": "passed"}
+
+
 def _file_receipt(path: Path) -> dict[str, Any]:
     receipt: dict[str, Any] = {"literal": str(path)}
     try:
@@ -579,6 +614,14 @@ def run_env(args: argparse.Namespace) -> dict[str, Any]:
             "error": "Isaac launcher environment contract did not pass",
             "isaac_launcher_contract": launcher_contract,
         }
+    receipt: dict[str, Any] = {
+        "schema": "rlinf.w96.q2-vulkan-env-turn/v1",
+        "status": "pending",
+        "phase": "env",
+        "isaac_launcher_contract": launcher_contract,
+        "cleanup": {"status": "pending"},
+    }
+    _write_json_atomic(args.output, receipt)
     os.environ.pop("DISPLAY", None)
     original_argv = sys.argv
     sys.argv = [sys.argv[0]]
@@ -617,9 +660,10 @@ def run_env(args: argparse.Namespace) -> dict[str, Any]:
         scalar_outputs = (reward, terminated, truncated)
         if not all(torch.isfinite(value).all().item() for value in scalar_outputs):
             raise RuntimeError("environment step output contains non-finite values")
-        return {
+        receipt = {
             "schema": "rlinf.w96.q2-vulkan-env-turn/v1",
-            "status": "passed",
+            "status": "pending_cleanup",
+            "phase": "env",
             "task_id": TASK_ID,
             "num_envs": 1,
             "steps": 1,
@@ -636,14 +680,38 @@ def run_env(args: argparse.Namespace) -> dict[str, Any]:
             "reset_info_type": type(reset_info).__name__,
             "step_info_type": type(step_info).__name__,
         }
-    except Exception as error:
-        raise _EnvSmokeError(str(error), launcher_contract) from error
+    except BaseException as error:
+        receipt = {
+            "schema": "rlinf.w96.q2-smoke-failure/v1",
+            "status": "failed",
+            "phase": "env",
+            "error": str(error),
+            "primary_error": _exception_receipt(error),
+            "isaac_launcher_contract": launcher_contract,
+        }
     finally:
-        if env is not None:
-            env.close()
-        if simulation_app is not None:
-            simulation_app.close()
         sys.argv = original_argv
+        receipt.setdefault("cleanup", {"status": "pending"})
+        _write_json_atomic(args.output, receipt)
+        env_cleanup = _close_receipt(env)
+        app_cleanup = _close_receipt(simulation_app)
+        cleanup_passed = all(
+            item["status"] in {"passed", "not_required"}
+            for item in (env_cleanup, app_cleanup)
+        )
+        receipt["cleanup"] = {
+            "status": "passed" if cleanup_passed else "failed",
+            "env": env_cleanup,
+            "simulation_app": app_cleanup,
+        }
+        if receipt["status"] == "pending_cleanup":
+            if cleanup_passed:
+                receipt["status"] = "passed"
+            else:
+                receipt["status"] = "cleanup_failed"
+                receipt["error"] = "environment cleanup did not pass"
+        _write_json_atomic(args.output, receipt)
+    return receipt
 
 
 def main() -> int:
@@ -679,9 +747,7 @@ def main() -> int:
         }
         if isinstance(error, _EnvSmokeError):
             receipt["isaac_launcher_contract"] = error.launcher_contract
-    args.output.write_text(
-        json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    _write_json_atomic(args.output, receipt)
     print(json.dumps(receipt, sort_keys=True))
     return 0 if receipt["status"] == "passed" else 1
 
