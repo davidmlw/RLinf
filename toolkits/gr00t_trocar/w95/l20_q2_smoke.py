@@ -155,6 +155,64 @@ def _imported_module_receipt(name: str) -> dict[str, Any]:
     return _origin_receipt(name, getattr(module, "__file__", None), resolution="import")
 
 
+def _simulation_app_receipt() -> dict[str, Any]:
+    name = "isaacsim.simulation_app"
+    pre_registered = name in sys.modules
+    receipt: dict[str, Any] = {
+        "module": name,
+        "pre_registered": pre_registered,
+    }
+    try:
+        imported = importlib.import_module(name)
+    except Exception as error:
+        receipt.update(
+            status="failed",
+            error=str(error),
+            error_type=type(error).__name__,
+            registered_same_object=False,
+        )
+        return receipt
+
+    registered_same_object = sys.modules.get(name) is imported
+    module_origin = _origin_receipt(
+        name, getattr(imported, "__file__", None), resolution="injected_import"
+    )
+    spec = getattr(imported, "__spec__", None)
+    spec_origin = getattr(spec, "origin", None) if spec is not None else None
+    spec_origin_matches = False
+    if spec is None:
+        spec_origin_matches = pre_registered
+    elif spec_origin and module_origin.get("resolved"):
+        try:
+            spec_origin_matches = Path(spec_origin).samefile(module_origin["resolved"])
+        except OSError:
+            spec_origin_matches = False
+
+    simulation_app = getattr(imported, "SimulationApp", None)
+    class_is_type = isinstance(simulation_app, type)
+    class_module = getattr(simulation_app, "__module__", None)
+    class_module_matches = class_is_type and class_module == name
+    gate = (
+        registered_same_object
+        and module_origin["status"] == "passed"
+        and spec_origin_matches
+        and class_module_matches
+    )
+    receipt.update(
+        status="passed" if gate else "failed",
+        registered_same_object=registered_same_object,
+        module_origin=module_origin,
+        spec_is_none=spec is None,
+        null_spec_allowed=spec is None and pre_registered,
+        spec_origin=spec_origin,
+        spec_origin_matches_module=spec_origin_matches,
+        class_is_type=class_is_type,
+        class_module=class_module,
+        class_module_matches=class_module_matches,
+    )
+    return receipt
+
+
 def _python_paths_receipt() -> dict[str, Any]:
     pythonpath = os.environ.get("PYTHONPATH", "")
     pythonpath_entries = [entry for entry in pythonpath.split(os.pathsep) if entry]
@@ -292,19 +350,7 @@ def run_bootstrap(_args: argparse.Namespace) -> dict[str, Any]:
         "expected_version": EXPECTED_TORCH_VERSION,
         "version_matches": imported_torch_version == EXPECTED_TORCH_VERSION,
     }
-    try:
-        specs["isaacsim.simulation_app"] = _module_spec_receipt(
-            "isaacsim.simulation_app"
-        )
-        imported["isaacsim.simulation_app"] = _imported_module_receipt(
-            "isaacsim.simulation_app"
-        )
-        simulation_app = importlib.import_module(
-            "isaacsim.simulation_app"
-        ).SimulationApp
-        receipt["simulation_app_class_module"] = simulation_app.__module__
-    except Exception as error:
-        return _bootstrap_failure(receipt, "simulation_app_import", error)
+    receipt["simulation_app"] = _simulation_app_receipt()
 
     imported_gate = all(
         item["status"] == "passed" for item in imported.values()
@@ -315,7 +361,7 @@ def run_bootstrap(_args: argparse.Namespace) -> dict[str, Any]:
     gate = (
         imported_gate
         and receipt["torch_imported_version"]["version_matches"]
-        and receipt["simulation_app_class_module"].startswith("isaacsim.")
+        and receipt["simulation_app"]["status"] == "passed"
     )
     receipt["status"] = "passed" if gate else "failed"
     if not gate:
