@@ -652,6 +652,87 @@ def test_q2_requalifies_runtime_and_normalizes_output_ownership() -> None:
     assert '"requires_gpu": False' in source
 
 
+def _exercise_failed_container_cleanup(tmp_path, monkeypatch, responses):
+    module = _load_module("w96_l20_launcher_cleanup", L20_LAUNCHER_PATH)
+    run_root = tmp_path / "run"
+    (run_root / "receipts").mkdir(parents=True)
+    site = {
+        "docker": {"path": "/fixture/docker"},
+        "image": {"reference": "fixture@example"},
+    }
+    monkeypatch.setattr(
+        module,
+        "_common_docker_args",
+        lambda *_args, **_kwargs: ["/fixture/docker", "run", "fixture@example"],
+    )
+    calls = []
+
+    def fake_run(argv, **_kwargs):
+        calls.append(argv)
+        if not responses:
+            raise AssertionError(f"unexpected subprocess call: {argv}")
+        return responses.pop(0)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    try:
+        module._run_container(site, run_root, "q1", "true")
+    except module.LaunchError as error:
+        return str(error), json.loads(
+            (run_root / "receipts/cleanup.json").read_text(encoding="ascii")
+        ), calls
+    raise AssertionError("cleanup failure did not fail closed")
+
+
+def test_container_remove_failure_skips_ownership_normalization(
+    tmp_path, monkeypatch
+) -> None:
+    container = "w96-q1-run"
+    completed = subprocess.CompletedProcess
+    error, cleanup, calls = _exercise_failed_container_cleanup(
+        tmp_path,
+        monkeypatch,
+        [
+            completed([], 1, "", f"Error: No such object: {container}"),
+            completed([], 0, "workload\n", ""),
+            completed([], 0, '{"State":{"Running":true}}', ""),
+            completed([], 1, "", "permission denied"),
+            completed([], 0, '{"State":{"Running":true}}', ""),
+        ],
+    )
+    assert "container removal failed" in error
+    assert cleanup["container_remove_exit_code"] == 1
+    assert cleanup["container_absent_confirmed"] is False
+    assert cleanup["ownership_normalization_attempted"] is False
+    assert cleanup["ownership_exit_code"] is None
+    assert not (tmp_path / "run/q1-receipt.json").exists()
+    assert len(calls) == 5
+
+
+def test_container_still_present_after_remove_skips_ownership_normalization(
+    tmp_path, monkeypatch
+) -> None:
+    container = "w96-q1-run"
+    completed = subprocess.CompletedProcess
+    error, cleanup, calls = _exercise_failed_container_cleanup(
+        tmp_path,
+        monkeypatch,
+        [
+            completed([], 1, "", f"Error: No such object: {container}"),
+            completed([], 0, "workload\n", ""),
+            completed([], 0, '{"State":{"Running":true}}', ""),
+            completed([], 0, container, ""),
+            completed([], 0, '{"State":{"Running":true}}', ""),
+        ],
+    )
+    assert "absence was not confirmed" in error
+    assert cleanup["container_remove_exit_code"] == 0
+    assert cleanup["post_remove_inspect_exit_code"] == 0
+    assert cleanup["container_absent_confirmed"] is False
+    assert cleanup["ownership_normalization_attempted"] is False
+    assert not (tmp_path / "run/q1-receipt.json").exists()
+    assert len(calls) == 5
+
+
 def test_run_tree_ownership_audit_rejects_unreadable_output(tmp_path) -> None:
     module = _load_module("w96_l20_launcher_ownership", L20_LAUNCHER_PATH)
     output = tmp_path / "output.json"

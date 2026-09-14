@@ -593,6 +593,17 @@ def _container_name(run_root: Path, phase: str) -> str:
     return f"w96-{phase}-{slug}"[:63]
 
 
+def _inspect_confirms_absent(
+    result: subprocess.CompletedProcess[str], container: str
+) -> bool:
+    stderr = result.stderr.lower()
+    return (
+        result.returncode != 0
+        and container.lower() in stderr
+        and ("no such object" in stderr or "no such container" in stderr)
+    )
+
+
 def _common_docker_args(
     site: dict[str, Any],
     run_root: Path,
@@ -676,11 +687,17 @@ def _run_container(
     inspect_existing = subprocess.run(
         [str(docker), "inspect", container],
         check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
     if inspect_existing.returncode == 0:
         raise LaunchError(f"container name already exists: {container}")
+    if not _inspect_confirms_absent(inspect_existing, container):
+        raise LaunchError(
+            "cannot confirm initial container-name availability: "
+            f"exit={inspect_existing.returncode} stderr={inspect_existing.stderr!r}"
+        )
     args = _common_docker_args(site, run_root, container, extra_args=extra_args) + [
         "-c",
         command,
@@ -710,6 +727,10 @@ def _run_container(
     )
     result = None
     run_error = None
+    remove = None
+    post_remove_inspect = None
+    ownership = None
+    ownership_audit = None
     try:
         result = subprocess.run(
             args,
@@ -741,25 +762,60 @@ def _run_container(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        ownership = subprocess.run(
-            ownership_args,
+        post_remove_inspect = subprocess.run(
+            [str(docker), "inspect", container],
             check=False,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        (run_root / "ownership.stdout").write_text(ownership.stdout, encoding="utf-8")
-        (run_root / "ownership.stderr").write_text(ownership.stderr, encoding="utf-8")
-        ownership_audit = _audit_run_ownership(run_root)
+        container_absent = _inspect_confirms_absent(post_remove_inspect, container)
+        safe_to_normalize = remove.returncode == 0 and container_absent
+        if safe_to_normalize:
+            ownership = subprocess.run(
+                ownership_args,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            (run_root / "ownership.stdout").write_text(
+                ownership.stdout, encoding="utf-8"
+            )
+            (run_root / "ownership.stderr").write_text(
+                ownership.stderr, encoding="utf-8"
+            )
+            ownership_audit = _audit_run_ownership(run_root)
         _write(
             run_root / "receipts/cleanup.json",
             {
                 "container_remove_exit_code": remove.returncode,
+                "container_remove_stdout": remove.stdout,
                 "container_remove_stderr": remove.stderr,
-                "ownership_exit_code": ownership.returncode,
+                "post_remove_inspect_exit_code": post_remove_inspect.returncode,
+                "post_remove_inspect_stdout": post_remove_inspect.stdout,
+                "post_remove_inspect_stderr": post_remove_inspect.stderr,
+                "container_absent_confirmed": container_absent,
+                "ownership_normalization_attempted": safe_to_normalize,
+                "ownership_exit_code": (
+                    ownership.returncode if ownership is not None else None
+                ),
                 "ownership": ownership_audit,
             },
         )
+    if remove is None or remove.returncode != 0:
+        raise LaunchError(
+            "workload container removal failed; ownership normalization was not run"
+        )
+    if post_remove_inspect is None or not _inspect_confirms_absent(
+        post_remove_inspect, container
+    ):
+        raise LaunchError(
+            "workload container absence was not confirmed; "
+            "ownership normalization was not run"
+        )
+    if ownership is None or ownership_audit is None:
+        raise LaunchError("output ownership normalization was not run")
     if ownership.returncode != 0:
         raise LaunchError(
             "container output ownership normalization failed; "
