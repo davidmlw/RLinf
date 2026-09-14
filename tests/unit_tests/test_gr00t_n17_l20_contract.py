@@ -879,6 +879,24 @@ def test_q2_bootstrap_rejects_missing_wrapper_and_foreign_origins(
     assert origin["authority_matches"] is False
 
 
+def test_q2_bootstrap_find_spec_branch_resolves_registered_origin(
+    tmp_path, monkeypatch
+) -> None:
+    module = _load_module("w96_q2_bootstrap_find_spec", L20_Q2_SMOKE_PATH)
+    authority = tmp_path / "registered"
+    origin = authority / "package" / "__init__.py"
+    origin.parent.mkdir(parents=True)
+    origin.write_text("", encoding="ascii")
+    spec = type("FakeSpec", (), {"origin": str(origin)})()
+    monkeypatch.setattr(module.importlib.util, "find_spec", lambda _name: spec)
+    module.MODULE_AUTHORITIES = {"isaaclab": (str(authority),)}
+
+    receipt = module._module_receipt("isaaclab", import_now=False)
+    assert receipt["status"] == "passed"
+    assert receipt["resolution"] == "find_spec"
+    assert receipt["authority_matches"] is True
+
+
 def test_q2_pre_app_contract_accepts_exact_readable_paths(
     tmp_path, monkeypatch
 ) -> None:
