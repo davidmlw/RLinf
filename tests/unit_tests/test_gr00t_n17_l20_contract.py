@@ -594,12 +594,77 @@ def test_q1_probe_is_pre_isaac_and_pre_ray() -> None:
     source = L20_RUNTIME_PROBE_PATH.read_text(encoding="utf-8")
     assert "import isaaclab" not in source
     assert "import ray" not in source
+    assert "vulkaninfo" not in source
+    assert "vkCreateInstance" in source
+    assert "vkEnumeratePhysicalDevices" in source
+    assert "vkGetPhysicalDeviceProperties" in source
+    assert "vkDestroyInstance" in source
     assert '"pre_isaac_pre_ray": True' in source
 
 
-def test_q1_rejects_unregistered_driver_paths_and_non_nvidia_vulkan(
-    tmp_path,
-) -> None:
+class _FakeVulkanApi:
+    def __init__(
+        self,
+        loader_path: Path,
+        *,
+        create_return: int = 0,
+        count_return: int = 0,
+        enumerate_return: int = 0,
+        property_error_index: int | None = None,
+        destroy_error: bool = False,
+    ) -> None:
+        self.loader_receipt = {
+            "requested": "libvulkan.so.1",
+            "resolved_path": str(loader_path),
+            "soname": "libvulkan.so.1",
+            "size": 7,
+            "sha256": "a" * 64,
+        }
+        self.create_return = create_return
+        self.count_return = count_return
+        self.enumerate_return = enumerate_return
+        self.property_error_index = property_error_index
+        self.destroy_error = destroy_error
+        self.destroy_calls = 0
+
+    def create_instance(self):
+        return self.create_return, object() if self.create_return == 0 else None
+
+    def enumerate_count(self, _instance):
+        return self.count_return, 8
+
+    def enumerate_devices(self, _instance, count):
+        return self.enumerate_return, list(range(1, count + 1)), count
+
+    def get_properties(self, device):
+        if device - 1 == self.property_error_index:
+            raise RuntimeError("injected property failure")
+        return {
+            "api_version": 1,
+            "driver_version": 2,
+            "vendor_id": 0x10DE,
+            "device_id": 3,
+            "device_type": 2,
+            "device_name": "NVIDIA L20",
+            "pipeline_cache_uuid": f"{device:032x}",
+        }
+
+    def destroy_instance(self, _instance):
+        self.destroy_calls += 1
+        if self.destroy_error:
+            raise RuntimeError("injected destroy failure")
+
+
+def _vulkan_test_setup(tmp_path, monkeypatch):
+    module = _load_module("w96_l20_runtime_probe", L20_RUNTIME_PROBE_PATH)
+    loader = tmp_path / "libvulkan.so.1"
+    loader.write_bytes(b"fixture")
+    module.EXPECTED_DRIVER_LIBRARY_ROOTS = (str(tmp_path),)
+    monkeypatch.setenv("VK_DRIVER_FILES", "/etc/vulkan/icd.d/nvidia_icd.json")
+    return module, loader
+
+
+def test_q1_rejects_unregistered_driver_paths(tmp_path) -> None:
     module = _load_module("w96_l20_runtime_probe", L20_RUNTIME_PROBE_PATH)
     library = tmp_path / "libcuda.so.1"
     library.write_bytes(b"fixture")
@@ -607,26 +672,115 @@ def test_q1_rejects_unregistered_driver_paths_and_non_nvidia_vulkan(
     module.EXPECTED_DRIVER_LIBRARY_ROOTS = (str(tmp_path),)
     assert module._driver_library_path_allowed(str(library)) is True
 
-    expected = "\n".join(
-        f"GPU{index}:\n"
-        "  vendorID = 0x10de\n"
-        "  deviceType = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU\n"
-        "  deviceName = NVIDIA L20\n"
-        "  driverID = DRIVER_ID_NVIDIA_PROPRIETARY\n"
-        for index in range(8)
-    )
-    devices = module._parse_vulkan_devices(expected)
-    assert module._vulkan_devices_are_expected(devices) is True
-    software = expected + (
-        "GPU8:\n"
-        "  vendorID = 0x10005\n"
-        "  deviceType = PHYSICAL_DEVICE_TYPE_CPU\n"
-        "  deviceName = llvmpipe\n"
-    )
-    assert (
-        module._vulkan_devices_are_expected(module._parse_vulkan_devices(software))
-        is False
-    )
+
+def test_q1_vulkan_loader_accepts_exact_l20_inventory_and_destroys(
+    tmp_path, monkeypatch
+) -> None:
+    module, loader = _vulkan_test_setup(tmp_path, monkeypatch)
+    api = _FakeVulkanApi(loader)
+    receipt = module._vulkan_receipt(api)
+    assert receipt["status"] == "passed"
+    assert len(receipt["devices"]) == 8
+    assert receipt["calls"]["create_instance"]["return_code"] == 0
+    assert receipt["calls"]["enumerate_count"] == {"return_code": 0, "count": 8}
+    assert receipt["calls"]["enumerate_devices"]["returned_count"] == 8
+    assert receipt["calls"]["destroy_instance"]["status"] == "passed"
+    assert api.destroy_calls == 1
+
+
+def test_q1_vulkan_create_failure_does_not_destroy_null_instance(
+    tmp_path, monkeypatch
+) -> None:
+    module, loader = _vulkan_test_setup(tmp_path, monkeypatch)
+    api = _FakeVulkanApi(loader, create_return=-9)
+    receipt = module._vulkan_receipt(api)
+    assert receipt["status"] == "failed"
+    assert "vkCreateInstance failed" in receipt["error"]
+    assert receipt["calls"]["destroy_instance"] == {
+        "attempted": False,
+        "status": "not_applicable",
+    }
+    assert api.destroy_calls == 0
+
+
+def test_q1_vulkan_enumerate_failure_still_destroys_instance(
+    tmp_path, monkeypatch
+) -> None:
+    module, loader = _vulkan_test_setup(tmp_path, monkeypatch)
+    api = _FakeVulkanApi(loader, enumerate_return=-3)
+    receipt = module._vulkan_receipt(api)
+    assert receipt["status"] == "failed"
+    assert "vkEnumeratePhysicalDevices list failed" in receipt["error"]
+    assert receipt["calls"]["destroy_instance"]["status"] == "passed"
+    assert api.destroy_calls == 1
+
+
+def test_q1_vulkan_property_failure_still_destroys_instance(
+    tmp_path, monkeypatch
+) -> None:
+    module, loader = _vulkan_test_setup(tmp_path, monkeypatch)
+    api = _FakeVulkanApi(loader, property_error_index=3)
+    receipt = module._vulkan_receipt(api)
+    assert receipt["status"] == "failed"
+    assert "vkGetPhysicalDeviceProperties failed for index 3" in receipt["error"]
+    assert receipt["calls"]["get_properties"][-1]["status"] == "failed"
+    assert receipt["calls"]["destroy_instance"]["status"] == "passed"
+    assert api.destroy_calls == 1
+
+
+def test_q1_vulkan_rejects_non_nvidia_device(tmp_path, monkeypatch) -> None:
+    module, loader = _vulkan_test_setup(tmp_path, monkeypatch)
+    api = _FakeVulkanApi(loader)
+    original = api.get_properties
+
+    def mixed_properties(device):
+        properties = original(device)
+        if device == 7:
+            properties.update(
+                vendor_id=0x10005,
+                device_type=4,
+                device_name="llvmpipe",
+            )
+        return properties
+
+    api.get_properties = mixed_properties
+    receipt = module._vulkan_receipt(api)
+    assert receipt["status"] == "failed"
+    assert "inventory does not match 8 L20s" in receipt["error"]
+    assert api.destroy_calls == 1
+
+
+def test_q1_vulkan_destroy_failure_fails_receipt(tmp_path, monkeypatch) -> None:
+    module, loader = _vulkan_test_setup(tmp_path, monkeypatch)
+    api = _FakeVulkanApi(loader, destroy_error=True)
+    receipt = module._vulkan_receipt(api)
+    assert receipt["status"] == "failed"
+    assert "injected destroy failure" in receipt["error"]
+    assert receipt["calls"]["destroy_instance"]["status"] == "failed"
+    assert api.destroy_calls == 1
+
+
+def test_q1_python_executable_requires_literal_and_symlink_identity(
+    tmp_path,
+) -> None:
+    module = _load_module("w96_l20_runtime_probe", L20_RUNTIME_PROBE_PATH)
+    target = tmp_path / "python3.12"
+    target.write_bytes(b"python")
+    expected = tmp_path / "python3"
+    expected.symlink_to(target.name)
+
+    receipt = module._python_executable_receipt(str(expected), str(expected))
+    assert receipt["status"] == "passed"
+    assert receipt["literal_matches"] is True
+    assert receipt["resolved_matches"] is True
+    assert receipt["same_file"] is True
+    assert receipt["expected_resolved"] == str(target)
+
+    wrong_literal = module._python_executable_receipt(str(target), str(expected))
+    assert wrong_literal["status"] == "failed"
+    assert wrong_literal["literal_matches"] is False
+    assert wrong_literal["resolved_matches"] is True
+    assert wrong_literal["same_file"] is True
 
 
 def test_q2_smoke_is_eager_true_b8_without_trt_or_nsys() -> None:
