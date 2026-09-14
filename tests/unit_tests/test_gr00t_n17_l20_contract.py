@@ -652,6 +652,33 @@ def test_q2_requalifies_runtime_and_normalizes_output_ownership() -> None:
     assert '"requires_gpu": False' in source
 
 
+def test_container_request_uses_all_gpus_without_device_ids(tmp_path) -> None:
+    module = _load_module("w96_l20_launcher_gpu_request", L20_LAUNCHER_PATH)
+    inputs = {
+        name: f"/fixture/{name}"
+        for name in (
+            "rlinf_source",
+            "gr00t_source",
+            "python_overlay",
+            "tensorrt_runtime",
+            "model",
+            "backbone_model",
+            "resolved_config",
+            "extension",
+            "assets_override",
+        )
+    }
+    site = {
+        "docker": {"path": "/fixture/docker"},
+        "image": {"reference": "fixture@example"},
+        "inputs": inputs,
+    }
+    argv = module._common_docker_args(site, tmp_path, "fixture-container")
+    gpu_index = argv.index("--gpus")
+    assert argv[gpu_index : gpu_index + 2] == ["--gpus", "all"]
+    assert not any(arg.startswith("device=") for arg in argv)
+
+
 def _exercise_failed_container_cleanup(tmp_path, monkeypatch, responses):
     module = _load_module("w96_l20_launcher_cleanup", L20_LAUNCHER_PATH)
     run_root = tmp_path / "run"
