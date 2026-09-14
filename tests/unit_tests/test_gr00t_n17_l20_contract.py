@@ -1487,3 +1487,127 @@ def test_run_tree_ownership_audit_rejects_unreadable_output(tmp_path) -> None:
         assert receipt["unreadable"] == ["output.json"]
     finally:
         output.chmod(0o600)
+
+
+def _minimal_assets_source() -> str:
+    return '''import logging
+import os
+import tempfile
+from typing import Literal
+from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
+
+def check_file_path(path: str) -> Literal[0, 1, 2]:
+    if os.path.isfile(path):
+        return 1
+
+    import omni.client
+    if omni.client.stat(path.replace(os.sep, "/"))[0] == omni.client.Result.OK:
+        return 2
+    else:
+        return 0
+
+def retrieve_file_path(path: str, download_dir: str | None = None, force_download: bool = False) -> str:
+    # check file status
+    file_status = check_file_path(path)
+    if file_status == 1:
+        return os.path.abspath(path)
+    elif file_status == 2:
+        raise AssertionError("remote download should not run on a cache hit")
+    else:
+        raise FileNotFoundError(path)
+'''
+
+
+def _offline_override_module(name):
+    return _load_module(
+        name,
+        ROOT / "toolkits/gr00t_trocar/w95/offline_asset_override.py",
+    )
+
+
+def _load_patched_assets(tmp_path, name):
+    builder = _offline_override_module(f"{name}_builder")
+    patched_path = tmp_path / f"{name}.py"
+    patched_path.write_text(
+        builder.build_override(_minimal_assets_source()), encoding="utf-8"
+    )
+    return _load_module(name, patched_path)
+
+
+def test_offline_asset_override_prefers_complete_local_mirror(
+    tmp_path, monkeypatch
+) -> None:
+    assets = _load_patched_assets(tmp_path, "w02_assets")
+    mirror = tmp_path / "Assets/Isaac/Healthcare/robot.usd"
+    mirror.parent.mkdir(parents=True)
+    mirror.write_bytes(b"complete-usd")
+    monkeypatch.setattr(assets.tempfile, "tempdir", str(tmp_path))
+    url = "https://example.invalid/Assets/Isaac/Healthcare/robot.usd"
+
+    assert assets.check_file_path(url) == 2
+    assert assets.retrieve_file_path(url) == str(mirror)
+    assert assets.retrieve_file_path(url, download_dir=str(tmp_path)) == str(mirror)
+
+
+def test_offline_asset_override_keeps_local_and_missing_behavior(
+    tmp_path, monkeypatch
+) -> None:
+    assets = _load_patched_assets(tmp_path, "w02_assets_missing")
+    local = tmp_path / "local.usd"
+    local.write_bytes(b"usd")
+    monkeypatch.setattr(assets.tempfile, "tempdir", str(tmp_path))
+    assert assets.check_file_path(str(local)) == 1
+    assert assets.retrieve_file_path(str(local)) == str(local)
+
+    client = types.ModuleType("omni.client")
+    client.Result = types.SimpleNamespace(OK=1)
+    client.stat = lambda _path: (0, None)
+    omni = types.ModuleType("omni")
+    omni.client = client
+    monkeypatch.setitem(sys.modules, "omni", omni)
+    monkeypatch.setitem(sys.modules, "omni.client", client)
+    missing = "https://example.invalid/Assets/missing.usd"
+    assert assets.check_file_path(missing) == 0
+    try:
+        assets.retrieve_file_path(missing)
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("missing remote asset did not preserve failure behavior")
+    assert assets._cached_mirror_path("https://example.invalid/../../escape.usd") is None
+
+
+def test_offline_asset_override_cli_is_hash_bound(tmp_path) -> None:
+    builder_path = ROOT / "toolkits/gr00t_trocar/w95/offline_asset_override.py"
+    builder = _offline_override_module("offline_asset_override_cli")
+    source = tmp_path / "source.py"
+    output = tmp_path / "output.py"
+    receipt = tmp_path / "receipt.json"
+    source.write_text(_minimal_assets_source(), encoding="utf-8")
+    digest = builder._sha256(source.read_bytes())
+    command = [
+        sys.executable,
+        str(builder_path),
+        "--input",
+        str(source),
+        "--output",
+        str(output),
+        "--receipt",
+        str(receipt),
+        "--expected-input-sha256",
+        digest,
+    ]
+    subprocess.run(command, check=True)
+    data = json.loads(receipt.read_text(encoding="utf-8"))
+    assert data["status"] == "passed"
+    assert data["input"]["sha256"] == digest
+    assert data["output"]["sha256"] == builder._sha256(output.read_bytes())
+    assert builder.PATCH_MARKER in output.read_text(encoding="utf-8")
+
+    wrong = subprocess.run(
+        [*command[:-1], "0" * 64], capture_output=True, text=True
+    )
+    assert wrong.returncode != 0
+    assert "SHA256 differs from the frozen contract" in wrong.stderr
