@@ -44,6 +44,10 @@ ISAAC_PYTHON_WRAPPER = Path("/isaac-sim/python.sh")
 ISAAC_SETUP_SCRIPT = Path("/isaac-sim/setup_python_env.sh")
 ISAAC_VERSION_AUTHORITY = Path("/isaac-sim/VERSION")
 EXPECTED_KIT_PYTHON = Path("/isaac-sim/kit/python/bin/python3")
+EXPECTED_ISAACSIM_ORIGIN = Path("/isaac-sim/python_packages/isaacsim/__init__.py")
+EXPECTED_ISAACSIM_ORIGIN_SHA256 = (
+    "bd0c7f55ed6941ceacdd364b4f53e5140099d2209216976a8a6bf85200158ea3"
+)
 EXPECTED_TORCH_ORIGIN = Path(
     "/isaac-sim/kit/python/lib/python3.12/site-packages/torch/__init__.py"
 )
@@ -59,7 +63,6 @@ FROZEN_W96_PYTHON_PREFIXES = (
 )
 MODULE_AUTHORITIES = {
     "isaacsim": ("/isaac-sim",),
-    "isaacsim.simulation_app": ("/isaac-sim",),
     "isaaclab": ("/workspace/isaaclab/source/isaaclab",),
     "isaaclab_tasks": ("/workspace/isaaclab/source/isaaclab_tasks",),
 }
@@ -102,7 +105,15 @@ def _under_authority(path: Path, authorities: tuple[str, ...]) -> bool:
 def _origin_receipt(
     name: str, literal: str | None, *, resolution: str
 ) -> dict[str, Any]:
-    exact_origin = EXPECTED_TORCH_ORIGIN if name == "torch" else None
+    exact_origins = {
+        "isaacsim": EXPECTED_ISAACSIM_ORIGIN,
+        "torch": EXPECTED_TORCH_ORIGIN,
+    }
+    expected_hashes = {
+        "isaacsim": EXPECTED_ISAACSIM_ORIGIN_SHA256,
+        "torch": EXPECTED_TORCH_ORIGIN_SHA256,
+    }
+    exact_origin = exact_origins.get(name)
     authorities = MODULE_AUTHORITIES.get(name, ())
     receipt: dict[str, Any] = {
         "module": name,
@@ -124,13 +135,15 @@ def _origin_receipt(
             error=str(error),
         )
         return receipt
-    authority_matches = (
-        resolved == exact_origin.resolve(strict=True)
-        if exact_origin is not None
-        else _under_authority(resolved, authorities)
-    )
+    if exact_origin is not None:
+        try:
+            authority_matches = resolved == exact_origin.resolve(strict=True)
+        except OSError:
+            authority_matches = False
+    else:
+        authority_matches = _under_authority(resolved, authorities)
     origin_sha256 = _sha256_bytes(resolved.read_bytes())
-    expected_sha256 = EXPECTED_TORCH_ORIGIN_SHA256 if name == "torch" else None
+    expected_sha256 = expected_hashes.get(name)
     hash_matches = expected_sha256 is None or origin_sha256 == expected_sha256
     receipt.update(
         status="passed" if authority_matches and hash_matches else "failed",
@@ -155,7 +168,22 @@ def _imported_module_receipt(name: str) -> dict[str, Any]:
     return _origin_receipt(name, getattr(module, "__file__", None), resolution="import")
 
 
-def _simulation_app_receipt() -> dict[str, Any]:
+def _public_simulation_app_receipt(isaacsim_module: Any) -> dict[str, Any]:
+    simulation_app = getattr(isaacsim_module, "SimulationApp", None)
+    class_is_type = isinstance(simulation_app, type)
+    registered_same_object = sys.modules.get("isaacsim") is isaacsim_module
+    return {
+        "status": ("passed" if class_is_type and registered_same_object else "failed"),
+        "attribute": "isaacsim.SimulationApp",
+        "top_level_registered_same_object": registered_same_object,
+        "class_is_type": class_is_type,
+        "class_name": getattr(simulation_app, "__name__", None),
+        "class_qualname": getattr(simulation_app, "__qualname__", None),
+        "implementation_module": getattr(simulation_app, "__module__", None),
+    }
+
+
+def _simulation_app_sentinel_receipt() -> dict[str, Any]:
     name = "isaacsim.simulation_app"
     pre_registered = name in sys.modules
     receipt: dict[str, Any] = {
@@ -174,41 +202,28 @@ def _simulation_app_receipt() -> dict[str, Any]:
         return receipt
 
     registered_same_object = sys.modules.get(name) is imported
-    module_origin = _origin_receipt(
-        name, getattr(imported, "__file__", None), resolution="injected_import"
-    )
     spec = getattr(imported, "__spec__", None)
-    spec_origin = getattr(spec, "origin", None) if spec is not None else None
-    spec_origin_matches = False
-    if spec is None:
-        spec_origin_matches = pre_registered
-    elif spec_origin and module_origin.get("resolved"):
-        try:
-            spec_origin_matches = Path(spec_origin).samefile(module_origin["resolved"])
-        except OSError:
-            spec_origin_matches = False
-
-    simulation_app = getattr(imported, "SimulationApp", None)
-    class_is_type = isinstance(simulation_app, type)
-    class_module = getattr(simulation_app, "__module__", None)
-    class_module_matches = class_is_type and class_module == name
+    file_value = getattr(imported, "__file__", None)
+    exports_simulation_app = hasattr(imported, "SimulationApp")
+    provides_executable_authority = (
+        spec is not None or file_value is not None or exports_simulation_app
+    )
     gate = (
-        registered_same_object
-        and module_origin["status"] == "passed"
-        and spec_origin_matches
-        and class_module_matches
+        pre_registered
+        and registered_same_object
+        and spec is None
+        and file_value is None
+        and not provides_executable_authority
     )
     receipt.update(
         status="passed" if gate else "failed",
         registered_same_object=registered_same_object,
-        module_origin=module_origin,
         spec_is_none=spec is None,
-        null_spec_allowed=spec is None and pre_registered,
-        spec_origin=spec_origin,
-        spec_origin_matches_module=spec_origin_matches,
-        class_is_type=class_is_type,
-        class_module=class_module,
-        class_module_matches=class_module_matches,
+        file_value=file_value,
+        exports_simulation_app=exports_simulation_app,
+        sentinel_type_module=type(imported).__module__,
+        sentinel_type_name=type(imported).__qualname__,
+        provides_executable_authority=provides_executable_authority,
     )
     return receipt
 
@@ -350,7 +365,9 @@ def run_bootstrap(_args: argparse.Namespace) -> dict[str, Any]:
         "expected_version": EXPECTED_TORCH_VERSION,
         "version_matches": imported_torch_version == EXPECTED_TORCH_VERSION,
     }
-    receipt["simulation_app"] = _simulation_app_receipt()
+    isaacsim_module = importlib.import_module("isaacsim")
+    receipt["simulation_app_public"] = _public_simulation_app_receipt(isaacsim_module)
+    receipt["simulation_app_sentinel"] = _simulation_app_sentinel_receipt()
 
     imported_gate = all(
         item["status"] == "passed" for item in imported.values()
@@ -361,7 +378,8 @@ def run_bootstrap(_args: argparse.Namespace) -> dict[str, Any]:
     gate = (
         imported_gate
         and receipt["torch_imported_version"]["version_matches"]
-        and receipt["simulation_app"]["status"] == "passed"
+        and receipt["simulation_app_public"]["status"] == "passed"
+        and receipt["simulation_app_sentinel"]["status"] == "passed"
     )
     receipt["status"] = "passed" if gate else "failed"
     if not gate:

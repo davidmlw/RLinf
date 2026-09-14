@@ -995,112 +995,137 @@ def test_q2_bootstrap_import_failure_preserves_partial_receipt(monkeypatch) -> N
     assert len(receipt["module_specs"]) == 4
 
 
-def _simulation_app_fixture(module, tmp_path, monkeypatch, *, spec=None):
-    name = "isaacsim.simulation_app"
+def _simulation_app_fixture(module, tmp_path, monkeypatch):
     authority = tmp_path / "isaac-sim"
-    origin = authority / "python_packages" / "isaacsim" / "simulation_app.py"
+    origin = authority / "python_packages" / "isaacsim" / "__init__.py"
     origin.parent.mkdir(parents=True)
-    origin.write_text("simulation app fixture\n", encoding="ascii")
+    origin.write_text("isaacsim fixture\n", encoding="ascii")
+    module.EXPECTED_ISAACSIM_ORIGIN = origin
+    module.EXPECTED_ISAACSIM_ORIGIN_SHA256 = module._sha256_bytes(origin.read_bytes())
     simulation_app = type("SimulationApp", (), {})
-    simulation_app.__module__ = name
-    injected = type(
-        "InjectedModule",
+    simulation_app.__module__ = "isaacsim.internal.app"
+    top_level = type(
+        "IsaacSimModule",
         (),
-        {
-            "__file__": str(origin),
-            "__spec__": spec,
-            "SimulationApp": simulation_app,
-        },
+        {"__file__": str(origin), "SimulationApp": simulation_app},
     )()
-    module.MODULE_AUTHORITIES[name] = (str(authority),)
-    monkeypatch.setitem(module.sys.modules, name, injected)
-    monkeypatch.setattr(module.importlib, "import_module", lambda _name: injected)
-    return injected, origin
+    sentinel = type(
+        "SimulationAppSentinel",
+        (),
+        {"__spec__": None},
+    )()
+    monkeypatch.setitem(module.sys.modules, "isaacsim", top_level)
+    monkeypatch.setitem(module.sys.modules, "isaacsim.simulation_app", sentinel)
+
+    def import_module(name):
+        return {
+            "isaacsim": top_level,
+            "isaacsim.simulation_app": sentinel,
+        }[name]
+
+    monkeypatch.setattr(module.importlib, "import_module", import_module)
+    return top_level, sentinel, origin
 
 
-def test_q2_bootstrap_accepts_only_named_preregistered_null_spec(
+def test_q2_bootstrap_accepts_public_export_and_nonexecuting_sentinel(
     tmp_path, monkeypatch
 ) -> None:
     module = _load_module("w96_q2_bootstrap_null_spec", L20_Q2_SMOKE_PATH)
-    _simulation_app_fixture(module, tmp_path, monkeypatch)
+    top_level, _sentinel, origin = _simulation_app_fixture(
+        module, tmp_path, monkeypatch
+    )
 
-    receipt = module._simulation_app_receipt()
-    assert receipt["status"] == "passed"
-    assert receipt["pre_registered"] is True
-    assert receipt["registered_same_object"] is True
-    assert receipt["spec_is_none"] is True
-    assert receipt["null_spec_allowed"] is True
-    assert receipt["module_origin"]["authority_matches"] is True
-    assert len(receipt["module_origin"]["origin_sha256"]) == 64
-    assert receipt["class_is_type"] is True
-    assert receipt["class_module"] == "isaacsim.simulation_app"
+    spec_receipt = module._origin_receipt(
+        "isaacsim", str(origin), resolution="find_spec"
+    )
+    public = module._public_simulation_app_receipt(top_level)
+    sentinel = module._simulation_app_sentinel_receipt()
+    assert spec_receipt["status"] == "passed"
+    assert spec_receipt["hash_matches"] is True
+    assert public["status"] == "passed"
+    assert public["class_name"] == "SimulationApp"
+    assert public["implementation_module"] == "isaacsim.internal.app"
+    assert sentinel["status"] == "passed"
+    assert sentinel["pre_registered"] is True
+    assert sentinel["registered_same_object"] is True
+    assert sentinel["spec_is_none"] is True
+    assert sentinel["file_value"] is None
+    assert sentinel["exports_simulation_app"] is False
+    assert sentinel["provides_executable_authority"] is False
 
 
-def test_q2_bootstrap_rejects_missing_injected_simulation_module(
-    monkeypatch,
+def test_q2_bootstrap_rejects_top_level_isaacsim_origin_or_hash_drift(
+    tmp_path, monkeypatch
 ) -> None:
-    module = _load_module("w96_q2_bootstrap_missing_sim", L20_Q2_SMOKE_PATH)
-    monkeypatch.delitem(module.sys.modules, "isaacsim.simulation_app", raising=False)
+    module = _load_module("w96_q2_bootstrap_isaacsim_drift", L20_Q2_SMOKE_PATH)
+    _top_level, _sentinel, origin = _simulation_app_fixture(
+        module, tmp_path, monkeypatch
+    )
+    origin.write_text("changed isaacsim fixture\n", encoding="ascii")
+    assert (
+        module._origin_receipt("isaacsim", str(origin), resolution="import")["status"]
+        == "failed"
+    )
+    foreign = tmp_path / "foreign" / "isaacsim" / "__init__.py"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("isaacsim fixture\n", encoding="ascii")
+    assert (
+        module._origin_receipt("isaacsim", str(foreign), resolution="import")["status"]
+        == "failed"
+    )
+
+
+def test_q2_bootstrap_rejects_missing_or_nonclass_public_simulation_app(
+    tmp_path, monkeypatch
+) -> None:
+    module = _load_module("w96_q2_bootstrap_public_export", L20_Q2_SMOKE_PATH)
+    top_level, _sentinel, _origin = _simulation_app_fixture(
+        module, tmp_path, monkeypatch
+    )
+    delattr(type(top_level), "SimulationApp")
+    assert module._public_simulation_app_receipt(top_level)["status"] == "failed"
+    top_level.SimulationApp = object()
+    assert module._public_simulation_app_receipt(top_level)["status"] == "failed"
+
+
+def test_q2_bootstrap_rejects_simulation_sentinel_identity_drift(
+    tmp_path, monkeypatch
+) -> None:
+    module = _load_module("w96_q2_bootstrap_sentinel_identity", L20_Q2_SMOKE_PATH)
+    _top_level, _sentinel, _origin = _simulation_app_fixture(
+        module, tmp_path, monkeypatch
+    )
+    other = type("OtherSentinel", (), {"__spec__": None})()
+    original_import = module.importlib.import_module
     monkeypatch.setattr(
         module.importlib,
         "import_module",
-        lambda name: (_ for _ in ()).throw(ModuleNotFoundError(name)),
+        lambda name: other
+        if name == "isaacsim.simulation_app"
+        else original_import(name),
     )
-
-    receipt = module._simulation_app_receipt()
+    receipt = module._simulation_app_sentinel_receipt()
     assert receipt["status"] == "failed"
-    assert receipt["pre_registered"] is False
     assert receipt["registered_same_object"] is False
 
 
-def test_q2_bootstrap_rejects_foreign_simulation_module_origin(
+def test_q2_bootstrap_rejects_unexpected_simulation_sentinel_authority(
     tmp_path, monkeypatch
 ) -> None:
-    module = _load_module("w96_q2_bootstrap_foreign_sim", L20_Q2_SMOKE_PATH)
-    injected, _origin = _simulation_app_fixture(module, tmp_path, monkeypatch)
-    foreign = tmp_path / "foreign" / "simulation_app.py"
-    foreign.parent.mkdir()
-    foreign.write_text("foreign\n", encoding="ascii")
-    injected.__file__ = str(foreign)
-
-    receipt = module._simulation_app_receipt()
+    module = _load_module("w96_q2_bootstrap_sentinel_authority", L20_Q2_SMOKE_PATH)
+    _top_level, sentinel, _origin = _simulation_app_fixture(
+        module, tmp_path, monkeypatch
+    )
+    sentinel.__file__ = str(tmp_path / "unexpected.py")
+    receipt = module._simulation_app_sentinel_receipt()
     assert receipt["status"] == "failed"
-    assert receipt["module_origin"]["authority_matches"] is False
-
-
-def test_q2_bootstrap_rejects_missing_or_wrong_simulation_app_class(
-    tmp_path, monkeypatch
-) -> None:
-    module = _load_module("w96_q2_bootstrap_wrong_class", L20_Q2_SMOKE_PATH)
-    injected, _origin = _simulation_app_fixture(module, tmp_path, monkeypatch)
-    injected.SimulationApp = object()
-    missing = module._simulation_app_receipt()
-    assert missing["status"] == "failed"
-    assert missing["class_is_type"] is False
-
-    wrong_class = type("SimulationApp", (), {})
-    wrong_class.__module__ = "foreign.simulation_app"
-    injected.SimulationApp = wrong_class
-    wrong = module._simulation_app_receipt()
-    assert wrong["status"] == "failed"
-    assert wrong["class_is_type"] is True
-    assert wrong["class_module_matches"] is False
-
-
-def test_q2_bootstrap_rejects_nonnull_spec_origin_mismatch(
-    tmp_path, monkeypatch
-) -> None:
-    module = _load_module("w96_q2_bootstrap_spec_mismatch", L20_Q2_SMOKE_PATH)
-    other = tmp_path / "isaac-sim" / "other.py"
-    other.parent.mkdir()
-    other.write_text("other\n", encoding="ascii")
-    spec = type("FakeSpec", (), {"origin": str(other)})()
-    _simulation_app_fixture(module, tmp_path, monkeypatch, spec=spec)
-
-    receipt = module._simulation_app_receipt()
-    assert receipt["status"] == "failed"
-    assert receipt["spec_is_none"] is False
-    assert receipt["spec_origin_matches_module"] is False
+    assert receipt["provides_executable_authority"] is True
+    del sentinel.__file__
+    sentinel.SimulationApp = type("SimulationApp", (), {})
+    assert module._simulation_app_sentinel_receipt()["status"] == "failed"
+    del sentinel.SimulationApp
+    sentinel.__spec__ = type("UnexpectedSpec", (), {"origin": None})()
+    assert module._simulation_app_sentinel_receipt()["status"] == "failed"
 
 
 def test_q2_pre_app_contract_accepts_exact_readable_paths(
