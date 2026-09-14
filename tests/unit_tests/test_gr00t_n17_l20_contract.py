@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -25,6 +28,10 @@ CONTRACT_PATH = ROOT / "toolkits/gr00t_trocar/w95/contract-v1.json"
 BASE_CONFIG = ROOT / "toolkits/gr00t_trocar/config-n1d7-vulkan-control.yaml"
 MODULE_PATH = ROOT / "toolkits/gr00t_trocar/w95/contract.py"
 TREE_MANIFEST_PATH = ROOT / "toolkits/gr00t_trocar/w95/tree_manifest.py"
+GIT_ATTESTATION_PATH = ROOT / "toolkits/gr00t_trocar/w95/git_tree_attestation.py"
+L20_LAUNCHER_PATH = ROOT / "toolkits/gr00t_trocar/w95/l20_vulkan_launcher.py"
+L20_RUNTIME_PROBE_PATH = ROOT / "toolkits/gr00t_trocar/w95/l20_runtime_probe.py"
+L20_Q2_SMOKE_PATH = ROOT / "toolkits/gr00t_trocar/w95/l20_q2_smoke.py"
 L20_RUNTIME_SPEC_PATH = (
     ROOT / "toolkits/gr00t_trocar/w95/runtime-spec-n1d7-l20-w88.json"
 )
@@ -49,6 +56,18 @@ def _tree_manifest_module():
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def _load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(path.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
     return module
 
 
@@ -79,6 +98,12 @@ def test_l20_runtime_uses_image_torch_and_isolated_tensorrt() -> None:
     )
     assert "torch" in runtime["python_overlay"]["forbidden_distributions"]
     assert "tensorrt" in runtime["python_overlay"]["forbidden_distributions"]
+    assert {"numpy", "pandas"} <= set(
+        runtime["python_overlay"]["forbidden_distributions"]
+    )
+    assert {"numpy", "pandas"} <= set(
+        runtime["python_overlay"]["forbidden_top_level_paths"]
+    )
     assert runtime["tensorrt_runtime"]["container_path"] == "/w96-trt-runtime"
     assert runtime["pythonpath"] == [
         "/w96-overlay",
@@ -149,9 +174,10 @@ def test_b8_and_b32_authority_is_explicit_and_not_interchangeable() -> None:
         profiles["baseline_relative_throughput_b32"]["authority"]
         == "baseline_relative_only"
     )
-    assert "cannot qualify" in profiles["baseline_relative_throughput_b32"][
-        "allowed_claim"
-    ]
+    assert (
+        "cannot qualify"
+        in profiles["baseline_relative_throughput_b32"]["allowed_claim"]
+    )
 
 
 def test_all_profile_and_arm_configs_render_and_validate() -> None:
@@ -297,3 +323,267 @@ def test_immutable_tree_materialization_refuses_existing_destination(tmp_path) -
         assert str(error) == f"destination already exists: {destination}"
     else:
         raise AssertionError("existing destination must fail closed")
+
+
+def test_git_tree_attestation_does_not_depend_on_bundle_git_context(
+    tmp_path,
+) -> None:
+    module = _load_module("w96_git_tree_attestation", GIT_ATTESTATION_PATH)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "w96@example.test"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "W96 test"],
+        check=True,
+    )
+    script = repo / "run.sh"
+    script.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+    script.chmod(0o755)
+    (repo / "payload.txt").write_text("payload\n", encoding="ascii")
+    (repo / "payload-link").symlink_to("payload.txt")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "fixture"], check=True)
+
+    attestation = module.create_attestation(repo, "HEAD")
+    bundle = tmp_path / "parent-repo" / "bundle"
+    bundle.parent.mkdir()
+    subprocess.run(["git", "init", "-q", str(bundle.parent)], check=True)
+    shutil.copytree(repo, bundle, ignore=shutil.ignore_patterns(".git"), symlinks=True)
+    assert not (bundle / ".git").exists()
+    assert module.verify_attestation(bundle, attestation)["status"] == "passed"
+
+    (bundle / "extra.txt").write_text("extra\n", encoding="ascii")
+    failed = module.verify_attestation(bundle, attestation)
+    assert failed["status"] == "failed"
+    assert failed["extra"] == ["extra.txt"]
+
+
+def test_w96_launcher_quota_parser_is_fail_closed() -> None:
+    module = _load_module("w96_l20_launcher", L20_LAUNCHER_PATH)
+    output = (
+        "Disk quotas for usr 123:\n"
+        "Filesystem kbytes quota limit grace files quota limit grace\n"
+        "/home/liweim 334046588 1073741824 1153433600 - 1 2 3 -\n"
+    )
+    assert module._parse_quota_line(output, "/home/liweim") == {
+        "used_kib": 334046588,
+        "soft_quota_kib": 1073741824,
+        "hard_limit_kib": 1153433600,
+    }
+    try:
+        module._parse_quota_line("no quota row\n", "/home/liweim")
+    except module.LaunchError as error:
+        assert "cannot parse" in str(error)
+    else:
+        raise AssertionError("missing quota row must fail closed")
+
+
+def test_w96_docker_command_uses_only_w96_authorities(tmp_path) -> None:
+    module = _load_module("w96_l20_launcher_args", L20_LAUNCHER_PATH)
+    names = (
+        "rlinf_source",
+        "gr00t_source",
+        "python_overlay",
+        "tensorrt_runtime",
+        "model",
+        "backbone_model",
+        "resolved_config",
+        "extension",
+        "assets_override",
+    )
+    inputs = {name: str(tmp_path / name) for name in names}
+    site = {
+        "docker": {"path": "/home/liweim/bin/docker"},
+        "image": {"reference": "example.invalid/image@sha256:abc"},
+        "inputs": inputs,
+    }
+    args = module._common_docker_args(site, tmp_path / "run", "w96-test")
+    joined = " ".join(args)
+    assert module.EXPECTED_PYTHONPATH in joined
+    assert "/workspace/rlinf-src:ro" in joined
+    assert "/workspace/gr00t-n17:ro" in joined
+    assert "/w96-overlay:ro" in joined
+    assert "/w96-trt-runtime:ro" in joined
+    assert "/tmp/Assets" in joined
+    assert "/w88-overlay" not in joined
+    assert "W88_" not in joined
+
+
+def test_w96_static_site_validates_all_nine_immutable_roots(tmp_path) -> None:
+    launcher = _load_module("w96_l20_launcher_site", L20_LAUNCHER_PATH)
+    tree_manifest = _tree_manifest_module()
+    git_attestation = _load_module(
+        "w96_git_tree_attestation_site", GIT_ATTESTATION_PATH
+    )
+
+    repo = tmp_path / "source-repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "w96@example.test"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "W96 test"],
+        check=True,
+    )
+    (repo / "rlinf").mkdir()
+    (repo / "rlinf/__init__.py").write_text("\n", encoding="ascii")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "fixture"], check=True)
+    revision = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    immutable = tmp_path / "immutable"
+    rlinf_source = immutable / "rlinf-source"
+    shutil.copytree(repo, rlinf_source, ignore=shutil.ignore_patterns(".git"))
+
+    roots = {
+        "assets-final-readonly.json": immutable / "assets",
+        "config.json": immutable / "config",
+        "model-GR00T-N1.7-3B.json": immutable / "models",
+        "overrides.json": immutable / "overrides",
+        "python-w96-overlay.json": immutable / "python-overlay",
+        "python-wheelhouse.json": immutable / "wheelhouse",
+        "runtime-tensorrt-10.15.1.29.json": immutable / "tensorrt-runtime",
+        "sources-isaac-gr00t.json": immutable / "gr00t-source",
+        "sources-rlinf.json": rlinf_source,
+    }
+    for root in roots.values():
+        root.mkdir(parents=True, exist_ok=True)
+    (roots["assets-final-readonly.json"] / "asset.usd").write_text(
+        "asset\n", encoding="ascii"
+    )
+    resolved_config = roots["config.json"] / "resolved.yaml"
+    resolved_config.write_text("runner: {}\n", encoding="ascii")
+    metadata = roots["config.json"] / "metadata.json"
+    metadata.write_text("{}\n", encoding="ascii")
+    extension = roots["overrides.json"] / "extension.py"
+    extension.write_text("\n", encoding="ascii")
+    assets_override = roots["overrides.json"] / "assets.py"
+    assets_override.write_text("\n", encoding="ascii")
+    model = roots["model-GR00T-N1.7-3B.json"] / "GR00T-N1.7-3B"
+    backbone = roots["model-GR00T-N1.7-3B.json"] / "Cosmos-Reason2-2B"
+    model.mkdir()
+    backbone.mkdir()
+    (model / "config.json").write_text(
+        '{"model_name":"nvidia/Cosmos-Reason2-2B"}\n', encoding="ascii"
+    )
+    (backbone / "config.json").write_text("{}\n", encoding="ascii")
+
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    manifest_lines = []
+    for name, root in sorted(roots.items()):
+        path = manifests / name
+        path.write_text(
+            json.dumps(tree_manifest.create_manifest(root), sort_keys=True) + "\n",
+            encoding="ascii",
+        )
+        manifest_lines.append(f"{launcher._sha256(path)}  {path}")
+    manifest_set = manifests / "SHA256SUMS"
+    manifest_set.write_text("\n".join(manifest_lines) + "\n", encoding="ascii")
+
+    attestation_path = tmp_path / "rlinf-git-tree.json"
+    attestation_path.write_text(
+        json.dumps(git_attestation.create_attestation(repo, revision)) + "\n",
+        encoding="ascii",
+    )
+    runtime = json.loads(L20_RUNTIME_SPEC_PATH.read_text(encoding="ascii"))
+    image_receipt = tmp_path / "image.json"
+    image_receipt.write_text(
+        json.dumps(
+            {
+                "repo_digest": runtime["container_image"]["repo_digest"],
+                "image_id": runtime["container_image"]["image_id"],
+                "architecture": "amd64",
+                "os": "linux",
+                "hashes": {
+                    "canonical_identity_sha256": runtime["container_image"][
+                        "canonical_identity_sha256"
+                    ]
+                },
+            }
+        )
+        + "\n",
+        encoding="ascii",
+    )
+    docker = tmp_path / "docker"
+    docker.write_text("#!/bin/sh\nexit 1\n", encoding="ascii")
+    docker.chmod(0o755)
+    run_base = tmp_path / "runs"
+    run_base.mkdir()
+    site = {
+        "schema": launcher.SITE_SCHEMA,
+        "runtime_spec": {
+            "path": str(L20_RUNTIME_SPEC_PATH),
+            "sha256": launcher._sha256(L20_RUNTIME_SPEC_PATH),
+        },
+        "image": {
+            "reference": runtime["container_image"]["repo_digest"],
+            "canonical_receipt": str(image_receipt),
+            "canonical_receipt_sha256": launcher._sha256(image_receipt),
+        },
+        "manifest_set": {
+            "path": str(manifest_set),
+            "sha256": launcher._sha256(manifest_set),
+            "roots": {name: str(root) for name, root in roots.items()},
+        },
+        "source": {
+            "root": str(rlinf_source),
+            "revision": revision,
+            "attestation": str(attestation_path),
+            "attestation_sha256": launcher._sha256(attestation_path),
+        },
+        "inputs": {
+            "rlinf_source": str(rlinf_source),
+            "gr00t_source": str(roots["sources-isaac-gr00t.json"]),
+            "model": str(model),
+            "backbone_model": str(backbone),
+            "python_overlay": str(roots["python-w96-overlay.json"]),
+            "tensorrt_runtime": str(roots["runtime-tensorrt-10.15.1.29.json"]),
+            "config_root": str(roots["config.json"]),
+            "overrides_root": str(roots["overrides.json"]),
+            "asset_seed": str(roots["assets-final-readonly.json"]),
+            "resolved_config": str(resolved_config),
+            "trocar_metadata": str(metadata),
+            "extension": str(extension),
+            "assets_override": str(assets_override),
+        },
+        "docker": {
+            "path": str(docker),
+            "sha256": launcher._sha256(docker),
+        },
+        "run_root_base": str(run_base),
+        "preflight": {"quota_mount": "/home/liweim"},
+    }
+    site_path = tmp_path / "site.json"
+    site_path.write_text(json.dumps(site) + "\n", encoding="ascii")
+
+    receipt = launcher.validate_site(site_path)
+    assert receipt["status"] == "passed"
+    assert receipt["source"]["revision"] == revision
+    assert set(receipt["tree_receipts"]) == launcher.REQUIRED_MANIFESTS
+
+
+def test_q1_probe_is_pre_isaac_and_pre_ray() -> None:
+    source = L20_RUNTIME_PROBE_PATH.read_text(encoding="utf-8")
+    assert "import isaaclab" not in source
+    assert "import ray" not in source
+    assert '"pre_isaac_pre_ray": True' in source
+
+
+def test_q2_smoke_is_eager_true_b8_without_trt_or_nsys() -> None:
+    source = L20_Q2_SMOKE_PATH.read_text(encoding="utf-8")
+    assert '"backend": "pytorch_eager"' in source
+    assert '"batch_size": 8' in source
+    assert '"executed_action_chunks": 16' in source
+    assert "policy.get_action(observation)" in source
+    assert "env.step(action)" in source
+    assert "setup_tensorrt_engines" not in source
+    assert "import ray" not in source
+    assert "nsys" not in source.lower()

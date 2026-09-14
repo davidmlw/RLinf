@@ -9,6 +9,7 @@
   },
   "python": {
     "expected_version": "3.12.13",
+    "expected_executable": "/isaac-sim/kit/python/bin/python3",
     "no_user_site": true
   },
   "image_owned_packages": {
@@ -38,7 +39,9 @@
       "tensorrt",
       "tensorrt-cu12",
       "tensorrt-cu12-bindings",
-      "tensorrt-cu12-libs"
+      "tensorrt-cu12-libs",
+      "numpy",
+      "pandas"
     ],
     "forbidden_top_level_paths": [
       "torch",
@@ -47,7 +50,9 @@
       "triton",
       "tensorrt",
       "tensorrt_bindings",
-      "tensorrt_libs"
+      "tensorrt_libs",
+      "numpy",
+      "pandas"
     ]
   },
   "tensorrt_runtime": {
