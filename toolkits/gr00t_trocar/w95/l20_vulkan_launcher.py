@@ -46,7 +46,7 @@ Q2_SCHEMA = "rlinf.w96.l20-vulkan-q2/v1"
 REQUIRED_MANIFESTS = {
     "assets-final-readonly.json",
     "config.json",
-    "model-GR00T-N1.7-3B.json",
+    "models-GR00T-N1.7-Cosmos.json",
     "overrides.json",
     "python-w96-overlay.json",
     "python-wheelhouse.json",
@@ -328,7 +328,7 @@ def validate_site(site_path: Path) -> dict[str, Any]:
     if Path(inputs["rlinf_source"]).resolve() != source_root:
         raise LaunchError("RLinf mount source differs from attested source root")
 
-    model_bundle = Path(root_map["model-GR00T-N1.7-3B.json"]).resolve(strict=True)
+    model_bundle = Path(root_map["models-GR00T-N1.7-Cosmos.json"]).resolve(strict=True)
     model_root = Path(inputs["model"]).resolve(strict=True)
     backbone_root = Path(inputs["backbone_model"]).resolve(strict=True)
     for label, path in (("model", model_root), ("backbone model", backbone_root)):

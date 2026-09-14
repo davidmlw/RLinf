@@ -449,7 +449,7 @@ def test_w96_static_site_validates_all_nine_immutable_roots(tmp_path) -> None:
     roots = {
         "assets-final-readonly.json": immutable / "assets",
         "config.json": immutable / "config",
-        "model-GR00T-N1.7-3B.json": immutable / "models",
+        "models-GR00T-N1.7-Cosmos.json": immutable / "models",
         "overrides.json": immutable / "overrides",
         "python-w96-overlay.json": immutable / "python-overlay",
         "python-wheelhouse.json": immutable / "wheelhouse",
@@ -482,8 +482,8 @@ def test_w96_static_site_validates_all_nine_immutable_roots(tmp_path) -> None:
     extension.write_text("\n", encoding="ascii")
     assets_override = roots["overrides.json"] / "assets.py"
     assets_override.write_text("\n", encoding="ascii")
-    model = roots["model-GR00T-N1.7-3B.json"] / "GR00T-N1.7-3B"
-    backbone = roots["model-GR00T-N1.7-3B.json"] / "Cosmos-Reason2-2B"
+    model = roots["models-GR00T-N1.7-Cosmos.json"] / "GR00T-N1.7-3B"
+    backbone = roots["models-GR00T-N1.7-Cosmos.json"] / "Cosmos-Reason2-2B"
     model.mkdir()
     backbone.mkdir()
     (model / "config.json").write_text(

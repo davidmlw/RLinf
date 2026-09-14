@@ -88,9 +88,10 @@ JSON using schema `rlinf.w96.l20-vulkan-site/v1` binds:
 - the Docker client hash, durable run root and Lustre quota mount; and
 - a direct Git-tree attestation for the RLinf source bundle.
 
-The combined model manifest must cover both `GR00T-N1.7-3B` and its local
-`Cosmos-Reason2-2B` backbone. A model found only in `/tmp`, a path outside the
-verified bundle, or an online Hugging Face fallback is rejected.
+The combined `models-GR00T-N1.7-Cosmos.json` manifest must cover both
+`GR00T-N1.7-3B` and its local `Cosmos-Reason2-2B` backbone. A model found only
+in `/tmp`, a path outside the verified bundle, or an online Hugging Face
+fallback is rejected.
 
 Build and verify the source attestation from a real Git checkout. Verification
 reads the materialized files directly and never invokes `git -C` inside the
