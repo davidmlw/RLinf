@@ -53,8 +53,20 @@ python toolkits/gr00t_trocar/w95/tree_manifest.py build \
 python toolkits/gr00t_trocar/w95/tree_manifest.py verify \
   --root /path/to/immutable-tree \
   --manifest /path/to/manifests/tree.json
+
+python toolkits/gr00t_trocar/w95/tree_manifest.py materialize \
+  --source /read-only/source/tree \
+  --destination /owned/staging/tree \
+  --manifest /path/to/manifests/tree.json
 ```
 
 The manifest itself must live outside the tree so it cannot recursively hash
 itself. Per-run writable scratch and output trees must never use an immutable
 input manifest.
+
+W95 L20 runs use
+`runtime-spec-n1d7-l20-w88.json`: the pinned W88 image owns
+`torch==2.10.0+cu128`, the Python overlay may not contain Torch or TensorRT,
+and TensorRT 10.15.1.29 is mounted separately. The
+`toolkits/eos/gr00t_trocar/runtime-spec-n1d7.json` Torch 2.11 environment is
+scoped to EOS/H100/Newton and is not a W95 L20 runtime authority.

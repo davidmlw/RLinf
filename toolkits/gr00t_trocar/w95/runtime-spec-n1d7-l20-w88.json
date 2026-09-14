@@ -1,0 +1,66 @@
+{
+  "schema": "rlinf.w96.n1d7-l20-image-runtime/v1",
+  "scope": "w95_l20_vulkan_w88_reproduction",
+  "status": "frozen_metadata_runtime_unqualified",
+  "container_image": {
+    "repo_digest": "chenchaox72877/trocar-rlinf-bench@sha256:9f02e069ccb0e0a7e536833e789666e85f039c9024a77ac2f219c42cb1dfcf01",
+    "image_id": "sha256:db746c040dd15cdd68fdcda5b40f514bd2bf31d0fb462ae493fe83b7a0142bf1",
+    "canonical_identity_sha256": "b60c018068882a2c39ebb30ba63b6fbeb5073baf4ac2944bc8ff8abf54425b85"
+  },
+  "python": {
+    "expected_version": "3.12.13",
+    "no_user_site": true
+  },
+  "image_owned_packages": {
+    "torch": {
+      "expected_version": "2.10.0+cu128",
+      "expected_origin": "/isaac-sim/kit/python/lib/python3.12/site-packages/torch/__init__.py"
+    }
+  },
+  "python_overlay": {
+    "container_path": "/w96-overlay",
+    "expected_packages": {
+      "transformers": "4.57.3",
+      "tokenizers": "0.22.1"
+    },
+    "forbidden_distributions": [
+      "torch",
+      "torchvision",
+      "torchaudio",
+      "triton",
+      "tensorrt",
+      "tensorrt-cu12",
+      "tensorrt-cu12-bindings",
+      "tensorrt-cu12-libs"
+    ],
+    "forbidden_top_level_paths": [
+      "torch",
+      "torchvision",
+      "torchaudio",
+      "triton",
+      "tensorrt",
+      "tensorrt_bindings",
+      "tensorrt_libs"
+    ]
+  },
+  "tensorrt_runtime": {
+    "container_path": "/w96-trt-runtime",
+    "distribution": "tensorrt-cu12",
+    "expected_version": "10.15.1.29",
+    "must_not_be_present_in_python_overlay": true
+  },
+  "pythonpath": [
+    "/w96-overlay",
+    "/w96-trt-runtime",
+    "/workspace/gr00t-n17",
+    "/workspace/rlinf-src"
+  ],
+  "qualification": {
+    "package_manifest_required": true,
+    "tree_manifest_required": true,
+    "module_origin_receipt_required": true,
+    "shared_library_origin_receipt_required": true,
+    "vulkan_smoke_required": true,
+    "fail_closed": true
+  }
+}

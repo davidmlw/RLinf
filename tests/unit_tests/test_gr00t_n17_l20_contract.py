@@ -25,6 +25,10 @@ CONTRACT_PATH = ROOT / "toolkits/gr00t_trocar/w95/contract-v1.json"
 BASE_CONFIG = ROOT / "toolkits/gr00t_trocar/config-n1d7-vulkan-control.yaml"
 MODULE_PATH = ROOT / "toolkits/gr00t_trocar/w95/contract.py"
 TREE_MANIFEST_PATH = ROOT / "toolkits/gr00t_trocar/w95/tree_manifest.py"
+L20_RUNTIME_SPEC_PATH = (
+    ROOT / "toolkits/gr00t_trocar/w95/runtime-spec-n1d7-l20-w88.json"
+)
+EOS_RUNTIME_SPEC_PATH = ROOT / "toolkits/eos/gr00t_trocar/runtime-spec-n1d7.json"
 
 
 def _module():
@@ -62,6 +66,30 @@ def test_contract_is_n17_l20_vulkan_and_rooted_at_fixed_base() -> None:
     assert contract["workload"]["hardware"] == "8x NVIDIA L20 SM89"
     assert contract["workload"]["renderer"] == "Vulkan/RTX"
     assert contract["artifact_policy"]["forbid_sm90_plans"] is True
+
+
+def test_l20_runtime_uses_image_torch_and_isolated_tensorrt() -> None:
+    runtime = json.loads(L20_RUNTIME_SPEC_PATH.read_text(encoding="utf-8"))
+    assert runtime["scope"] == "w95_l20_vulkan_w88_reproduction"
+    assert runtime["image_owned_packages"]["torch"]["expected_version"] == (
+        "2.10.0+cu128"
+    )
+    assert "torch" in runtime["python_overlay"]["forbidden_distributions"]
+    assert "tensorrt" in runtime["python_overlay"]["forbidden_distributions"]
+    assert runtime["tensorrt_runtime"]["container_path"] == "/w96-trt-runtime"
+    assert runtime["pythonpath"] == [
+        "/w96-overlay",
+        "/w96-trt-runtime",
+        "/workspace/gr00t-n17",
+        "/workspace/rlinf-src",
+    ]
+
+
+def test_eos_torch_211_runtime_is_not_w96_l20_authority() -> None:
+    runtime = json.loads(EOS_RUNTIME_SPEC_PATH.read_text(encoding="utf-8"))
+    assert runtime["torch_version"] == "2.11.0"
+    assert runtime["scope"] == "eos_h100_newton_uv_runtime"
+    assert runtime["w96_l20_authority"] is False
 
 
 def test_contract_freezes_true_b8_chunk16_counts() -> None:
@@ -200,3 +228,40 @@ def test_immutable_tree_manifest_rejects_manifest_inside_tree(tmp_path) -> None:
     root.mkdir()
     assert module._is_within(root / "manifest.json", root) is True
     assert module._is_within(tmp_path / "manifest.json", root) is False
+
+
+def test_immutable_tree_materialization_copies_exact_manifest(tmp_path) -> None:
+    module = _tree_manifest_module()
+    source = tmp_path / "source" / "bundle"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    payload = nested / "payload.txt"
+    payload.write_text("payload\n", encoding="ascii")
+    payload.chmod(0o600)
+    (source / "payload-link").symlink_to("nested/payload.txt")
+    manifest = module.create_manifest(source)
+
+    destination = tmp_path / "destination" / "bundle"
+    module.materialize_manifest(source, destination, manifest)
+
+    assert module.verify_manifest(destination, manifest) == []
+    assert (destination / "nested/payload.txt").read_text(encoding="ascii") == (
+        "payload\n"
+    )
+    assert (destination / "payload-link").readlink() == Path("nested/payload.txt")
+
+
+def test_immutable_tree_materialization_refuses_existing_destination(tmp_path) -> None:
+    module = _tree_manifest_module()
+    source = tmp_path / "source" / "bundle"
+    source.mkdir(parents=True)
+    manifest = module.create_manifest(source)
+    destination = tmp_path / "destination" / "bundle"
+    destination.mkdir(parents=True)
+
+    try:
+        module.materialize_manifest(source, destination, manifest)
+    except ValueError as error:
+        assert str(error) == f"destination already exists: {destination}"
+    else:
+        raise AssertionError("existing destination must fail closed")

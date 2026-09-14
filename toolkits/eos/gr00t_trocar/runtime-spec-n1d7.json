@@ -1,5 +1,8 @@
 {
   "schema": "rlinf.eos.python-runtime.v1",
+  "scope": "eos_h100_newton_uv_runtime",
+  "w96_l20_authority": false,
+  "w96_l20_disposition": "out_of_scope; W96 uses toolkits/gr00t_trocar/w95/runtime-spec-n1d7-l20-w88.json",
   "system_image_registry_digest": "sha256:aab301569e09f60e143ddcb7749b2610fe522503edcdc8538efbb4a446b1a53f",
   "python_version": "3.12.3",
   "torch_version": "2.11.0",
