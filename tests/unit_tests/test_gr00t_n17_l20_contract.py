@@ -409,6 +409,7 @@ def test_w96_docker_command_uses_only_w96_authorities(tmp_path) -> None:
     assert "/w96-overlay:ro" in joined
     assert "/w96-trt-runtime:ro" in joined
     assert "/tmp/Assets" in joined
+    assert "VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_icd.json" in joined
     assert "/w88-overlay" not in joined
     assert "W88_" not in joined
 
@@ -433,6 +434,9 @@ def test_w96_static_site_validates_all_nine_immutable_roots(tmp_path) -> None:
     )
     (repo / "rlinf").mkdir()
     (repo / "rlinf/__init__.py").write_text("\n", encoding="ascii")
+    contract_directory = repo / "toolkits/gr00t_trocar/w95"
+    contract_directory.mkdir(parents=True)
+    shutil.copy2(CONTRACT_PATH, contract_directory / "contract-v1.json")
     subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-qm", "fixture"], check=True)
     revision = subprocess.check_output(
@@ -458,8 +462,20 @@ def test_w96_static_site_validates_all_nine_immutable_roots(tmp_path) -> None:
     (roots["assets-final-readonly.json"] / "asset.usd").write_text(
         "asset\n", encoding="ascii"
     )
+    contract_module = _module()
     resolved_config = roots["config.json"] / "resolved.yaml"
-    resolved_config.write_text("runner: {}\n", encoding="ascii")
+    resolved_config.write_text(
+        yaml.safe_dump(
+            contract_module.render(
+                _base(),
+                _contract(),
+                "absolute_correctness_b8",
+                "all_off",
+            ),
+            sort_keys=False,
+        ),
+        encoding="ascii",
+    )
     metadata = roots["config.json"] / "metadata.json"
     metadata.write_text("{}\n", encoding="ascii")
     extension = roots["overrides.json"] / "extension.py"
@@ -560,6 +576,10 @@ def test_w96_static_site_validates_all_nine_immutable_roots(tmp_path) -> None:
         },
         "run_root_base": str(run_base),
         "preflight": {"quota_mount": "/home/liweim"},
+        "workload": {
+            "profile": "absolute_correctness_b8",
+            "arm": "all_off",
+        },
     }
     site_path = tmp_path / "site.json"
     site_path.write_text(json.dumps(site) + "\n", encoding="ascii")
@@ -577,6 +597,38 @@ def test_q1_probe_is_pre_isaac_and_pre_ray() -> None:
     assert '"pre_isaac_pre_ray": True' in source
 
 
+def test_q1_rejects_unregistered_driver_paths_and_non_nvidia_vulkan(
+    tmp_path,
+) -> None:
+    module = _load_module("w96_l20_runtime_probe", L20_RUNTIME_PROBE_PATH)
+    library = tmp_path / "libcuda.so.1"
+    library.write_bytes(b"fixture")
+    assert module._driver_library_path_allowed(str(library)) is False
+    module.EXPECTED_DRIVER_LIBRARY_ROOTS = (str(tmp_path),)
+    assert module._driver_library_path_allowed(str(library)) is True
+
+    expected = "\n".join(
+        f"GPU{index}:\n"
+        "  vendorID = 0x10de\n"
+        "  deviceType = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU\n"
+        "  deviceName = NVIDIA L20\n"
+        "  driverID = DRIVER_ID_NVIDIA_PROPRIETARY\n"
+        for index in range(8)
+    )
+    devices = module._parse_vulkan_devices(expected)
+    assert module._vulkan_devices_are_expected(devices) is True
+    software = expected + (
+        "GPU8:\n"
+        "  vendorID = 0x10005\n"
+        "  deviceType = PHYSICAL_DEVICE_TYPE_CPU\n"
+        "  deviceName = llvmpipe\n"
+    )
+    assert (
+        module._vulkan_devices_are_expected(module._parse_vulkan_devices(software))
+        is False
+    )
+
+
 def test_q2_smoke_is_eager_true_b8_without_trt_or_nsys() -> None:
     source = L20_Q2_SMOKE_PATH.read_text(encoding="utf-8")
     assert '"backend": "pytorch_eager"' in source
@@ -587,3 +639,28 @@ def test_q2_smoke_is_eager_true_b8_without_trt_or_nsys() -> None:
     assert "setup_tensorrt_engines" not in source
     assert "import ray" not in source
     assert "nsys" not in source.lower()
+
+
+def test_q2_requalifies_runtime_and_normalizes_output_ownership() -> None:
+    source = L20_LAUNCHER_PATH.read_text(encoding="utf-8")
+    q2_start = source.index("def run_q2(")
+    q2_source = source[q2_start:]
+    assert "l20_runtime_probe.py" in q2_source
+    assert 'runtime = _load(run_root / "q2-runtime.json")' in q2_source
+    assert "ownership-normalization-command.json" in source
+    assert '"/bin/chown"' in source
+    assert '"requires_gpu": False' in source
+
+
+def test_run_tree_ownership_audit_rejects_unreadable_output(tmp_path) -> None:
+    module = _load_module("w96_l20_launcher_ownership", L20_LAUNCHER_PATH)
+    output = tmp_path / "output.json"
+    output.write_text("{}\n", encoding="ascii")
+    assert module._audit_run_ownership(tmp_path)["status"] == "passed"
+    output.chmod(0)
+    try:
+        receipt = module._audit_run_ownership(tmp_path)
+        assert receipt["status"] == "failed"
+        assert receipt["unreadable"] == ["output.json"]
+    finally:
+        output.chmod(0o600)

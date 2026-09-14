@@ -127,10 +127,13 @@ python toolkits/gr00t_trocar/w95/l20_vulkan_launcher.py q2 \
 Q1 rechecks at least 80 GiB of HOME headroom, eight idle L20 SM89 GPUs and the
 canonical image before collecting driver, `libcuda`, NVIDIA Vulkan ICD/library
 and import-origin receipts. It imports neither Isaac Lab nor Ray. Q2 repeats
-the preflight, consumes the matching Q1 receipt, runs exactly one eager
-true-B8 chunk16 GR00T call, then starts one local Assemble-Trocar Vulkan
-environment and executes one zero-action turn. Q2 does not load a TensorRT
-engine, run Nsys or start Ray. Each attempt receives a fresh writable asset
-cache copied from the immutable seed, while source/model/config inputs remain
-read-only. Commands, configuration, environment, container inspection, logs
-and output receipts remain under the attempt directory.
+the host preflight and the same in-container runtime-origin probe, consumes the
+matching Q1 receipt, runs exactly one eager true-B8 chunk16 GR00T call, then
+starts one local Assemble-Trocar Vulkan environment and executes one
+zero-action turn. Q2 does not load a TensorRT engine, run Nsys or start Ray.
+Both phases force the NVIDIA ICD through `VK_DRIVER_FILES`. Each attempt
+receives a fresh writable asset cache copied from the immutable seed, while
+source/model/config inputs remain read-only. Commands, configuration,
+environment, container inspection, logs and output receipts remain under the
+attempt directory. A no-GPU cleanup container normalizes all attempt output to
+the invoking host UID/GID so failed probes do not leave root-owned artifacts.

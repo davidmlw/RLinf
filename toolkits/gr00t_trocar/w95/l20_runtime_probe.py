@@ -24,6 +24,7 @@ import importlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from importlib import metadata
@@ -63,6 +64,14 @@ EXPECTED_PYTHONPATH = (
     "/w96-overlay:/w96-trt-runtime:/workspace/gr00t-n17:/workspace/rlinf-src"
 )
 EXPECTED_PYTHON_EXECUTABLE = "/isaac-sim/kit/python/bin/python3"
+EXPECTED_DRIVER_LIBRARY_ROOTS = (
+    "/usr/lib/x86_64-linux-gnu",
+    "/usr/lib64",
+    "/lib/x86_64-linux-gnu",
+    "/lib64",
+    "/usr/local/nvidia/lib",
+    "/usr/local/nvidia/lib64",
+)
 
 
 def _sha256(path: Path) -> str:
@@ -111,6 +120,78 @@ def _load_library(name: str) -> dict[str, Any]:
         "soname": _soname(path),
         "size": path.stat().st_size,
         "sha256": _sha256(path),
+    }
+
+
+def _driver_library_path_allowed(path: str) -> bool:
+    resolved = Path(path).resolve(strict=True)
+    return any(
+        resolved == Path(root) or Path(root) in resolved.parents
+        for root in EXPECTED_DRIVER_LIBRARY_ROOTS
+    )
+
+
+def _parse_vulkan_devices(output: str) -> list[dict[str, Any]]:
+    parts = re.split(r"(?m)^GPU(\d+):\s*$", output)
+    devices = []
+    for offset in range(1, len(parts), 2):
+        index = int(parts[offset])
+        block = parts[offset + 1]
+
+        def field(name: str) -> str | None:
+            match = re.search(rf"(?m)^\s*{name}\s*=\s*(.+?)\s*$", block)
+            return match.group(1) if match else None
+
+        devices.append(
+            {
+                "index": index,
+                "vendor_id": field("vendorID"),
+                "device_type": field("deviceType"),
+                "device_name": field("deviceName"),
+                "driver_id": field("driverID"),
+            }
+        )
+    return devices
+
+
+def _vulkan_devices_are_expected(devices: list[dict[str, Any]]) -> bool:
+    return [device["index"] for device in devices] == list(range(8)) and all(
+        device["vendor_id"] == "0x10de"
+        and device["device_type"] == "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU"
+        and device["device_name"] == "NVIDIA L20"
+        and device["driver_id"] == "DRIVER_ID_NVIDIA_PROPRIETARY"
+        for device in devices
+    )
+
+
+def _vulkan_receipt() -> dict[str, Any]:
+    executable = shutil.which("vulkaninfo")
+    if executable is None:
+        return {"status": "failed", "error": "vulkaninfo is not installed"}
+    executable = os.path.realpath(executable)
+    if executable != "/usr/bin/vulkaninfo":
+        return {
+            "status": "failed",
+            "error": f"unexpected vulkaninfo origin: {executable}",
+        }
+    result = subprocess.run(
+        [executable, "--summary"],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    devices = _parse_vulkan_devices(result.stdout)
+    gate = result.returncode == 0 and _vulkan_devices_are_expected(devices)
+    return {
+        "status": "passed" if gate else "failed",
+        "executable": executable,
+        "executable_sha256": _sha256(Path(executable)),
+        "command": [executable, "--summary"],
+        "exit_code": result.returncode,
+        "devices": devices,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
     }
 
 
@@ -198,6 +279,7 @@ def run() -> dict[str, Any]:
         value["status"] == "passed"
         and value["soname"] == Path(value["requested"]).name
         and Path(value["resolved_path"]).is_absolute()
+        and _driver_library_path_allowed(value["resolved_path"])
         and len(value["sha256"]) == 64
         for value in libraries.values()
     )
@@ -206,6 +288,8 @@ def run() -> dict[str, Any]:
         and icd_library == "libGLX_nvidia.so.0"
         and icd.get("ICD", {}).get("api_version") is not None
     )
+    vulkan = _vulkan_receipt()
+    vulkan_gate = vulkan["status"] == "passed"
     path_gate = (
         os.environ.get("PYTHONPATH") == EXPECTED_PYTHONPATH
         and os.environ.get("PYTHONNOUSERSITE") == "1"
@@ -223,6 +307,7 @@ def run() -> dict[str, Any]:
                 smi_gate,
                 library_gate,
                 icd_gate,
+                vulkan_gate,
                 path_gate,
                 module_gate,
                 torch.version.cuda == "12.8",
@@ -256,6 +341,7 @@ def run() -> dict[str, Any]:
             "content": icd,
             "library": icd_library,
         },
+        "vulkan_physical_devices": vulkan,
         "gates": {
             "eight_l20_sm89": sm89_gate,
             "nvidia_smi_inventory": smi_gate,
@@ -264,6 +350,7 @@ def run() -> dict[str, Any]:
             "module_origins": module_gate,
             "driver_library_origins": library_gate,
             "nvidia_vulkan_icd": icd_gate,
+            "vulkan_physical_devices": vulkan_gate,
         },
     }
     return receipt

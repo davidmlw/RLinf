@@ -29,11 +29,15 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .contract import validate as validate_contract
     from .git_tree_attestation import verify_attestation
     from .tree_manifest import materialize_manifest, verify_manifest
 except ImportError:
+    from contract import validate as validate_contract
     from git_tree_attestation import verify_attestation
     from tree_manifest import materialize_manifest, verify_manifest
+
+import yaml
 
 SITE_SCHEMA = "rlinf.w96.l20-vulkan-site/v1"
 RUNTIME_SCHEMA = "rlinf.w96.n1d7-l20-image-runtime/v1"
@@ -54,6 +58,14 @@ EXPECTED_PYTHONPATH = (
     "/w96-overlay:/w96-trt-runtime:/workspace/gr00t-n17:/workspace/rlinf-src"
 )
 EXPECTED_PYTHON_EXECUTABLE = "/isaac-sim/kit/python/bin/python3"
+EXPECTED_DRIVER_LIBRARY_ROOTS = [
+    "/usr/lib/x86_64-linux-gnu",
+    "/usr/lib64",
+    "/lib/x86_64-linux-gnu",
+    "/lib64",
+    "/usr/local/nvidia/lib",
+    "/usr/local/nvidia/lib64",
+]
 FORBIDDEN_DURABLE_PREFIXES = ("/tmp", "/dev/shm")
 MINIMUM_HEADROOM_BYTES = 80 * 1024**3
 
@@ -198,6 +210,15 @@ def validate_site(site_path: Path) -> dict[str, Any]:
         raise LaunchError("runtime spec PYTHONPATH differs from W96 contract")
     if runtime["python"].get("expected_executable") != EXPECTED_PYTHON_EXECUTABLE:
         raise LaunchError("runtime spec Python executable differs from W96 contract")
+    nvidia_runtime = runtime.get("nvidia_runtime", {})
+    if nvidia_runtime.get("vulkan_icd") != ("/etc/vulkan/icd.d/nvidia_icd.json"):
+        raise LaunchError("runtime spec does not pin the NVIDIA Vulkan ICD")
+    if nvidia_runtime.get("vulkan_implementation_soname") != ("libGLX_nvidia.so.0"):
+        raise LaunchError("runtime spec does not pin the NVIDIA Vulkan SONAME")
+    if nvidia_runtime.get("allowed_driver_library_roots") != (
+        EXPECTED_DRIVER_LIBRARY_ROOTS
+    ):
+        raise LaunchError("runtime spec driver library roots differ from launcher")
     required_forbidden = {"numpy", "pandas"}
     if not required_forbidden <= set(
         runtime["python_overlay"]["forbidden_distributions"]
@@ -269,6 +290,24 @@ def validate_site(site_path: Path) -> dict[str, Any]:
     docker = _file(site["docker"]["path"], "Docker client")
     _require_hash(docker, site["docker"]["sha256"], "Docker client")
     _verify_overlay_absence(Path(inputs["python_overlay"]), runtime)
+
+    workload = site.get("workload", {})
+    if workload != {
+        "profile": "absolute_correctness_b8",
+        "arm": "all_off",
+    }:
+        raise LaunchError("Q1/Q2 site must use absolute_correctness_b8/all_off")
+    resolved_config_path = Path(inputs["resolved_config"])
+    resolved_config = yaml.safe_load(resolved_config_path.read_text(encoding="utf-8"))
+    contract_path = source_root / "toolkits/gr00t_trocar/w95/contract-v1.json"
+    contract_errors = validate_contract(
+        resolved_config,
+        _load(contract_path),
+        workload["profile"],
+        workload["arm"],
+    )
+    if contract_errors:
+        raise LaunchError(f"resolved workload config is invalid: {contract_errors}")
 
     exact_roots = {
         "rlinf_source": "sources-rlinf.json",
@@ -470,6 +509,7 @@ def _copy_retained_inputs(
             "PYTHONPATH": EXPECTED_PYTHONPATH,
             "NVIDIA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
             "NVIDIA_DRIVER_CAPABILITIES": "compute,utility,graphics",
+            "VK_DRIVER_FILES": "/etc/vulkan/icd.d/nvidia_icd.json",
         },
         "host": {
             "uid": os.getuid(),
@@ -541,6 +581,10 @@ def _prepare_run(
     materialize_manifest(asset_seed, asset_cache, manifest)
     if verify_manifest(asset_cache, manifest):
         raise LaunchError("per-run asset-cache seed verification failed")
+    for path in [asset_cache, *asset_cache.rglob("*")]:
+        if not path.is_symlink():
+            writable_bits = 0o700 if path.is_dir() else 0o600
+            path.chmod(path.stat().st_mode | writable_bits)
     return site, static, preflight
 
 
@@ -590,6 +634,8 @@ def _common_docker_args(
         "NVIDIA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7",
         "-e",
         "NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics",
+        "-e",
+        "VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_icd.json",
         "-v",
         f"{inputs['rlinf_source']}:/workspace/rlinf-src:ro",
         "-v",
@@ -643,37 +689,118 @@ def _run_container(
         run_root / "receipts/container-command.json",
         {"argv": args, "container": container, "phase": phase},
     )
-    result = subprocess.run(
-        args,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    ownership_args = [
+        str(docker),
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--entrypoint",
+        "/bin/chown",
+        "-v",
+        f"{run_root}:/w96-run",
+        site["image"]["reference"],
+        "-hR",
+        f"{os.getuid()}:{os.getgid()}",
+        "/w96-run",
+    ]
+    _write(
+        run_root / "receipts/ownership-normalization-command.json",
+        {"argv": ownership_args, "requires_gpu": False},
     )
-    (run_root / "container.stdout").write_text(result.stdout, encoding="utf-8")
-    (run_root / "container.stderr").write_text(result.stderr, encoding="utf-8")
-    inspect_result = subprocess.run(
-        [str(docker), "inspect", container],
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if inspect_result.returncode == 0:
-        (run_root / "receipts/container-inspect.json").write_text(
-            inspect_result.stdout, encoding="utf-8"
+    result = None
+    run_error = None
+    try:
+        result = subprocess.run(
+            args,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-    subprocess.run(
-        [str(docker), "rm", "-f", container],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+        (run_root / "container.stdout").write_text(result.stdout, encoding="utf-8")
+        (run_root / "container.stderr").write_text(result.stderr, encoding="utf-8")
+    except BaseException as error:
+        run_error = error
+    finally:
+        inspect_result = subprocess.run(
+            [str(docker), "inspect", container],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if inspect_result.returncode == 0:
+            (run_root / "receipts/container-inspect.json").write_text(
+                inspect_result.stdout, encoding="utf-8"
+            )
+        remove = subprocess.run(
+            [str(docker), "rm", "-f", container],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        ownership = subprocess.run(
+            ownership_args,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        (run_root / "ownership.stdout").write_text(ownership.stdout, encoding="utf-8")
+        (run_root / "ownership.stderr").write_text(ownership.stderr, encoding="utf-8")
+        ownership_audit = _audit_run_ownership(run_root)
+        _write(
+            run_root / "receipts/cleanup.json",
+            {
+                "container_remove_exit_code": remove.returncode,
+                "container_remove_stderr": remove.stderr,
+                "ownership_exit_code": ownership.returncode,
+                "ownership": ownership_audit,
+            },
+        )
+    if ownership.returncode != 0:
+        raise LaunchError(
+            "container output ownership normalization failed; "
+            "see retained ownership logs"
+        )
+    if ownership_audit["status"] != "passed":
+        raise LaunchError(f"run output ownership audit failed: {ownership_audit}")
+    if run_error is not None:
+        raise run_error
+    if result is None:
+        raise LaunchError("container execution produced no result")
     if result.returncode != 0:
         raise LaunchError(
             f"{phase} container failed with {result.returncode}; see retained logs"
         )
-    return {"container": container, "exit_code": result.returncode}
+    return {
+        "container": container,
+        "exit_code": result.returncode,
+        "output_owner_normalized": True,
+    }
+
+
+def _audit_run_ownership(run_root: Path) -> dict[str, Any]:
+    expected_uid = os.getuid()
+    expected_gid = os.getgid()
+    wrong_owner = []
+    unreadable = []
+    for path in [run_root, *run_root.rglob("*")]:
+        metadata = path.lstat()
+        relative = "." if path == run_root else path.relative_to(run_root).as_posix()
+        if metadata.st_uid != expected_uid or metadata.st_gid != expected_gid:
+            wrong_owner.append(relative)
+        if not path.is_symlink() and not os.access(path, os.R_OK):
+            unreadable.append(relative)
+    return {
+        "status": "passed" if not (wrong_owner or unreadable) else "failed",
+        "expected_uid": expected_uid,
+        "expected_gid": expected_gid,
+        "wrong_owner": wrong_owner,
+        "unreadable": unreadable,
+    }
 
 
 def run_q1(site_path: Path, run_root: Path) -> dict[str, Any]:
@@ -735,6 +862,9 @@ def run_q2(site_path: Path, run_root: Path, q1_path: Path) -> dict[str, Any]:
         'set -euo pipefail; export LD_LIBRARY_PATH="/w96-trt-runtime/'
         'tensorrt_libs:${LD_LIBRARY_PATH:-}"; '
         f"{EXPECTED_PYTHON_EXECUTABLE} "
+        "/workspace/rlinf-src/toolkits/gr00t_trocar/w95/l20_runtime_probe.py "
+        "--output /w96-run/q2-runtime.json; "
+        f"{EXPECTED_PYTHON_EXECUTABLE} "
         "/workspace/rlinf-src/toolkits/gr00t_trocar/w95/l20_q2_smoke.py "
         "model --model /models/GR00T-N1.7-3B "
         "--backbone-model /w96-model-inputs/Cosmos-Reason2-2B "
@@ -760,8 +890,9 @@ def run_q2(site_path: Path, run_root: Path, q1_path: Path) -> dict[str, Any]:
     container = _run_container(site, run_root, "q2", command, extra_args=extra_args)
     model = _load(run_root / "q2-model.json")
     env = _load(run_root / "q2-env.json")
-    if model.get("status") != "passed" or env.get("status") != "passed":
-        raise LaunchError("Q2 model or environment receipt did not pass")
+    runtime = _load(run_root / "q2-runtime.json")
+    if any(receipt.get("status") != "passed" for receipt in (runtime, model, env)):
+        raise LaunchError("Q2 runtime, model or environment receipt did not pass")
     result = {
         "schema": Q2_SCHEMA,
         "status": "passed",
@@ -771,6 +902,10 @@ def run_q2(site_path: Path, run_root: Path, q1_path: Path) -> dict[str, Any]:
         "image_reference": static["image_reference"],
         "q1_receipt": {"path": str(q1_path), "sha256": _sha256(q1_path)},
         "preflight": preflight,
+        "runtime": {
+            "path": str(run_root / "q2-runtime.json"),
+            "sha256": _sha256(run_root / "q2-runtime.json"),
+        },
         "model": {
             "path": str(run_root / "q2-model.json"),
             "sha256": _sha256(run_root / "q2-model.json"),

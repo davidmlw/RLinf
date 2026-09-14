@@ -61,6 +61,18 @@
     "expected_version": "10.15.1.29",
     "must_not_be_present_in_python_overlay": true
   },
+  "nvidia_runtime": {
+    "vulkan_icd": "/etc/vulkan/icd.d/nvidia_icd.json",
+    "vulkan_implementation_soname": "libGLX_nvidia.so.0",
+    "allowed_driver_library_roots": [
+      "/usr/lib/x86_64-linux-gnu",
+      "/usr/lib64",
+      "/lib/x86_64-linux-gnu",
+      "/lib64",
+      "/usr/local/nvidia/lib",
+      "/usr/local/nvidia/lib64"
+    ]
+  },
   "pythonpath": [
     "/w96-overlay",
     "/w96-trt-runtime",
