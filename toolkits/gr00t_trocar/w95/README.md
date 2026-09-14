@@ -41,3 +41,20 @@ intersected; they are never added.
 Nsys attempts are separate from clean timing. Full-step captures use
 CUDA/NVTX/OSRT for each role rank0. Vulkan and GPU metrics use a separate short
 Env-only attempt. Profiled samples never enter headline performance means.
+
+Immutable directory inputs use `tree_manifest.py`. The manifest records every
+relative path, file type or symlink target, size, mode and SHA-256, and its
+verification fails on additions, removals or metadata/content changes:
+
+```bash
+python toolkits/gr00t_trocar/w95/tree_manifest.py build \
+  --root /path/to/immutable-tree \
+  --output /path/to/manifests/tree.json
+python toolkits/gr00t_trocar/w95/tree_manifest.py verify \
+  --root /path/to/immutable-tree \
+  --manifest /path/to/manifests/tree.json
+```
+
+The manifest itself must live outside the tree so it cannot recursively hash
+itself. Per-run writable scratch and output trees must never use an immutable
+input manifest.

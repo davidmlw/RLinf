@@ -24,10 +24,21 @@ ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_PATH = ROOT / "toolkits/gr00t_trocar/w95/contract-v1.json"
 BASE_CONFIG = ROOT / "toolkits/gr00t_trocar/config-n1d7-vulkan-control.yaml"
 MODULE_PATH = ROOT / "toolkits/gr00t_trocar/w95/contract.py"
+TREE_MANIFEST_PATH = ROOT / "toolkits/gr00t_trocar/w95/tree_manifest.py"
 
 
 def _module():
     spec = importlib.util.spec_from_file_location("w95_contract", MODULE_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _tree_manifest_module():
+    spec = importlib.util.spec_from_file_location(
+        "w95_tree_manifest", TREE_MANIFEST_PATH
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -153,3 +164,39 @@ def test_existing_sm89_vit_is_not_silently_qualified() -> None:
         "component_gate_failed_rebuild_or_requalify_before_use"
     )
     assert policy["existing_sm89_vit_cosine"] == 0.99690463
+
+
+def test_immutable_tree_manifest_records_files_modes_and_symlinks(tmp_path) -> None:
+    module = _tree_manifest_module()
+    root = tmp_path / "bundle"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    payload = nested / "payload.txt"
+    payload.write_text("payload\n", encoding="ascii")
+    payload.chmod(0o444)
+    (root / "payload-link").symlink_to("nested/payload.txt")
+
+    manifest = module.create_manifest(root)
+    entries = {entry["relative_path"]: entry for entry in manifest["entries"]}
+    assert manifest["schema"] == "rlinf.immutable-tree-manifest/v1"
+    assert entries["nested/payload.txt"]["mode"] == "0444"
+    assert entries["nested/payload.txt"]["sha256"] == (
+        "d4e4877bac978b7952f0d544fc52ebff5411d351d129f1f056fa43f11da9af2b"
+    )
+    assert entries["payload-link"]["type"] == "symlink"
+    assert entries["payload-link"]["symlink_target"] == "nested/payload.txt"
+    assert module.verify_manifest(root, manifest) == []
+
+    payload.chmod(0o644)
+    assert module.verify_manifest(root, manifest) == [
+        "immutable tree differs at manifest field: tree_sha256",
+        "immutable tree differs at manifest field: entries",
+    ]
+
+
+def test_immutable_tree_manifest_rejects_manifest_inside_tree(tmp_path) -> None:
+    module = _tree_manifest_module()
+    root = tmp_path / "bundle"
+    root.mkdir()
+    assert module._is_within(root / "manifest.json", root) is True
+    assert module._is_within(tmp_path / "manifest.json", root) is False
