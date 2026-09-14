@@ -70,3 +70,7 @@ W95 L20 runs use
 and TensorRT 10.15.1.29 is mounted separately. The
 `toolkits/eos/gr00t_trocar/runtime-spec-n1d7.json` Torch 2.11 environment is
 scoped to EOS/H100/Newton and is not a W95 L20 runtime authority.
+`python-overlay-requirements-w88.txt` reconstructs the final W88 overlay from
+the retained install logs. Qualification first hashes every downloaded wheel,
+then installs offline with `--no-deps` and rejects forbidden distributions or
+top-level paths.

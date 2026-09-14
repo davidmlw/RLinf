@@ -29,6 +29,9 @@ L20_RUNTIME_SPEC_PATH = (
     ROOT / "toolkits/gr00t_trocar/w95/runtime-spec-n1d7-l20-w88.json"
 )
 EOS_RUNTIME_SPEC_PATH = ROOT / "toolkits/eos/gr00t_trocar/runtime-spec-n1d7.json"
+OVERLAY_REQUIREMENTS_PATH = (
+    ROOT / "toolkits/gr00t_trocar/w95/python-overlay-requirements-w88.txt"
+)
 
 
 def _module():
@@ -90,6 +93,35 @@ def test_eos_torch_211_runtime_is_not_w96_l20_authority() -> None:
     assert runtime["torch_version"] == "2.11.0"
     assert runtime["scope"] == "eos_h100_newton_uv_runtime"
     assert runtime["w96_l20_authority"] is False
+
+
+def test_l20_overlay_requirements_are_frozen_without_runtime_authorities() -> None:
+    requirements = [
+        line.strip()
+        for line in OVERLAY_REQUIREMENTS_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    normalized = {
+        requirement.split("==", 1)[0].lower().replace("_", "-")
+        for requirement in requirements
+    }
+    assert len(requirements) == 74
+    assert len(normalized) == len(requirements)
+    assert {"transformers", "tokenizers", "albumentations"} <= normalized
+    assert normalized.isdisjoint(
+        {
+            "torch",
+            "torchvision",
+            "torchaudio",
+            "triton",
+            "tensorrt",
+            "tensorrt-cu12",
+            "tensorrt-cu12-bindings",
+            "tensorrt-cu12-libs",
+            "numpy",
+            "pandas",
+        }
+    )
 
 
 def test_contract_freezes_true_b8_chunk16_counts() -> None:

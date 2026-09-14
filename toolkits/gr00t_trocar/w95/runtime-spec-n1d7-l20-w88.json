@@ -19,6 +19,13 @@
   },
   "python_overlay": {
     "container_path": "/w96-overlay",
+    "requirements": "toolkits/gr00t_trocar/w95/python-overlay-requirements-w88.txt",
+    "historical_evidence": [
+      "job-1238095-0190",
+      "cmd-1238095-0191",
+      "cmd-1238095-0194",
+      "cmd-1238095-0197"
+    ],
     "expected_packages": {
       "transformers": "4.57.3",
       "tokenizers": "0.22.1"
