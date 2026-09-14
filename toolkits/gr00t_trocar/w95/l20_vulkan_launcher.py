@@ -58,6 +58,11 @@ EXPECTED_PYTHONPATH = (
     "/w96-overlay:/w96-trt-runtime:/workspace/gr00t-n17:/workspace/rlinf-src"
 )
 EXPECTED_PYTHON_EXECUTABLE = "/isaac-sim/kit/python/bin/python3"
+Q2_ISAAC_ENVIRONMENT = {
+    "ISAAC_PATH": "/isaac-sim",
+    "EXP_PATH": "/isaac-sim/apps",
+    "CARB_APP_PATH": "/isaac-sim/kit",
+}
 EXPECTED_DRIVER_LIBRARY_ROOTS = [
     "/usr/lib/x86_64-linux-gnu",
     "/usr/lib64",
@@ -501,16 +506,19 @@ def _copy_retained_inputs(
     shutil.copy2(site_path, receipts / "site.json")
     shutil.copy2(site["inputs"]["resolved_config"], receipts / "config.yaml")
     shutil.copy2(Path(__file__), receipts / "launcher.py")
+    declared_environment = {
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": EXPECTED_PYTHONPATH,
+        "NVIDIA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "NVIDIA_DRIVER_CAPABILITIES": "compute,utility,graphics",
+        "VK_DRIVER_FILES": "/etc/vulkan/icd.d/nvidia_icd.json",
+    }
+    if phase == "q2":
+        declared_environment.update(Q2_ISAAC_ENVIRONMENT)
     environment = {
-        "declared_container_environment": {
-            "HF_HUB_OFFLINE": "1",
-            "TRANSFORMERS_OFFLINE": "1",
-            "PYTHONNOUSERSITE": "1",
-            "PYTHONPATH": EXPECTED_PYTHONPATH,
-            "NVIDIA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
-            "NVIDIA_DRIVER_CAPABILITIES": "compute,utility,graphics",
-            "VK_DRIVER_FILES": "/etc/vulkan/icd.d/nvidia_icd.json",
-        },
+        "declared_container_environment": declared_environment,
         "host": {
             "uid": os.getuid(),
             "gid": os.getgid(),
@@ -673,6 +681,28 @@ def _common_docker_args(
     args.extend(extra_args)
     args.append(site["image"]["reference"])
     return args
+
+
+def _q2_extra_docker_args(inputs: dict[str, Any]) -> tuple[str, ...]:
+    args = [
+        "-v",
+        f"{inputs['trocar_metadata']}:/w96-inputs/trocar/metadata.json:ro",
+    ]
+    for name, value in Q2_ISAAC_ENVIRONMENT.items():
+        args.extend(("-e", f"{name}={value}"))
+    args.extend(
+        (
+            "-e",
+            "W77_BACKBONE_MODEL_ROOT=/w96-model-inputs/Cosmos-Reason2-2B",
+            "-e",
+            "W77_TROCAR_METADATA=/w96-inputs/trocar/metadata.json",
+            "-e",
+            "RLINF_EXT_MODULE=toolkits.gr00t_trocar.vulkan_extension",
+            "-e",
+            "RLINF_CONFIG_FILE=/workspace/isaaclab/source/isaaclab_tasks/isaaclab_tasks/contrib/assemble_trocar/config/isaaclab_ppo_gr00t_assemble_trocar_prod.yaml",
+        )
+    )
+    return tuple(args)
 
 
 def _run_container(
@@ -930,19 +960,7 @@ def run_q2(site_path: Path, run_root: Path, q1_path: Path) -> dict[str, Any]:
         "/workspace/rlinf-src/toolkits/gr00t_trocar/w95/l20_q2_smoke.py "
         "env --output /w96-run/q2-env.json"
     )
-    inputs = site["inputs"]
-    extra_args = (
-        "-v",
-        f"{inputs['trocar_metadata']}:/w96-inputs/trocar/metadata.json:ro",
-        "-e",
-        "W77_BACKBONE_MODEL_ROOT=/w96-model-inputs/Cosmos-Reason2-2B",
-        "-e",
-        "W77_TROCAR_METADATA=/w96-inputs/trocar/metadata.json",
-        "-e",
-        "RLINF_EXT_MODULE=toolkits.gr00t_trocar.vulkan_extension",
-        "-e",
-        "RLINF_CONFIG_FILE=/workspace/isaaclab/source/isaaclab_tasks/isaaclab_tasks/contrib/assemble_trocar/config/isaaclab_ppo_gr00t_assemble_trocar_prod.yaml",
-    )
+    extra_args = _q2_extra_docker_args(site["inputs"])
     container = _run_container(site, run_root, "q2", command, extra_args=extra_args)
     model = _load(run_root / "q2-model.json")
     env = _load(run_root / "q2-env.json")

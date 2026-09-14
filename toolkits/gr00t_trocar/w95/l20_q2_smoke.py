@@ -28,6 +28,20 @@ from typing import Any
 
 CAMERAS = ("front_camera", "left_wrist_camera", "right_wrist_camera")
 TASK_ID = "IsaacContrib-Assemble-Trocar-G129-Dex3"
+ISAAC_LAUNCHER_ENVIRONMENT = {
+    "ISAAC_PATH": "/isaac-sim",
+    "EXP_PATH": "/isaac-sim/apps",
+    "CARB_APP_PATH": "/isaac-sim/kit",
+}
+ISAAC_RENDERING_EXPERIENCE = Path(
+    "/workspace/isaaclab/apps/isaaclab.python.headless.rendering.kit"
+)
+
+
+class _EnvSmokeError(RuntimeError):
+    def __init__(self, message: str, launcher_contract: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.launcher_contract = launcher_contract
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -65,6 +79,79 @@ def _action_tensor(action: dict[str, Any]) -> Any:
     if not np.isfinite(result).all():
         raise RuntimeError("public action contains non-finite values")
     return result
+
+
+def _isaac_launcher_contract_receipt() -> dict[str, Any]:
+    environment = {}
+    for name, expected in ISAAC_LAUNCHER_ENVIRONMENT.items():
+        observed = os.environ.get(name)
+        entry: dict[str, Any] = {
+            "expected_literal": expected,
+            "observed_literal": observed,
+            "literal_matches": observed == expected,
+        }
+        try:
+            resolved = Path(observed).resolve(strict=True) if observed else None
+        except OSError as error:
+            entry.update(
+                status="failed",
+                resolved_path=None,
+                is_directory=False,
+                readable_and_searchable=False,
+                error=str(error),
+            )
+        else:
+            is_directory = resolved is not None and resolved.is_dir()
+            readable = resolved is not None and os.access(
+                resolved, os.R_OK | os.X_OK
+            )
+            passed = entry["literal_matches"] and is_directory and readable
+            entry.update(
+                status="passed" if passed else "failed",
+                resolved_path=str(resolved) if resolved is not None else None,
+                is_directory=is_directory,
+                readable_and_searchable=readable,
+            )
+        environment[name] = entry
+
+    experience: dict[str, Any] = {
+        "expected_literal": str(ISAAC_RENDERING_EXPERIENCE)
+    }
+    try:
+        resolved_experience = ISAAC_RENDERING_EXPERIENCE.resolve(strict=True)
+    except OSError as error:
+        experience.update(
+            status="failed",
+            resolved_path=None,
+            is_file=False,
+            readable=False,
+            error=str(error),
+        )
+    else:
+        is_file = resolved_experience.is_file()
+        readable = os.access(resolved_experience, os.R_OK)
+        experience.update(
+            status="passed" if is_file and readable else "failed",
+            resolved_path=str(resolved_experience),
+            is_file=is_file,
+            readable=readable,
+            size=resolved_experience.stat().st_size if is_file else None,
+            sha256=(
+                _sha256_bytes(resolved_experience.read_bytes())
+                if is_file and readable
+                else None
+            ),
+        )
+
+    gate = all(item["status"] == "passed" for item in environment.values()) and (
+        experience["status"] == "passed"
+    )
+    return {
+        "status": "passed" if gate else "failed",
+        "environment": environment,
+        "rendering_experience": experience,
+        "setup_conda_env_sourced": False,
+    }
 
 
 def run_model(args: argparse.Namespace) -> dict[str, Any]:
@@ -147,6 +234,15 @@ def _tensor_tree(value: Any, prefix: str = "") -> dict[str, dict[str, Any]]:
 
 
 def run_env(args: argparse.Namespace) -> dict[str, Any]:
+    launcher_contract = _isaac_launcher_contract_receipt()
+    if launcher_contract["status"] != "passed":
+        return {
+            "schema": "rlinf.w96.q2-smoke-failure/v1",
+            "status": "failed",
+            "phase": "env",
+            "error": "Isaac launcher environment contract did not pass",
+            "isaac_launcher_contract": launcher_contract,
+        }
     os.environ.pop("DISPLAY", None)
     original_argv = sys.argv
     sys.argv = [sys.argv[0]]
@@ -194,6 +290,7 @@ def run_env(args: argparse.Namespace) -> dict[str, Any]:
             "renderer": "Vulkan/RTX",
             "physics": "PhysX",
             "ray_started": False,
+            "isaac_launcher_contract": launcher_contract,
             "reset_tensor_shapes": reset_tensors,
             "step_tensor_shapes": step_tensors,
             "camera_paths": camera_paths,
@@ -203,6 +300,8 @@ def run_env(args: argparse.Namespace) -> dict[str, Any]:
             "reset_info_type": type(reset_info).__name__,
             "step_info_type": type(step_info).__name__,
         }
+    except Exception as error:
+        raise _EnvSmokeError(str(error), launcher_contract) from error
     finally:
         if env is not None:
             env.close()
@@ -235,6 +334,8 @@ def main() -> int:
             "phase": args.command,
             "error": str(error),
         }
+        if isinstance(error, _EnvSmokeError):
+            receipt["isaac_launcher_contract"] = error.launcher_contract
     args.output.write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

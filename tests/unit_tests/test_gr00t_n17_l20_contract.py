@@ -793,6 +793,121 @@ def test_q2_smoke_is_eager_true_b8_without_trt_or_nsys() -> None:
     assert "setup_tensorrt_engines" not in source
     assert "import ray" not in source
     assert "nsys" not in source.lower()
+    env_start = source.index("def run_env(")
+    assert source.index("_isaac_launcher_contract_receipt()", env_start) < source.index(
+        "from isaaclab.app import AppLauncher", env_start
+    )
+    assert "/workspace/isaaclab/apps/isaaclab.python.headless.rendering.kit" in source
+
+
+def test_q2_argv_sets_exact_isaac_launcher_environment(tmp_path) -> None:
+    module = _load_module("w96_l20_launcher_q2_args", L20_LAUNCHER_PATH)
+    smoke = _load_module("w96_q2_smoke_q2_args", L20_Q2_SMOKE_PATH)
+    assert module.Q2_ISAAC_ENVIRONMENT == smoke.ISAAC_LAUNCHER_ENVIRONMENT
+    names = (
+        "rlinf_source",
+        "gr00t_source",
+        "python_overlay",
+        "tensorrt_runtime",
+        "model",
+        "backbone_model",
+        "resolved_config",
+        "extension",
+        "assets_override",
+        "trocar_metadata",
+    )
+    inputs = {name: str(tmp_path / name) for name in names}
+    site = {
+        "docker": {"path": "/fixture/docker"},
+        "image": {"reference": "fixture@example"},
+        "inputs": inputs,
+    }
+    common = module._common_docker_args(site, tmp_path, "q1-container")
+    argv = module._common_docker_args(
+        site,
+        tmp_path,
+        "q2-container",
+        extra_args=module._q2_extra_docker_args(inputs),
+    )
+    for name, value in {
+        "ISAAC_PATH": "/isaac-sim",
+        "EXP_PATH": "/isaac-sim/apps",
+        "CARB_APP_PATH": "/isaac-sim/kit",
+    }.items():
+        assignment = f"{name}={value}"
+        assert assignment not in common
+        assert argv.count(assignment) == 1
+        assert argv[argv.index(assignment) - 1] == "-e"
+    assert not any("setup_conda_env.sh" in argument for argument in argv)
+
+
+def test_q2_pre_app_contract_accepts_exact_readable_paths(
+    tmp_path, monkeypatch
+) -> None:
+    module = _load_module("w96_q2_smoke_contract", L20_Q2_SMOKE_PATH)
+    isaac = tmp_path / "isaac-sim"
+    apps = isaac / "apps"
+    kit = isaac / "kit"
+    apps.mkdir(parents=True)
+    kit.mkdir()
+    experience = tmp_path / "isaaclab.python.headless.rendering.kit"
+    experience.write_text("[package]\n", encoding="ascii")
+    module.ISAAC_LAUNCHER_ENVIRONMENT = {
+        "ISAAC_PATH": str(isaac),
+        "EXP_PATH": str(apps),
+        "CARB_APP_PATH": str(kit),
+    }
+    module.ISAAC_RENDERING_EXPERIENCE = experience
+    for name, value in module.ISAAC_LAUNCHER_ENVIRONMENT.items():
+        monkeypatch.setenv(name, value)
+
+    receipt = module._isaac_launcher_contract_receipt()
+    assert receipt["status"] == "passed"
+    assert receipt["setup_conda_env_sourced"] is False
+    assert receipt["rendering_experience"]["status"] == "passed"
+    assert all(
+        item["literal_matches"] and item["readable_and_searchable"]
+        for item in receipt["environment"].values()
+    )
+
+
+def test_q2_pre_app_contract_rejects_missing_and_mismatched_values(
+    tmp_path, monkeypatch
+) -> None:
+    module = _load_module("w96_q2_smoke_contract_failure", L20_Q2_SMOKE_PATH)
+    isaac = tmp_path / "isaac-sim"
+    apps = isaac / "apps"
+    kit = isaac / "kit"
+    apps.mkdir(parents=True)
+    kit.mkdir()
+    experience = tmp_path / "isaaclab.python.headless.rendering.kit"
+    experience.write_text("[package]\n", encoding="ascii")
+    module.ISAAC_LAUNCHER_ENVIRONMENT = {
+        "ISAAC_PATH": str(isaac),
+        "EXP_PATH": str(apps),
+        "CARB_APP_PATH": str(kit),
+    }
+    module.ISAAC_RENDERING_EXPERIENCE = experience
+    for name, value in module.ISAAC_LAUNCHER_ENVIRONMENT.items():
+        monkeypatch.setenv(name, value)
+
+    monkeypatch.delenv("EXP_PATH")
+    missing = module._isaac_launcher_contract_receipt()
+    assert missing["status"] == "failed"
+    assert missing["environment"]["EXP_PATH"]["observed_literal"] is None
+    assert missing["environment"]["EXP_PATH"]["status"] == "failed"
+
+    monkeypatch.setenv("EXP_PATH", str(tmp_path / "wrong-apps"))
+    mismatch = module._isaac_launcher_contract_receipt()
+    assert mismatch["status"] == "failed"
+    assert mismatch["environment"]["EXP_PATH"]["literal_matches"] is False
+    assert mismatch["environment"]["EXP_PATH"]["status"] == "failed"
+
+    monkeypatch.setenv("EXP_PATH", str(apps))
+    experience.unlink()
+    missing_experience = module._isaac_launcher_contract_receipt()
+    assert missing_experience["status"] == "failed"
+    assert missing_experience["rendering_experience"]["status"] == "failed"
 
 
 def test_q2_requalifies_runtime_and_normalizes_output_ownership() -> None:
