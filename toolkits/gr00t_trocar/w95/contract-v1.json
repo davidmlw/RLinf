@@ -1,0 +1,192 @@
+{
+  "schema": "rlinf.gr00t-n17-l20-contract/v1",
+  "source": {
+    "rlinf_base_sha": "0f9ea98c7a6d9e3ade24e8f4846c64d3b135dbcc",
+    "w84_r7_sha": "73200e8f2483cbc2c94bce24fd8dac688ac6c98a",
+    "w88_l20_donor_sha": "7ac84cdeee501e51f8989eb0e166ccf2cec9a8af",
+    "required_ancestor_sha": "73200e8f2483cbc2c94bce24fd8dac688ac6c98a",
+    "ported_w88_commits": [
+      "1f5d863d67d65acf0338f2a3c907819dd31ad555",
+      "b7469d5adc7699ff200b750a4f9546ec0e06e877",
+      "6af3846740410a03a9d812382d6f950040d00212",
+      "ac2d0edf916887ad70199e2f3fcc4755572fbd5c",
+      "418e7a62978afcd50d8aa1acc8a23d4242cf814c",
+      "e1beee6897eb43f4afe760a3eecccf27365419ed",
+      "8a50dbf398d446df532eb41b1b0ea8e7f427cb2d",
+      "b2889fcec5acd5e63cc7af951d21212453eb8263",
+      "5a01f9b92651ca88c6488d98f6b5976af2027255",
+      "f42afdfd3f95c5fc00ad950d1bb211afce0355b7",
+      "7ac84cdeee501e51f8989eb0e166ccf2cec9a8af"
+    ],
+    "dirty_w88_checkout_allowed": false
+  },
+  "model": {
+    "family": "GR00T N1.7",
+    "checkpoint_name": "GR00T-N1.7-3B",
+    "isaac_gr00t_sha": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
+    "precision": "bf16",
+    "camera_order": [
+      "video.room_view",
+      "video.left_wrist_view",
+      "video.right_wrist_view"
+    ],
+    "camera_shape": [224, 224, 3],
+    "state_width": 28,
+    "action_width": 28,
+    "padded_width": 132,
+    "generated_action_horizon": 40,
+    "executed_action_chunks": 16,
+    "denoising_steps": 4,
+    "true_b8": {
+      "batch": 8,
+      "vision_binding": [6144, 1536],
+      "llm_binding": [8, 208, 2048],
+      "sequence_opt": 208
+    }
+  },
+  "workload": {
+    "hardware": "8x NVIDIA L20 SM89",
+    "simulator": "Isaac Sim/Isaac Lab PhysX",
+    "renderer": "Vulkan/RTX",
+    "task": "IsaacContrib-Assemble-Trocar-G129-Dex3",
+    "placement": "actor,env,rollout: all",
+    "actor_ranks": 8,
+    "rollout_ranks": 8,
+    "env_ranks": 8,
+    "global_envs": 64,
+    "envs_per_rollout_rank": 8,
+    "rollout_epochs": 8,
+    "physical_horizon_per_epoch": 128,
+    "decision_horizon_per_epoch": 8,
+    "physical_actions_per_outer_step": 65536,
+    "policy_decisions_per_outer_step": 4096,
+    "records_per_rank": 512,
+    "global_batch_size": 2048,
+    "local_batch_size_per_rank": 256,
+    "ppo_epochs": 4,
+    "optimizer_updates_per_ppo_epoch": 2,
+    "optimizer_updates_per_outer_step": 8,
+    "logprob_type": "action_level",
+    "learning_rate": 0.00002,
+    "seeds": {
+      "actor": 64001,
+      "rollout": 64101,
+      "environment": 64201
+    }
+  },
+  "profiles": {
+    "absolute_correctness_b8": {
+      "actor_micro_batch_size": 8,
+      "gradient_accumulation_microsteps_per_update": 32,
+      "authority": "absolute_ppo_authority",
+      "allowed_claim": "PPO PASS only after the registered same-revision and optimizer gates pass"
+    },
+    "baseline_relative_throughput_b32": {
+      "actor_micro_batch_size": 32,
+      "gradient_accumulation_microsteps_per_update": 8,
+      "authority": "baseline_relative_only",
+      "allowed_claim": "systems performance only; a B8 replay cannot qualify this optimizer path"
+    }
+  },
+  "arms": {
+    "all_off": {
+      "label": "original behavior",
+      "set": {
+        "rollout.model.skip_unused_lm_head": false,
+        "actor.model.skip_unused_lm_head": false
+      },
+      "remove": [
+        "actor.model.rollout_backbone_feature_transport"
+      ]
+    },
+    "composed": {
+      "label": "unused logits plus exact rollout feature reuse",
+      "set": {
+        "rollout.model.skip_unused_lm_head": true,
+        "actor.model.skip_unused_lm_head": true,
+        "actor.model.rollout_backbone_feature_transport": "borrowed_ipc_pinned"
+      },
+      "remove": []
+    }
+  },
+  "common_config": {
+    "cluster.num_nodes": 1,
+    "cluster.component_placement": {
+      "actor,env,rollout": "all"
+    },
+    "runner.weight_sync_interval": 1,
+    "algorithm.rollout_epoch": 8,
+    "algorithm.update_epoch": 4,
+    "algorithm.logprob_type": "action_level",
+    "env.train.total_num_envs": 64,
+    "env.train.max_steps_per_rollout_epoch": 128,
+    "env.train.init_params.id": "IsaacContrib-Assemble-Trocar-G129-Dex3",
+    "rollout.enable_offload": false,
+    "rollout.enable_torch_compile": false,
+    "rollout.model.precision": "bf16",
+    "rollout.model.bounded_frozen_backbone": true,
+    "actor.global_batch_size": 2048,
+    "actor.seed": 64001,
+    "rollout.seed": 64101,
+    "env.train.seed": 64201,
+    "actor.model.model_type": "gr00t_n1d7",
+    "actor.model.precision": "bf16",
+    "actor.model.num_action_chunks": 16,
+    "actor.model.denoising_steps": 4,
+    "actor.optim.lr": 0.00002,
+    "actor.fsdp_config.sharding_strategy": "full_shard",
+    "actor.fsdp_config.gradient_checkpointing": true,
+    "actor.fsdp_config.cpu_offload": false
+  },
+  "forbidden_config_paths": [
+    "rollout.model.tensorrt_backbone",
+    "rollout.model.tensorrt_dit"
+  ],
+  "measurement": {
+    "schema": "vla-rl.performance-measurement/v1",
+    "run_mode": "resident/v1",
+    "warmup_policy": "zero-based-step0-warmup-steps1-4-measured/v1",
+    "complete_outer_steps": 5,
+    "warmup_steps": [0],
+    "measured_steps": [1, 2, 3, 4],
+    "statistics": ["mean", "sample_std", "cv"],
+    "resident_outer_step_start": "before revision rN publication/adoption",
+    "resident_outer_step_end": "after trainer completion and acceptance of rN+1",
+    "rollout_env_aggregation": "explicit region wall plus interval union/intersection; never sum overlapping service timers",
+    "headline_throughput": [
+      "physical_actions_per_second",
+      "policy_decisions_per_second"
+    ]
+  },
+  "profiler": {
+    "clean_performance_contains_nsys": false,
+    "full_step_trace": ["cuda", "nvtx", "osrt"],
+    "full_step_roles": ["ActorGroup rank0", "RolloutGroup rank0", "EnvGroup rank0"],
+    "vulkan_trace": "separate short Env-only attempt with Vulkan and GPU metrics",
+    "profiled_samples_are_headline": false,
+    "minimum_owned_storage_headroom_bytes": 85899345920,
+    "durable_storage": "owned HOME path",
+    "forbidden_durable_storage": ["/dev/shm", "unowned temporary paths"]
+  },
+  "artifact_policy": {
+    "target_compute_capability": [8, 9],
+    "forbid_sm90_plans": true,
+    "existing_sm89_vit_disposition": "component_gate_failed_rebuild_or_requalify_before_use",
+    "existing_sm89_vit_cosine": 0.99690463,
+    "required_runtime_version": "10.15.1.29",
+    "required_receipt_fields": [
+      "source_sha256",
+      "checkpoint_sha256",
+      "fixture_sha256",
+      "onnx_sha256",
+      "plan_sha256",
+      "binding_profiles",
+      "precision",
+      "compute_capability",
+      "runtime_version",
+      "component_numerics",
+      "final_action_numerics",
+      "ppo_disposition"
+    ]
+  }
+}
