@@ -105,6 +105,7 @@ def test_w43_adapter_freezes_the_qualified_newton_camera_contract() -> None:
     assert 'scratch_root / "native-home" / f"rank-{rank}"' in extension
     assert 'scratch_root / "ovphysx-native-init.lock"' in extension
     assert "fcntl.LOCK_EX" in extension
+    assert "receipt_metrics = _json_ready(metrics)" in extension
 
 
 def test_w43_shell_launcher_is_syntactically_valid() -> None:

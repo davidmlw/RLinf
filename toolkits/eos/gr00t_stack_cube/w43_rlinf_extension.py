@@ -35,6 +35,20 @@ RLINF_TASK_ID = "RLInf-W43-Stack-Cube-Franka-IK-Rel-Visuomotor-Rewarded-v0"
 TASK_DESCRIPTION = "Stack the red block on the blue block, then stack the green block on the red block."
 
 
+def _json_ready(value: Any) -> Any:
+    """Convert RLInf metric leaves to standard JSON-compatible values."""
+
+    if isinstance(value, torch.Tensor):
+        value = value.detach().cpu().tolist()
+    elif hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    return value
+
+
 def _prepend_isaaclab_sources(source_root: Path) -> tuple[Path, ...]:
     source_root = source_root.resolve()
     if not source_root.is_dir():
@@ -231,6 +245,7 @@ def _install_initial_evaluation_mode() -> None:
     def run_initial_evaluation(self) -> None:
         self.rollout.set_global_step(0)
         metrics = self.evaluate()
+        receipt_metrics = _json_ready(metrics)
         output = Path(os.environ["W43_ATTEMPT_ROOT"]) / "results"
         output.mkdir(parents=True, exist_ok=True)
         receipt = output / "r0-evaluation.json"
@@ -243,7 +258,7 @@ def _install_initial_evaluation_mode() -> None:
             "episodes": expected_episodes,
             "environment_seed": int(self.cfg.env.eval.seed),
             "noise_seed": int(self.cfg.rollout.seed),
-            "metrics": metrics,
+            "metrics": receipt_metrics,
         }
         temporary = receipt.with_suffix(".json.tmp")
         temporary.write_text(
@@ -252,10 +267,13 @@ def _install_initial_evaluation_mode() -> None:
         )
         temporary.replace(receipt)
         print(f"RLINF_W43_R0_RECEIPT={receipt}", flush=True)
-        print(f"RLINF_W43_R0_METRICS={json.dumps(metrics, sort_keys=True)}", flush=True)
+        print(
+            f"RLINF_W43_R0_METRICS={json.dumps(receipt_metrics, sort_keys=True)}",
+            flush=True,
+        )
         self.metric_logger.log(
             step=0,
-            data={f"eval/{key}": value for key, value in metrics.items()},
+            data={f"eval/{key}": value for key, value in receipt_metrics.items()},
         )
         self.metric_logger.finish()
 
