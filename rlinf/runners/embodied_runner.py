@@ -100,6 +100,17 @@ class EmbodiedRunner:
             if profile_steps_raw is not None
             else None
         )
+        self._profile_continuous = bool(
+            profiling_enabled
+            and self._profile_steps
+            and profiling_raw.get("continuous", False)
+        )
+        self._profile_start_step = (
+            min(self._profile_steps) if self._profile_continuous else None
+        )
+        self._profile_end_step = (
+            max(self._profile_steps) if self._profile_continuous else None
+        )
 
         # Data channels
         self.env_channel = Channel.create("Env")
@@ -472,6 +483,16 @@ class EmbodiedRunner:
             self._profile_steps is not None and step_idx in self._profile_steps
         )
 
+    def _should_open_profiling_window(self, step_idx: int) -> bool:
+        if self._profile_continuous:
+            return step_idx == self._profile_start_step
+        return self._should_profile_step(step_idx)
+
+    def _should_close_profiling_window(self, step_idx: int) -> bool:
+        if self._profile_continuous:
+            return step_idx == self._profile_end_step
+        return self._should_profile_step(step_idx)
+
     def _open_profiling_window(self, step_idx: int) -> None:
         """Dispatch ``start_profile`` to all compute worker groups for this step."""
         self.logger.info(f"Opening profiling window at step {step_idx}")
@@ -509,13 +530,15 @@ class EmbodiedRunner:
                     self.actor.set_global_step(self.global_step)
                     self.rollout.set_global_step(self.global_step)
 
-                    profiled_step = (
-                        self.global_step
-                        if self._should_profile_step(self.global_step)
-                        else None
+                    profile_step = self.global_step
+                    should_open_profile = self._should_open_profiling_window(
+                        profile_step
                     )
-                    if profiled_step is not None:
-                        self._open_profiling_window(profiled_step)
+                    should_close_profile = self._should_close_profiling_window(
+                        profile_step
+                    )
+                    if should_open_profile:
+                        self._open_profiling_window(profile_step)
 
                     with self.timer("sync_weights"):
                         if _step % self.weight_sync_interval == 0:
@@ -573,7 +596,9 @@ class EmbodiedRunner:
                                     source_ranks,
                                 )
                                 feature_recv_handle: Handle = (
-                                    self.actor.recv_rollout_backbone_features(source_ranks)
+                                    self.actor.recv_rollout_backbone_features(
+                                        source_ranks
+                                    )
                                 )
                                 feature_recv_handle.wait()
 
@@ -602,8 +627,8 @@ class EmbodiedRunner:
 
             eval_metrics = self._maybe_eval_and_checkpoint(_step)
 
-            if profiled_step is not None:
-                self._close_profiling_window(profiled_step)
+            if should_close_profile:
+                self._close_profiling_window(profile_step)
 
             self._log_step_metrics(
                 step=_step,
@@ -628,13 +653,11 @@ class EmbodiedRunner:
             self.actor.set_global_step(self.global_step)
             self.rollout.set_global_step(self.global_step)
 
-            profiled_step = (
-                self.global_step
-                if self._should_profile_step(self.global_step)
-                else None
-            )
-            if profiled_step is not None:
-                self._open_profiling_window(profiled_step)
+            profile_step = self.global_step
+            should_open_profile = self._should_open_profiling_window(profile_step)
+            should_close_profile = self._should_close_profiling_window(profile_step)
+            if should_open_profile:
+                self._open_profiling_window(profile_step)
 
             with self.timer("step"):
                 with self.timer("sync_weights"):
@@ -681,8 +704,8 @@ class EmbodiedRunner:
                 self.global_step += 1
                 eval_metrics = self._maybe_eval_and_checkpoint(_step)
 
-            if profiled_step is not None:
-                self._close_profiling_window(profiled_step)
+            if should_close_profile:
+                self._close_profiling_window(profile_step)
 
             self._log_step_metrics(
                 step=_step,

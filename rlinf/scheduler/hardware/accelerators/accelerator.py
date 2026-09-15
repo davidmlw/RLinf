@@ -62,6 +62,9 @@ class ProfileConfig:
     enabled.
     """
 
+    continuous: bool = False
+    """Capture one window from the first selected step through the last."""
+
     output_dir: Optional[str] = None
     """Directory for profiling output files.
 
@@ -105,6 +108,8 @@ class ProfileConfig:
             assert all(s >= 0 for s in self.steps), (
                 f"Profiling steps must be non-negative ints. But got: {self.steps}"
             )
+        if self.continuous:
+            assert self.steps, "Continuous profiling requires at least one step."
 
     def profiles_worker_group(self, worker_group_name: str) -> bool:
         """Return whether this config should profile the given worker group."""

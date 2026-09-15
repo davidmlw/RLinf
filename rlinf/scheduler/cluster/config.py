@@ -270,6 +270,7 @@ class ClusterConfig:
             - `worker_groups` matches worker group names such as `cfg.actor.group_name`.
             - `ranks` optionally limits profiling to selected worker ranks within matching groups. When omitted, all ranks are profiled.
             - `steps` lists training step indices to gate profiling around.
+            - `continuous` captures one window from the first selected step through the last.
             - Backend-specific options (e.g. ``options``, ``flags`` for Nsight) are passed through to the selected backend.
 
         **Multi-node-group placement**: A worker group can be placed across multiple node groups with heterogeneous hardware types by specifying multiple node group labels. For example:

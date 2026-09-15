@@ -715,6 +715,18 @@ def test_nsight_rejects_negative_steps():
         NsightConfig(steps=[-1])
 
 
+def test_nsight_parses_continuous_step_window():
+    nsight_cfg = NsightConfig(steps=[1, 2], continuous=True)
+
+    assert nsight_cfg.steps == [1, 2]
+    assert nsight_cfg.continuous is True
+
+
+def test_nsight_continuous_window_requires_steps():
+    with pytest.raises(AssertionError, match="requires at least one step"):
+        NsightConfig(continuous=True)
+
+
 def test_nsight_should_profile_step_matches_configured_steps():
     nsight_cfg = NsightConfig(steps=[5, 10])
 
