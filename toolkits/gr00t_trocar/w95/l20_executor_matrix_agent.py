@@ -93,6 +93,8 @@ def build_stage_commands(args: argparse.Namespace) -> list[tuple[str, list[str]]
                 str(tools / "trocar_b8_fixture.py"),
                 "--source",
                 str(args.gr00t_source),
+                "--expected-source-revision",
+                ISAAC_GR00T_REVISION,
                 "--model",
                 str(model_view),
                 "--metadata",
@@ -110,6 +112,8 @@ def build_stage_commands(args: argparse.Namespace) -> list[tuple[str, list[str]]
                 str(tools / "export_true_b8.py"),
                 "--source",
                 str(args.gr00t_source),
+                "--expected-source-revision",
+                ISAAC_GR00T_REVISION,
                 "--model",
                 str(model_view),
                 "--collated",
@@ -248,6 +252,10 @@ def _matrix_command(args: argparse.Namespace, source_digest: str) -> list[str]:
         str(tools / "standalone_true_b8.py"),
         "--source",
         str(args.gr00t_source),
+        "--expected-source-revision",
+        ISAAC_GR00T_REVISION,
+        "--rlinf-revision",
+        args.rlinf_revision,
         "--model",
         str(model),
         "--engines",
@@ -373,6 +381,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--rlinf-revision", required=True)
     parser.add_argument("--gr00t-source", type=Path, required=True)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--backbone", type=Path, required=True)

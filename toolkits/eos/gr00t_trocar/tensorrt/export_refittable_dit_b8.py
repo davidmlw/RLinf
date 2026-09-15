@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -105,15 +104,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     sys.path.insert(0, str(deployment))
     from export_onnx_n1d7 import DiTInputCapture, export_dit_to_onnx  # noqa: PLC0415
     from gr00t.policy.gr00t_policy import Gr00tPolicy, _rec_to_dtype  # noqa: PLC0415
+    from source_identity import resolve_source_revision  # noqa: PLC0415
 
-    source_revision = subprocess.check_output(
-        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
-    ).strip()
-    if source_revision != args.expected_source_revision:
-        raise RuntimeError(
-            f"Isaac-GR00T revision mismatch: {source_revision} != "
-            f"{args.expected_source_revision}"
-        )
+    source_identity = resolve_source_revision(source, args.expected_source_revision)
+    source_revision = source_identity["revision"]
 
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
@@ -165,6 +159,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "schema": "rlinf.gr00t-n1d7-trocar-true-b8-dit-onnx.v1",
         "status": "passed",
         "source_revision": source_revision,
+        "source_revision_authority": source_identity,
         "model": str(model),
         "model_config_sha256": _sha256(model / "config.json"),
         "collated": str(collated),
