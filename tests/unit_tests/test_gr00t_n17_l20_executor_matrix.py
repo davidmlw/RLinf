@@ -171,3 +171,11 @@ def test_real_revision_extractor_freezes_dit_keyspace() -> None:
     extractor = _load("../../eos/gr00t_trocar/tensorrt/extract_action_head_revision")
     assert extractor.PREFIX == "action_head.model."
     assert extractor.EXPECTED_TENSORS == 456
+
+
+def test_real_revision_launcher_uses_qualified_matrix_artifacts() -> None:
+    launcher = _load("l20_real_revision_launcher")
+    command = launcher._probe_command({}, 5)
+    assert "refit_dit_real_revision_probe.py" in command
+    assert "--checkpoint-revision 5" in command
+    assert "/w98-artifacts/dit-engines/dit_bf16_refit.engine" in command
