@@ -89,7 +89,8 @@ def _agent_command(revision: str) -> str:
         'set -euo pipefail; export LD_LIBRARY_PATH="/w96-trt-runtime/'
         'tensorrt_libs:${LD_LIBRARY_PATH:-}"; '
         "export PYTHONPATH=/w96-overlay:/w96-trt-runtime:/workspace/gr00t-n17:"
-        "/workspace/w98-src:/workspace/w98-src/toolkits/eos/gr00t_trocar/tensorrt; "
+        "/workspace/gr00t-n17/scripts/deployment:/workspace/w98-src:"
+        "/workspace/w98-src/toolkits/eos/gr00t_trocar/tensorrt; "
         "exec /isaac-sim/kit/python/bin/python3 "
         "/workspace/w98-src/toolkits/gr00t_trocar/w95/l20_executor_matrix_agent.py "
         "--source /workspace/w98-src --gr00t-source /workspace/gr00t-n17 "
