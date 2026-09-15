@@ -122,6 +122,35 @@ def _create_env_wrapper() -> type:
     class W43StackCubeEnv(IsaaclabBaseEnv):
         """RLInf environment wrapper around the W42-equivalent task config."""
 
+        def reset(self, seed=None, env_ids=None):
+            """Reset and refresh Newton's kinematic/camera state once.
+
+            The OvPhysX reset writes randomized state, but Newton does not
+            publish the attached tool/camera pose until the first physics
+            step.  W42 therefore executes one neutral, open-gripper action
+            outside the policy trajectory.  W43 uses only full resets
+            (auto-reset is disabled), so this refresh cannot advance an
+            unrelated live environment.
+            """
+
+            if env_ids is not None:
+                raise RuntimeError(
+                    "W43 fixed-horizon evaluation forbids partial auto-reset"
+                )
+            observation, _ = self.env.reset(seed=seed)
+            policy = observation["policy"]
+            neutral_action = torch.zeros(
+                (self.num_envs, 7),
+                dtype=torch.float32,
+                device=policy["eef_pos"].device,
+            )
+            neutral_action[:, -1] = 1.0
+            observation, _, terminated, truncated, _ = self.env.step(neutral_action)
+            if bool(torch.any(terminated)) or bool(torch.any(truncated)):
+                raise RuntimeError("Stack Cube terminated during reset stabilization")
+            self._reset_metrics()
+            return self._wrap_obs(observation), {}
+
         def _make_env_function(self):
             seed = self.seed
             num_envs = self.cfg.init_params.num_envs
@@ -188,10 +217,13 @@ def _install_initial_evaluation_mode() -> None:
         output = Path(os.environ["W43_ATTEMPT_ROOT"]) / "results"
         output.mkdir(parents=True, exist_ok=True)
         receipt = output / "r0-evaluation.json"
+        expected_episodes = int(self.cfg.env.eval.total_num_envs) * int(
+            self.cfg.env.eval.rollout_epoch
+        )
         payload = {
             "schema": "rlinf.w43.initial-evaluation.v1",
             "policy_revision": "r0",
-            "episodes": 96,
+            "episodes": expected_episodes,
             "metrics": metrics,
         }
         temporary = receipt.with_suffix(".json.tmp")

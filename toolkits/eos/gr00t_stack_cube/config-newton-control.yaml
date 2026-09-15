@@ -85,6 +85,7 @@ env:
     total_num_envs: 64
     max_episode_steps: 448
     max_steps_per_rollout_epoch: 448
+    auto_reset: false
     use_fixed_reset_state_ids: true
     seed: 0
     init_params:
@@ -103,7 +104,10 @@ env:
     total_num_envs: 32
     max_episode_steps: 448
     max_steps_per_rollout_epoch: 448
-    auto_reset: true
+    # One fixed 448-action trajectory per reset.  This yields exactly
+    # 32 envs * 3 epochs = 96 episodes and matches the Poiesis W42 r0/r10/r25
+    # evaluation boundary.  Training keeps the original W85 auto_reset=false.
+    auto_reset: false
     ignore_terminations: true
     use_fixed_reset_state_ids: true
     seed: 0

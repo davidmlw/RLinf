@@ -33,3 +33,9 @@ stack, but cannot by itself rank Newton physics against Vulkan or RTX.
 
 Feature reuse, TensorRT, `torch.compile`, async PPO, environment epoch folding,
 and reduced camera cadence are intentionally excluded.
+
+The fixed evaluation disables auto-reset: each of 32 environments executes
+one complete 448-action horizon in each of three epochs.  After every full
+reset, one neutral open-gripper action refreshes OvPhysX/Newton kinematics and
+the attached wrist-camera pose; that compatibility step is excluded from the
+policy trajectory and mirrors the qualified W42 environment contract.
