@@ -194,6 +194,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "-v",
             f"{args.artifacts.resolve()}:/w98-artifacts:ro",
             "-v",
+            f"{args.artifacts.resolve()}:/w96-run/artifacts:ro",
+            "-v",
             f"{nsys_root}:/opt/nvidia/nsight-systems/2024.4.2:ro",
         ),
     )
