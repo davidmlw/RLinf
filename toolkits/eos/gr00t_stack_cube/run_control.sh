@@ -127,7 +127,11 @@ fi
 save_interval="${W43_SAVE_INTERVAL:-10}"
 config_dir=$(dirname "$W43_CONFIG")
 config_name=$(basename "$W43_CONFIG" .yaml)
-entrypoint="$W43_SOURCE_ROOT/examples/embodiment/train_embodied_agent.py"
+if [[ "$W43_MODE" == initial-eval ]]; then
+  entrypoint="$W43_SOURCE_ROOT/evaluations/eval_embodied_agent.py"
+else
+  entrypoint="$W43_SOURCE_ROOT/examples/embodiment/train_embodied_agent.py"
+fi
 
 cd "$W43_SOURCE_ROOT"
 hydra_args=(
@@ -145,9 +149,11 @@ hydra_args=(
   actor.model.model_path="$W43_MODEL_ROOT"
 )
 if [[ "$W43_MODE" == initial-eval ]]; then
-  # RLINF_EXT_MODULE is loaded automatically inside each Worker, but the
-  # initial-evaluation hook changes EmbodiedRunner and therefore must also be
-  # installed in the driver process before the normal entrypoint is executed.
+  # Use RLInf's native eval-only runner: it creates only Rollout and eval Env
+  # workers.  RLINF_EXT_MODULE is loaded automatically inside each Worker, but
+  # the result-receipt hook changes EmbodiedEvalRunner and therefore must also
+  # be installed in the driver before the normal entrypoint is executed.
+  hydra_args+=(runner.only_eval=true)
   "$W43_RUNTIME_PYTHON" -c '
 import runpy
 import sys

@@ -2,6 +2,10 @@ defaults:
   - env/isaaclab_stack_cube@env.train
   - env/isaaclab_stack_cube@env.eval
   - model/gr00t@actor.model
+  # The native evaluation entrypoint has no Actor and therefore constructs
+  # the policy from rollout.model directly.  Keep the complete model contract
+  # in both namespaces; the overrides below intentionally remain identical.
+  - model/gr00t@rollout.model
   - hybrid_engines/fsdp@actor.fsdp_config
   - weight_syncer/patch_syncer@weight_syncer
   - override hydra/job_logging: stdout
@@ -137,6 +141,11 @@ rollout:
   model:
     model_path: /models/RLinf-Gr00t-SFT-Stack-cube
     precision: ${actor.model.precision}
+    add_value_head: true
+    embodiment_tag: isaaclab_franka
+    obs_converter_type: isaaclab_stack_cube
+    num_action_chunks: 16
+    value_head_init_seed: 1234
 
 actor:
   group_name: ActorGroup

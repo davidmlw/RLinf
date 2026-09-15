@@ -69,6 +69,9 @@ def test_w43_config_keeps_w85_algorithm_and_disables_optimizations() -> None:
     assert config["actor"]["global_batch_size"] == 512
     assert config["actor"]["micro_batch_size"] == 32
     assert config["actor"]["model"]["num_action_chunks"] == 16
+    assert config["rollout"]["model"]["num_action_chunks"] == 16
+    assert config["rollout"]["model"]["obs_converter_type"] == "isaaclab_stack_cube"
+    assert config["rollout"]["model"]["embodiment_tag"] == "isaaclab_franka"
     assert config["algorithm"]["update_epoch"] == 3
     assert config["algorithm"]["logprob_type"] == "chunk_level"
     assert config["algorithm"]["reward_type"] == "chunk_level"
@@ -93,7 +96,8 @@ def test_w43_adapter_freezes_the_qualified_newton_camera_contract() -> None:
     assert "from w43_newton_stack_cube import RLINF_TASK_ID" not in extension
     assert "quaternion[:, 3:] < 0" in extension
     assert '"policy_revision": "r0"' in extension
-    assert "self.update_rollout_weights()" in extension
+    assert "EmbodiedEvalRunner" in extension
+    assert "self.update_rollout_weights()" not in extension
     assert "metrics = self.evaluate()" in extension
     assert "self.rollout.set_global_step(0)" in extension
     assert "partial auto-reset" in extension
@@ -110,6 +114,8 @@ def test_w43_shell_launcher_is_syntactically_valid() -> None:
     assert "w43_rlinf_extension.register()" in launcher
     assert "runpy.run_path(entrypoint" in launcher
     assert "val_interval=1" in launcher
+    assert "evaluations/eval_embodied_agent.py" in launcher
+    assert "runner.only_eval=true" in launcher
     subprocess.run(
         ["bash", "-n", str(W43 / "run_control.sh")],
         check=True,

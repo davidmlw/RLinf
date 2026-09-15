@@ -196,24 +196,23 @@ def _create_env_wrapper() -> type:
 
 
 def _install_initial_evaluation_mode() -> None:
-    """Replace the training loop with one native RLInf r0 evaluation.
+    """Capture one native RLInf eval-only r0 evaluation.
 
-    Worker construction, initial Actor-to-Rollout synchronization, EnvWorker
-    evaluation, rollout inference, and metric aggregation remain unchanged.
-    The isolated process exits immediately afterwards, so the evaluation does
-    not perturb the subsequent training-reset distribution.
+    The dedicated evaluation entrypoint constructs only Rollout and eval Env
+    workers.  In particular it does not construct an unused FSDP Actor or a
+    second training environment/renderer per rank.  Rollout inference,
+    EnvWorker evaluation, and metric aggregation remain native RLInf paths.
     """
 
     if os.environ.get("W43_INITIAL_EVAL_ONLY") != "true":
         return
-    from rlinf.runners.embodied_runner import EmbodiedRunner
+    from rlinf.runners.embodied_eval_runner import EmbodiedEvalRunner
 
-    if getattr(EmbodiedRunner.run, "_w43_initial_eval", False):
+    if getattr(EmbodiedEvalRunner.run, "_w43_initial_eval", False):
         return
 
     def run_initial_evaluation(self) -> None:
         self.rollout.set_global_step(0)
-        self.update_rollout_weights()
         metrics = self.evaluate()
         output = Path(os.environ["W43_ATTEMPT_ROOT"]) / "results"
         output.mkdir(parents=True, exist_ok=True)
@@ -237,10 +236,14 @@ def _install_initial_evaluation_mode() -> None:
         temporary.replace(receipt)
         print(f"RLINF_W43_R0_RECEIPT={receipt}", flush=True)
         print(f"RLINF_W43_R0_METRICS={json.dumps(metrics, sort_keys=True)}", flush=True)
-        self._finish_run()
+        self.metric_logger.log(
+            step=0,
+            data={f"eval/{key}": value for key, value in metrics.items()},
+        )
+        self.metric_logger.finish()
 
     run_initial_evaluation._w43_initial_eval = True
-    EmbodiedRunner.run = run_initial_evaluation
+    EmbodiedEvalRunner.run = run_initial_evaluation
 
 
 def register() -> None:
