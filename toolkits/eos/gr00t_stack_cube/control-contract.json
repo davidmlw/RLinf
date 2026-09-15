@@ -52,6 +52,11 @@
     "gae_lambda": 0.95,
     "actor_lr": 0.00001,
     "value_lr": 0.00002,
+    "training_environment_seed": 0,
+    "training_noise_seed": 64101,
+    "evaluation_environment_seed": 42,
+    "evaluation_noise_seed": 864101,
+    "value_head_init_seed": 1234,
     "execution": "sync-lag-0"
   },
   "disabled": [

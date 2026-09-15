@@ -5,6 +5,7 @@ defaults:
   - hybrid_engines/fsdp@actor.fsdp_config
   - weight_syncer/patch_syncer@weight_syncer
   - override hydra/job_logging: stdout
+  - _self_
 
 hydra:
   run:
@@ -110,7 +111,7 @@ env:
     auto_reset: false
     ignore_terminations: true
     use_fixed_reset_state_ids: true
-    seed: 0
+    seed: 42
     init_params:
       id: RLInf-W43-Stack-Cube-Franka-IK-Rel-Visuomotor-Rewarded-v0
       num_envs: null
@@ -132,6 +133,7 @@ rollout:
   backend: huggingface
   enable_offload: true
   pipeline_stage_num: 1
+  seed: 64101
   model:
     model_path: /models/RLinf-Gr00t-SFT-Stack-cube
     precision: ${actor.model.precision}
@@ -149,6 +151,7 @@ actor:
     embodiment_tag: isaaclab_franka
     obs_converter_type: isaaclab_stack_cube
     num_action_chunks: 16
+    value_head_init_seed: 1234
   optim:
     lr: 1.0e-5
     value_lr: 2.0e-5

@@ -212,6 +212,7 @@ def _install_initial_evaluation_mode() -> None:
         return
 
     def run_initial_evaluation(self) -> None:
+        self.rollout.set_global_step(0)
         self.update_rollout_weights()
         metrics = self.evaluate()
         output = Path(os.environ["W43_ATTEMPT_ROOT"]) / "results"
@@ -224,6 +225,8 @@ def _install_initial_evaluation_mode() -> None:
             "schema": "rlinf.w43.initial-evaluation.v1",
             "policy_revision": "r0",
             "episodes": expected_episodes,
+            "environment_seed": int(self.cfg.env.eval.seed),
+            "noise_seed": int(self.cfg.rollout.seed),
             "metrics": metrics,
         }
         temporary = receipt.with_suffix(".json.tmp")

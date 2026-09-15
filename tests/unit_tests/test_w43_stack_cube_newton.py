@@ -64,6 +64,8 @@ def test_w43_config_keeps_w85_algorithm_and_disables_optimizations() -> None:
     assert config["env"]["eval"]["auto_reset"] is False
     assert config["env"]["eval"]["total_num_envs"] == 32
     assert config["env"]["eval"]["rollout_epoch"] == 3
+    assert config["env"]["train"]["seed"] == 0
+    assert config["env"]["eval"]["seed"] == 42
     assert config["actor"]["global_batch_size"] == 512
     assert config["actor"]["micro_batch_size"] == 32
     assert config["actor"]["model"]["num_action_chunks"] == 16
@@ -93,11 +95,16 @@ def test_w43_adapter_freezes_the_qualified_newton_camera_contract() -> None:
     assert '"policy_revision": "r0"' in extension
     assert "self.update_rollout_weights()" in extension
     assert "metrics = self.evaluate()" in extension
+    assert "self.rollout.set_global_step(0)" in extension
     assert "partial auto-reset" in extension
     assert "neutral_action[:, -1] = 1.0" in extension
 
 
 def test_w43_shell_launcher_is_syntactically_valid() -> None:
+    launcher = (W43 / "run_control.sh").read_text()
+    assert "rollout_seed=64101" in launcher
+    assert "rollout_seed=864101" in launcher
+    assert "actor.model.value_head_init_seed=1234" in launcher
     subprocess.run(
         ["bash", "-n", str(W43 / "run_control.sh")],
         check=True,

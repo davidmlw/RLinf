@@ -94,6 +94,9 @@ export PRIVACY_CONSENT=Y
 
 if [[ "$W43_MODE" == initial-eval ]]; then
   export W43_INITIAL_EVAL_ONLY=true
+  rollout_seed=864101
+else
+  rollout_seed=64101
 fi
 
 {
@@ -122,6 +125,8 @@ cd "$W43_SOURCE_ROOT"
   runner.max_steps="$max_steps" \
   runner.val_check_interval="$val_interval" \
   runner.save_interval="$save_interval" \
+  rollout.seed="$rollout_seed" \
+  actor.model.value_head_init_seed=1234 \
   runner.logger.log_path="$W43_ATTEMPT_ROOT/output" \
   env.train.video_cfg.video_base_dir="$W43_ATTEMPT_ROOT/output/video/train" \
   env.eval.video_cfg.video_base_dir="$W43_ATTEMPT_ROOT/output/video/eval" \

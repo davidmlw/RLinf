@@ -39,3 +39,5 @@ one complete 448-action horizon in each of three epochs.  After every full
 reset, one neutral open-gripper action refreshes OvPhysX/Newton kinematics and
 the attached wrist-camera pose; that compatibility step is excluded from the
 policy trajectory and mirrors the qualified W42 environment contract.
+Training/evaluation environment seeds are `0/42`; their rollout-noise seeds
+are `64101/864101`, and the value head is initialized with seed `1234`.
