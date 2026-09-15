@@ -157,3 +157,9 @@ def test_summary_selects_two_part_three_backend_headline() -> None:
         for arm in arms:
             rows.append({"partition": partition, "arm": arm, "stage": stage})
     assert summary._headline(rows) == rows
+
+
+def test_real_revision_extractor_freezes_dit_keyspace() -> None:
+    extractor = _load("../../eos/gr00t_trocar/tensorrt/extract_action_head_revision")
+    assert extractor.PREFIX == "action_head.model."
+    assert extractor.EXPECTED_TENSORS == 456
