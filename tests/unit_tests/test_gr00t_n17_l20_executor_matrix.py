@@ -68,6 +68,7 @@ def test_launcher_uses_one_l20_and_w96_runtime() -> None:
     command = launcher._agent_command("abc123")
     assert "CUDA_VISIBLE_DEVICES" not in command
     assert "/w96-overlay:/w96-trt-runtime" in command
+    assert "/workspace/gr00t-n17/scripts/deployment" in command
     assert "--warmup 10 --measured 30" in command
     assert "--rlinf-revision abc123" in command
     args = launcher._extra_docker_args(
