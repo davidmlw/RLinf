@@ -43,7 +43,8 @@ mkdir -p \
 
 # Ray needs short Unix socket paths. This attempt-owned node-local directory is
 # the only W43 state outside the shared run root and is removed on every exit.
-short_tmp="/tmp/kiln/${SLURM_JOB_ID:-manual}/$(basename "$W43_ATTEMPT_ROOT")"
+allocation_id="${W43_ALLOCATION_ID:-${SLURM_JOB_ID:-manual}}"
+short_tmp="/tmp/kiln/$allocation_id/$(basename "$W43_ATTEMPT_ROOT")"
 mkdir -p "$short_tmp"
 sampler_pid=
 cleanup() {
@@ -53,7 +54,9 @@ cleanup() {
   if [[ -n "$sampler_pid" ]]; then
     wait "$sampler_pid" 2>/dev/null
   fi
-  "$W43_RUNTIME_PYTHON" -m ray stop --force \
+  "$W43_RUNTIME_PYTHON" -c \
+    'import sys; from ray.scripts.scripts import main; sys.argv[0] = "ray"; raise SystemExit(main())' \
+    stop --force \
     >"$W43_ATTEMPT_ROOT/control/ray-stop.out" 2>&1
   rm -rf "$short_tmp"
   exit "$rc"
