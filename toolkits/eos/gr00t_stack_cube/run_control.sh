@@ -43,7 +43,7 @@ mkdir -p \
 
 # Ray needs short Unix socket paths. This attempt-owned node-local directory is
 # the only W43 state outside the shared run root and is removed on every exit.
-short_tmp="/workspace/w43-${SLURM_JOB_ID:-manual}-$(basename "$W43_ATTEMPT_ROOT")"
+short_tmp="/tmp/kiln/${SLURM_JOB_ID:-manual}/$(basename "$W43_ATTEMPT_ROOT")"
 mkdir -p "$short_tmp"
 sampler_pid=
 cleanup() {
