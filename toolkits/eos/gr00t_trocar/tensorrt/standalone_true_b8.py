@@ -1279,6 +1279,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "shadow_eager": False,
             },
             trt_backbone_phase=w84_trt_backbone_phase,
+            profile_once=args.profile_once,
         )
         if executor_matrix["status"] != "passed":
             raise RuntimeError(
@@ -1466,7 +1467,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     output.write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    if status != "passed":
+    if status != "passed" and not args.allow_systems_only:
         raise RuntimeError(
             "standalone true-B8 gates failed: "
             f"legacy={gates}, common_boundary={common_gates}"
@@ -1514,6 +1515,8 @@ def main() -> int:
     parser.add_argument(
         "--refittable-dit-runtime-distribution", default="tensorrt-cu12"
     )
+    parser.add_argument("--profile-once", action="store_true")
+    parser.add_argument("--allow-systems-only", action="store_true")
     args = parser.parse_args()
     try:
         receipt = run(args)

@@ -128,3 +128,32 @@ def test_refittable_compute_capability_comes_from_receipt(tmp_path: Path) -> Non
         encoding="ascii",
     )
     assert matrix._refittable_compute_capability(receipt) == [8, 9]
+
+
+def test_nsys_command_uses_narrow_profiler_api_window() -> None:
+    launcher = _load("l20_executor_matrix_nsys_launcher")
+    command = launcher._profile_command(
+        {
+            "files": {
+                "dit_receipt": {"sha256": "a" * 64},
+                "parameter_map": {"sha256": "b" * 64},
+            },
+            "source_digest": "c" * 64,
+        },
+        "d" * 40,
+    )
+    assert "--capture-range=cudaProfilerApi" in command
+    assert "--profile-once --allow-systems-only" in command
+    assert "RLINF_W98_NVTX=1" in command
+
+
+def test_summary_selects_two_part_three_backend_headline() -> None:
+    summary = _load("../../eos/gr00t_trocar/tensorrt/summarize_l20_executor_matrix")
+    rows = []
+    for partition, arms, stage in (
+        ("frozen_backbone", ("eager_backbone", "pt2_backbone"), "backbone_ms"),
+        ("pure_dit", ("eager", "pt2"), "dit_ms"),
+    ):
+        for arm in arms:
+            rows.append({"partition": partition, "arm": arm, "stage": stage})
+    assert summary._headline(rows) == rows

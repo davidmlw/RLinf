@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import os
 from typing import Any
 
 
@@ -187,19 +189,32 @@ def cuda_event_call(
     backbone_done = torch.cuda.Event(enable_timing=True)
     action_done = torch.cuda.Event(enable_timing=True)
     backbone_inputs, action_inputs = prepared
+    annotate = os.environ.get("RLINF_W98_NVTX") == "1"
+    backbone_range = (
+        torch.cuda.nvtx.range("W98/stage/backbone")
+        if annotate
+        else contextlib.nullcontext()
+    )
+    action_range = (
+        torch.cuda.nvtx.range("W98/stage/action_head")
+        if annotate
+        else contextlib.nullcontext()
+    )
 
     with torch.inference_mode():
         start.record()
-        backbone_output = model.backbone(backbone_inputs)
+        with backbone_range:
+            backbone_output = model.backbone(backbone_inputs)
         backbone_done.record()
-        actions = explicit_head(
-            backbone_output["backbone_features"],
-            backbone_output["backbone_attention_mask"],
-            backbone_output["image_mask"],
-            action_inputs["state"],
-            action_inputs["embodiment_id"],
-            initial_actions,
-        )
+        with action_range:
+            actions = explicit_head(
+                backbone_output["backbone_features"],
+                backbone_output["backbone_attention_mask"],
+                backbone_output["image_mask"],
+                action_inputs["state"],
+                action_inputs["embodiment_id"],
+                initial_actions,
+            )
         action_done.record()
     action_done.synchronize()
     return actions, {
