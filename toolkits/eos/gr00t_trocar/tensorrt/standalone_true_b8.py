@@ -207,6 +207,21 @@ def _statistics(values: list[float]) -> dict[str, Any]:
     }
 
 
+def _refittable_compute_capability(receipt_path: Path) -> list[int]:
+    receipt = _load_json(
+        receipt_path,
+        "rlinf.gr00t-n1d7-trocar-true-b8-refittable-dit-engine.v1",
+    )
+    capability = receipt.get("runtime", {}).get("compute_capability")
+    if (
+        not isinstance(capability, list)
+        or len(capability) != 2
+        or not all(isinstance(value, int) for value in capability)
+    ):
+        raise RuntimeError("refittable DiT receipt omits a valid compute capability")
+    return capability
+
+
 def _process_rss_bytes() -> int:
     for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
         if line.startswith("VmRSS:"):
@@ -1216,6 +1231,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if all(value is not None for value in refittable_arguments):
         from executor_matrix_b8 import run_executor_matrix  # noqa: PLC0415
 
+        refittable_compute_capability = _refittable_compute_capability(
+            args.refittable_dit_receipt
+        )
+
         def w84_trt_backbone_phase(name: str, expected: int, call: Any) -> Any:
             return _engine_phase(
                 engine_phases,
@@ -1249,7 +1268,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "revision": 0,
                 "runtime_version": args.refittable_dit_runtime_version,
                 "runtime_distribution": args.refittable_dit_runtime_distribution,
-                "compute_capability": [9, 0],
+                "compute_capability": refittable_compute_capability,
                 "online_refit": True,
                 "lineage_receipt_mode": "gpu_transform_validation",
                 "probe_each_revision": True,

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -110,3 +111,20 @@ def test_source_identity_accepts_external_attestation(tmp_path: Path) -> None:
     result = identity.resolve_source_revision(tmp_path, "51d4c89")
     assert result["revision"] == "51d4c89"
     assert result["authority"] == "external_tree_attestation"
+
+
+def test_refittable_compute_capability_comes_from_receipt(tmp_path: Path) -> None:
+    sys.path.insert(0, str(ROOT / "toolkits/eos/gr00t_trocar/tensorrt"))
+    matrix = _load("../../eos/gr00t_trocar/tensorrt/standalone_true_b8")
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema": ("rlinf.gr00t-n1d7-trocar-true-b8-refittable-dit-engine.v1"),
+                "status": "passed",
+                "runtime": {"compute_capability": [8, 9]},
+            }
+        ),
+        encoding="ascii",
+    )
+    assert matrix._refittable_compute_capability(receipt) == [8, 9]
