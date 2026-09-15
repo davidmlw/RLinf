@@ -3,9 +3,10 @@
 This directory supplies the missing RLInf/EOS/OvPhysX+NewtonWarpRenderer arm
 for Kiln W43. It is an environment-domain experiment, not a performance arm.
 
-The source baseline is RLInf W73 because it is a linear descendant of the W85
-revision and already qualifies the exact EOS Python/Torch/IsaacLab/GR00T
-runtime. `w43_newton_stack_cube.py` is a standalone RLInf environment adapter
+The source baseline is RLInf `0f9ea98c` plus the opt-in deterministic-seed
+commit `81857b28`; no Trocar source or diagnostics are carried into this
+branch. W43 reuses only W73's separately qualified EOS Python/Torch/IsaacLab/
+GR00T runtime artifact. `w43_newton_stack_cube.py` is a standalone RLInf environment adapter
 derived from the qualified Poiesis W42 task; it imports no Poiesis runtime.
 `w43_rlinf_extension.py` registers only that task and leaves native RLInf
 GR00T conversion, rollout, FSDP PPO, weight sync, and metrics in authority.

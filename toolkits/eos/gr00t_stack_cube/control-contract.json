@@ -3,8 +3,10 @@
   "purpose": "Complete the RLInf/EOS/Newton quadrant without changing the W85 model or PPO contract",
   "source": {
     "rlinf_w85_revision": "6d0db56bf26f972cd27fa29535f5eb939e80e5bf",
-    "rlinf_newton_base_revision": "b3063697f202b6c653dc369423c49e393f0e2775",
-    "isaaclab_revision": "2e44ddb2e19536579140496023b5ccb060bc4152",
+    "rlinf_base_revision": "0f9ea98c7a6d9e3ade24e8f4846c64d3b135dbcc",
+    "deterministic_seed_revision": "81857b28",
+    "w85_isaaclab_revision": "91fbc18d22f26cc3bbc9caf73b05e090915b604c",
+    "w43_isaaclab_revision": "2e44ddb2e19536579140496023b5ccb060bc4152",
     "isaac_groot_revision": "4af2b622892f7dcb5aae5a3fb70bcb02dc217b96",
     "checkpoint": "RLinf/RLinf-Gr00t-SFT-Stack-cube",
     "checkpoint_revision": "911e6b13f68ff97ac959a131dd643709ff89f042",
@@ -12,11 +14,15 @@
     "poiesis_w42_task_sha256": "fc27222b1be43583bed8918249dce0fdef8a2bb8d8f64b756a21cfc7806c8845"
   },
   "w85_oracle": {
-    "config_sha256": "6aeb01019aed3f615dc53061699bec6860d0dfd5a21646b4acf9edd0f08126fc",
+    "resolved_config_sha256": "6a139d0e4b9ebb441fdc8791f6883e83c875269dd2f254113e6eed263a07810b",
+    "input_ppo_config_sha256": "6aeb01019aed3f615dc53061699bec6860d0dfd5a21646b4acf9edd0f08126fc",
     "env_config_sha256": "08b6260aaa512bf4b30ef727198f35d69a5023574a413b3cbfb900adf47ffa7e",
     "first_training_rollout_success_once": 0.625,
     "first_step_seconds": 152.669,
-    "backend": "IsaacLab 2.3 + Isaac Sim 5.1 + PhysX + RTX/Vulkan on L20"
+    "completed_outer_steps": 399,
+    "step_399_training_success_once": 0.8125,
+    "independent_evaluation": "unavailable",
+    "backend": "IsaacLab 0.48.8 metadata + PhysX + RTX/Vulkan on L20"
   },
   "w42_oracle": {
     "fixed_evaluation_episodes": 96,
