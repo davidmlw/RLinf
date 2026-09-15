@@ -21,6 +21,7 @@ RLInf W85 implementations.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import sys
@@ -156,35 +157,51 @@ def _create_env_wrapper() -> type:
             num_envs = self.cfg.init_params.num_envs
 
             def make_env_isaaclab():
-                import gymnasium as gym
-                from isaaclab_tasks.utils import launch_simulation
-                from w43_newton_stack_cube import GYM_TASK_ID, build_env_cfg
+                # OvPhysX/USD initialization is not safe when eight spawned
+                # simulator processes concurrently materialize the same native
+                # cache.  EOS witnessed intermittent SIGBUS exits at that
+                # boundary.  Give every hardware rank a node-local cache and
+                # serialize construction only; stepping remains fully parallel.
+                rank = os.environ.get("RANK", "unknown")
+                scratch_root = Path(os.environ["TMPDIR"])
+                rank_home = scratch_root / "native-home" / f"rank-{rank}"
+                rank_cache = rank_home / ".cache"
+                rank_cache.mkdir(parents=True, exist_ok=True)
+                os.environ["HOME"] = str(rank_home)
+                os.environ["XDG_CACHE_HOME"] = str(rank_cache)
 
-                source_root = Path(os.environ["W43_ISAACLAB_SOURCE_ROOT"])
-                _prepend_isaaclab_sources(source_root)
-                env_cfg = build_env_cfg(seed=seed, num_envs=num_envs)
-                context = launch_simulation(
-                    env_cfg,
-                    {"visualizer": None, "visualizer_explicit": True},
-                )
-                context.__enter__()
+                init_lock_path = scratch_root / "ovphysx-native-init.lock"
+                with init_lock_path.open("a", encoding="utf-8") as init_lock:
+                    fcntl.flock(init_lock, fcntl.LOCK_EX)
+                    import gymnasium as gym
+                    from isaaclab_tasks.utils import launch_simulation
+                    from w43_newton_stack_cube import GYM_TASK_ID, build_env_cfg
 
-                class SimulationContextOwner:
-                    def __init__(self, simulation_context):
-                        self._simulation_context = simulation_context
-                        self._closed = False
+                    source_root = Path(os.environ["W43_ISAACLAB_SOURCE_ROOT"])
+                    _prepend_isaaclab_sources(source_root)
+                    env_cfg = build_env_cfg(seed=seed, num_envs=num_envs)
+                    context = launch_simulation(
+                        env_cfg,
+                        {"visualizer": None, "visualizer_explicit": True},
+                    )
+                    context.__enter__()
 
-                    def close(self) -> None:
-                        if not self._closed:
-                            self._closed = True
-                            self._simulation_context.__exit__(None, None, None)
+                    class SimulationContextOwner:
+                        def __init__(self, simulation_context):
+                            self._simulation_context = simulation_context
+                            self._closed = False
 
-                owner = SimulationContextOwner(context)
-                try:
-                    env = gym.make(GYM_TASK_ID, cfg=env_cfg).unwrapped
-                except Exception:
-                    owner.close()
-                    raise
+                        def close(self) -> None:
+                            if not self._closed:
+                                self._closed = True
+                                self._simulation_context.__exit__(None, None, None)
+
+                    owner = SimulationContextOwner(context)
+                    try:
+                        env = gym.make(GYM_TASK_ID, cfg=env_cfg).unwrapped
+                    except Exception:
+                        owner.close()
+                        raise
                 return env, owner
 
             return make_env_isaaclab
