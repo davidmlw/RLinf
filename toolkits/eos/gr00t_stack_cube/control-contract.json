@@ -1,0 +1,70 @@
+{
+  "schema": "rlinf.w43.newton-vulkan-control.v1",
+  "purpose": "Complete the RLInf/EOS/Newton quadrant without changing the W85 model or PPO contract",
+  "source": {
+    "rlinf_w85_revision": "6d0db56bf26f972cd27fa29535f5eb939e80e5bf",
+    "rlinf_newton_base_revision": "b3063697f202b6c653dc369423c49e393f0e2775",
+    "isaaclab_revision": "2e44ddb2e19536579140496023b5ccb060bc4152",
+    "isaac_groot_revision": "4af2b622892f7dcb5aae5a3fb70bcb02dc217b96",
+    "checkpoint": "RLinf/RLinf-Gr00t-SFT-Stack-cube",
+    "checkpoint_revision": "911e6b13f68ff97ac959a131dd643709ff89f042",
+    "poiesis_w42_revision": "b846e4ebd38f95e87987142692c4264479ab1bd6",
+    "poiesis_w42_task_sha256": "fc27222b1be43583bed8918249dce0fdef8a2bb8d8f64b756a21cfc7806c8845"
+  },
+  "w85_oracle": {
+    "config_sha256": "6aeb01019aed3f615dc53061699bec6860d0dfd5a21646b4acf9edd0f08126fc",
+    "env_config_sha256": "08b6260aaa512bf4b30ef727198f35d69a5023574a413b3cbfb900adf47ffa7e",
+    "first_training_rollout_success_once": 0.625,
+    "first_step_seconds": 152.669,
+    "backend": "IsaacLab 2.3 + Isaac Sim 5.1 + PhysX + RTX/Vulkan on L20"
+  },
+  "w42_oracle": {
+    "fixed_evaluation_episodes": 96,
+    "r0_successes": 2,
+    "r10_successes": 2,
+    "r25_successes": 2,
+    "backend": "IsaacLab 3 + OvPhysX 0.4.13 + NewtonWarpRenderer on EOS H100"
+  },
+  "workload": {
+    "global_environments": 64,
+    "environment_workers": 8,
+    "environments_per_worker": 8,
+    "rollout_epochs": 2,
+    "physical_horizon_per_epoch": 448,
+    "action_chunk": 16,
+    "physical_actions_per_outer_step": 57344,
+    "policy_decisions_per_outer_step": 3584,
+    "global_batch": 512,
+    "micro_batch": 32,
+    "ppo_epochs": 3,
+    "optimizer_updates_per_outer_step": 21,
+    "fixed_evaluation_environments": 32,
+    "fixed_evaluation_rollout_epochs": 3,
+    "fixed_evaluation_episodes": 96
+  },
+  "algorithm": {
+    "model": "GR00T N1.5",
+    "action_dim": 7,
+    "reward_type": "chunk_level",
+    "logprob_type": "chunk_level",
+    "entropy_type": "chunk_level",
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "actor_lr": 0.00001,
+    "value_lr": 0.00002,
+    "execution": "sync-lag-0"
+  },
+  "disabled": [
+    "rollout_feature_reuse",
+    "tensorrt",
+    "torch_compile",
+    "async_ppo",
+    "environment_epoch_folding",
+    "reduced_camera_cadence"
+  ],
+  "decision": {
+    "low_signal": "If RLInf EOS/Newton is near W42 at r0, attribute the primary gap to the EOS Newton environment stack, not Poiesis.",
+    "high_signal": "If RLInf EOS/Newton is near W85 at r0, redirect to Poiesis task/adapter/runtime semantics.",
+    "claim_limit": "This cross-hardware matrix cannot separately rank Newton physics against Vulkan/RTX rendering."
+  }
+}
