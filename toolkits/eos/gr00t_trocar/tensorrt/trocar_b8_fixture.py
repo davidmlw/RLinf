@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -196,12 +195,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     model_view_receipt = model / "rlinf-model-view.json"
     if not model_view_receipt.is_file():
         raise RuntimeError("model view omits rlinf-model-view.json")
+    from source_identity import resolve_source_revision  # noqa: PLC0415
+
+    source_identity = resolve_source_revision(source, args.expected_source_revision)
     receipt = {
         "schema": "rlinf.gr00t-n1d7-trocar-true-b8-fixture.v1",
         "status": "passed",
-        "source_revision": subprocess.check_output(
-            ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
-        ).strip(),
+        "source_revision": source_identity["revision"],
+        "source_revision_authority": source_identity,
         "model_view": str(model),
         "model_view_receipt_sha256": _sha256(model_view_receipt),
         "metadata": str(metadata_path),
@@ -233,6 +234,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--expected-source-revision")
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--metadata", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

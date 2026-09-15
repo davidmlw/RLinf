@@ -44,6 +44,7 @@ def test_agent_freezes_ordered_build_and_measurement_stages(tmp_path: Path) -> N
         output=tmp_path,
         seed=47,
         workspace_mib=8192,
+        rlinf_revision="abc123",
     )
     stages = agent.build_stage_commands(args)
     assert [name for name, _ in stages] == [
@@ -64,10 +65,11 @@ def test_agent_freezes_ordered_build_and_measurement_stages(tmp_path: Path) -> N
 
 def test_launcher_uses_one_l20_and_w96_runtime() -> None:
     launcher = _load("l20_executor_matrix_launcher")
-    command = launcher._agent_command()
+    command = launcher._agent_command("abc123")
     assert "CUDA_VISIBLE_DEVICES" not in command
     assert "/w96-overlay:/w96-trt-runtime" in command
     assert "--warmup 10 --measured 30" in command
+    assert "--rlinf-revision abc123" in command
     args = launcher._extra_docker_args(
         {"inputs": {"trocar_metadata": "/authority/trocar.json"}},
         Path("/source"),
@@ -100,3 +102,10 @@ def test_launcher_rejects_non_w98_result_path(tmp_path: Path) -> None:
         assert "results/W98" in str(error)
     else:
         raise AssertionError("non-W98 result path was accepted")
+
+
+def test_source_identity_accepts_external_attestation(tmp_path: Path) -> None:
+    identity = _load("../../eos/gr00t_trocar/tensorrt/source_identity")
+    result = identity.resolve_source_revision(tmp_path, "51d4c89")
+    assert result["revision"] == "51d4c89"
+    assert result["authority"] == "external_tree_attestation"

@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -245,12 +244,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if actual != expected:
         raise RuntimeError(f"unexpected ONNX set: {actual} != {expected}")
 
+    from source_identity import resolve_source_revision  # noqa: PLC0415
+
+    source_identity = resolve_source_revision(source, args.expected_source_revision)
     receipt = {
         "schema": "rlinf.gr00t-n1d7-trocar-true-b8-onnx.v1",
         "status": "passed",
-        "source_revision": subprocess.check_output(
-            ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
-        ).strip(),
+        "source_revision": source_identity["revision"],
+        "source_revision_authority": source_identity,
         "model_view": str(model),
         "collated": str(collated_path),
         "batch_size": BATCH_SIZE,
@@ -270,6 +271,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--expected-source-revision")
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--collated", type=Path, required=True)
     parser.add_argument("--fixture-receipt", type=Path, required=True)

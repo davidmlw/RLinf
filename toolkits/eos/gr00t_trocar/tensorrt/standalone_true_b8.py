@@ -22,7 +22,6 @@ import hashlib
 import json
 import math
 import statistics
-import subprocess
 import sys
 import threading
 import time
@@ -74,6 +73,8 @@ def _verified_provenance(
     export_path: Path,
     engine_path: Path,
     engines: Path,
+    expected_source_revision: str | None,
+    rlinf_revision: str,
 ) -> dict[str, Any]:
     fixture = _load_json(fixture_path, "rlinf.gr00t-n1d7-trocar-true-b8-fixture.v1")
     export = _load_json(export_path, "rlinf.gr00t-n1d7-trocar-true-b8-onnx.v1")
@@ -157,9 +158,10 @@ def _verified_provenance(
         engine["export_metadata_sha256"],
         "runtime export metadata",
     )
-    source_revision = subprocess.check_output(
-        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
-    ).strip()
+    from source_identity import resolve_source_revision  # noqa: PLC0415
+
+    source_identity = resolve_source_revision(source, expected_source_revision)
+    source_revision = source_identity["revision"]
     if (
         source_revision != fixture["source_revision"]
         or source_revision != export["source_revision"]
@@ -168,9 +170,8 @@ def _verified_provenance(
     return {
         "status": "passed",
         "isaac_gr00t_revision": source_revision,
-        "rlinf_revision": subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True
-        ).strip(),
+        "isaac_gr00t_revision_authority": source_identity,
+        "rlinf_revision": rlinf_revision,
         "artifacts": artifacts,
         "export_files": export_files,
         "engine_files": engine_files,
@@ -636,6 +637,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         export_receipt,
         engine_receipt,
         engines,
+        args.expected_source_revision,
+        args.rlinf_revision,
     )
 
     collated = torch.load(collated_path, map_location="cpu", weights_only=False)
@@ -1455,6 +1458,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--expected-source-revision")
+    parser.add_argument("--rlinf-revision", required=True)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--engines", type=Path, required=True)
     parser.add_argument("--collated", type=Path, required=True)

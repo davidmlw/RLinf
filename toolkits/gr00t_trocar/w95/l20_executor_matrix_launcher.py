@@ -84,7 +84,7 @@ def _extra_docker_args(site: dict[str, Any], source: Path) -> tuple[str, ...]:
     )
 
 
-def _agent_command() -> str:
+def _agent_command(revision: str) -> str:
     return (
         'set -euo pipefail; export LD_LIBRARY_PATH="/w96-trt-runtime/'
         'tensorrt_libs:${LD_LIBRARY_PATH:-}"; '
@@ -93,6 +93,7 @@ def _agent_command() -> str:
         "exec /isaac-sim/kit/python/bin/python3 "
         "/workspace/w98-src/toolkits/gr00t_trocar/w95/l20_executor_matrix_agent.py "
         "--source /workspace/w98-src --gr00t-source /workspace/gr00t-n17 "
+        f"--rlinf-revision {revision} "
         "--model /models/GR00T-N1.7-3B "
         "--backbone /w96-model-inputs/Cosmos-Reason2-2B "
         "--metadata /w98-inputs/trocar/metadata.json "
@@ -148,7 +149,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         site,
         run_root,
         "w98-matrix",
-        _agent_command(),
+        _agent_command(args.revision),
         extra_args=_extra_docker_args(site, args.source.resolve()),
     )
     result_path = run_root / "artifacts/result.json"
@@ -183,7 +184,7 @@ def main() -> int:
                     "revision": args.revision,
                     "site": str(args.site),
                     "run_root": str(args.run_root),
-                    "container_command": _agent_command(),
+                    "container_command": _agent_command(args.revision),
                     "container_extra_args": _extra_docker_args(
                         runtime._load(args.site), args.source
                     ),
