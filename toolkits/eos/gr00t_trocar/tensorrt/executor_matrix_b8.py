@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import math
+import os
 import statistics
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -36,8 +37,9 @@ EXPECTED_VISION_SEQUENCE_LENGTH = 256
 class CudaTimedForward:
     """Collect unsynchronized CUDA-event samples for one DiT forward."""
 
-    def __init__(self, forward: Callable[..., Any]) -> None:
+    def __init__(self, forward: Callable[..., Any], label: str) -> None:
         self.forward = forward
+        self.label = label
         self.events: list[tuple[Any, Any]] = []
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
@@ -47,7 +49,13 @@ class CudaTimedForward:
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         start.record(stream)
-        output = self.forward(*args, **kwargs)
+        if os.environ.get("RLINF_W98_NVTX") == "1":
+            torch.cuda.nvtx.range_push(f"W98/pure_dit/{self.label}")
+        try:
+            output = self.forward(*args, **kwargs)
+        finally:
+            if os.environ.get("RLINF_W98_NVTX") == "1":
+                torch.cuda.nvtx.range_pop()
         end.record(stream)
         self.events.append((start, end))
         return output
@@ -426,6 +434,34 @@ def _make_call(
     return call
 
 
+def _profile_once(partitions: Mapping[str, Mapping[str, StageCall]]) -> dict[str, Any]:
+    import torch
+
+    cudart = torch.cuda.cudart()
+    torch.cuda.synchronize()
+    start_status = int(cudart.cudaProfilerStart())
+    if start_status != 0:
+        raise RuntimeError(f"cudaProfilerStart failed with status {start_status}")
+    records = []
+    try:
+        for partition, arms in partitions.items():
+            for arm, call in arms.items():
+                torch.cuda.nvtx.range_push(f"W98/{partition}/{arm}")
+                try:
+                    _output, timing = call()
+                finally:
+                    torch.cuda.nvtx.range_pop()
+                records.append(
+                    {"partition": partition, "arm": arm, "timing_ms": timing}
+                )
+    finally:
+        torch.cuda.synchronize()
+        stop_status = int(cudart.cudaProfilerStop())
+    if stop_status != 0:
+        raise RuntimeError(f"cudaProfilerStop failed with status {stop_status}")
+    return {"status": "passed", "start_status": start_status, "records": records}
+
+
 def run_executor_matrix(
     *,
     eager_policy: Any,
@@ -442,6 +478,7 @@ def run_executor_matrix(
     pt2_backbone_unavailable_reason: str | None,
     refittable_dit_config: Mapping[str, Any],
     trt_backbone_phase: TensorRTPhase,
+    profile_once: bool = False,
 ) -> dict[str, Any]:
     """Run the W84 Backbone, Action Head, and diagonal executor matrices."""
 
@@ -596,9 +633,9 @@ def run_executor_matrix(
             backbone_forward=trt_backbone_forward,
             action_forward=trt_dit,
         )
-        eager_dit_timer = CudaTimedForward(original_trt_action_forward)
-        pt2_dit_timer = CudaTimedForward(compiled_trt_action_forward)
-        trt_dit_timer = CudaTimedForward(trt_dit)
+        eager_dit_timer = CudaTimedForward(original_trt_action_forward, "eager")
+        pt2_dit_timer = CudaTimedForward(compiled_trt_action_forward, "pt2")
+        trt_dit_timer = CudaTimedForward(trt_dit, "refittable_tensorrt")
         trt_backbone_timed_eager_head = _make_call(
             trt_backbone_policy,
             trt_prepared,
@@ -648,6 +685,20 @@ def run_executor_matrix(
                 initial_actions,
                 backbone_forward=compiled_backbone_forward,
                 action_forward=compiled_eager_action_forward,
+            )
+        if profile_once:
+            lifecycle["profile_once"] = _profile_once(
+                {
+                    "frozen_backbone": backbone_arms,
+                    "refittable_action_head": {
+                        "eager_action_head": trt_backbone_timed_eager_head,
+                        "pt2_action_head": trt_backbone_timed_pt2_head,
+                        "refittable_tensorrt_action_head": (
+                            trt_backbone_timed_refittable_head
+                        ),
+                    },
+                    "whole_model_diagonal": diagonal_arms,
+                }
             )
         backbone_matrix = trt_backbone_phase(
             "w84_backbone_matrix",

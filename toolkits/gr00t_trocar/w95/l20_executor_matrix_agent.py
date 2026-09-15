@@ -294,6 +294,7 @@ def _matrix_command(args: argparse.Namespace, source_digest: str) -> list[str]:
         "max-autotune",
         "--output",
         str(args.output / "executor-matrix.json"),
+        "--allow-systems-only",
     ]
 
 
