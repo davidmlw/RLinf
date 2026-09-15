@@ -105,6 +105,11 @@ def test_w43_shell_launcher_is_syntactically_valid() -> None:
     assert "rollout_seed=64101" in launcher
     assert "rollout_seed=864101" in launcher
     assert "actor.model.value_head_init_seed=1234" in launcher
+    assert 'short_tmp="/tmp/kiln/$allocation_id/' in launcher
+    assert "from ray.scripts.scripts import main" in launcher
+    assert "w43_rlinf_extension.register()" in launcher
+    assert "runpy.run_path(entrypoint" in launcher
+    assert "val_interval=1" in launcher
     subprocess.run(
         ["bash", "-n", str(W43 / "run_control.sh")],
         check=True,

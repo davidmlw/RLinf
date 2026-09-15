@@ -116,22 +116,48 @@ fi
 sampler_pid=$!
 
 max_steps="${W43_MAX_STEPS:-1}"
-val_interval="${W43_VAL_CHECK_INTERVAL:--1}"
+if [[ "$W43_MODE" == initial-eval ]]; then
+  # Worker construction only enables the eval path when validation is active.
+  # The driver extension below replaces the training loop before it can use
+  # this interval.
+  val_interval=1
+else
+  val_interval="${W43_VAL_CHECK_INTERVAL:--1}"
+fi
 save_interval="${W43_SAVE_INTERVAL:-10}"
 config_dir=$(dirname "$W43_CONFIG")
 config_name=$(basename "$W43_CONFIG" .yaml)
+entrypoint="$W43_SOURCE_ROOT/examples/embodiment/train_embodied_agent.py"
 
 cd "$W43_SOURCE_ROOT"
-"$W43_RUNTIME_PYTHON" examples/embodiment/train_embodied_agent.py \
-  --config-path "$config_dir" \
-  --config-name "$config_name" \
-  runner.max_steps="$max_steps" \
-  runner.val_check_interval="$val_interval" \
-  runner.save_interval="$save_interval" \
-  rollout.seed="$rollout_seed" \
-  actor.model.value_head_init_seed=1234 \
-  runner.logger.log_path="$W43_ATTEMPT_ROOT/output" \
-  env.train.video_cfg.video_base_dir="$W43_ATTEMPT_ROOT/output/video/train" \
-  env.eval.video_cfg.video_base_dir="$W43_ATTEMPT_ROOT/output/video/eval" \
-  rollout.model.model_path="$W43_MODEL_ROOT" \
+hydra_args=(
+  --config-path "$config_dir"
+  --config-name "$config_name"
+  runner.max_steps="$max_steps"
+  runner.val_check_interval="$val_interval"
+  runner.save_interval="$save_interval"
+  rollout.seed="$rollout_seed"
+  actor.model.value_head_init_seed=1234
+  runner.logger.log_path="$W43_ATTEMPT_ROOT/output"
+  env.train.video_cfg.video_base_dir="$W43_ATTEMPT_ROOT/output/video/train"
+  env.eval.video_cfg.video_base_dir="$W43_ATTEMPT_ROOT/output/video/eval"
+  rollout.model.model_path="$W43_MODEL_ROOT"
   actor.model.model_path="$W43_MODEL_ROOT"
+)
+if [[ "$W43_MODE" == initial-eval ]]; then
+  # RLINF_EXT_MODULE is loaded automatically inside each Worker, but the
+  # initial-evaluation hook changes EmbodiedRunner and therefore must also be
+  # installed in the driver process before the normal entrypoint is executed.
+  "$W43_RUNTIME_PYTHON" -c '
+import runpy
+import sys
+import w43_rlinf_extension
+
+w43_rlinf_extension.register()
+entrypoint = sys.argv[1]
+sys.argv = [entrypoint, *sys.argv[2:]]
+runpy.run_path(entrypoint, run_name="__main__")
+' "$entrypoint" "${hydra_args[@]}"
+else
+  "$W43_RUNTIME_PYTHON" "$entrypoint" "${hydra_args[@]}"
+fi
