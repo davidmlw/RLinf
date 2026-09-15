@@ -147,6 +147,14 @@ def test_nsys_command_uses_narrow_profiler_api_window() -> None:
     assert "RLINF_W98_NVTX=1" in command
 
 
+def test_nsys_launcher_preserves_original_model_view_mountpoint() -> None:
+    source = (TOOLS / "l20_executor_matrix_nsys_launcher.py").read_text(
+        encoding="utf-8"
+    )
+    assert ":/w98-artifacts:ro" in source
+    assert ":/w96-run/artifacts:ro" in source
+
+
 def test_summary_selects_two_part_three_backend_headline() -> None:
     summary = _load("../../eos/gr00t_trocar/tensorrt/summarize_l20_executor_matrix")
     rows = []
