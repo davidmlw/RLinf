@@ -179,3 +179,13 @@ def test_real_revision_launcher_uses_qualified_matrix_artifacts() -> None:
     assert "refit_dit_real_revision_probe.py" in command
     assert "--checkpoint-revision 5" in command
     assert "/w98-artifacts/dit-engines/dit_bf16_refit.engine" in command
+
+
+def test_nsys_summary_selects_only_outer_matrix_ranges() -> None:
+    summary = _load(
+        "../../eos/gr00t_trocar/tensorrt/summarize_l20_executor_matrix_nsys"
+    )
+    assert summary._selected(":W98/frozen_backbone/eager_backbone")
+    assert summary._selected(":W98/whole_model_diagonal/pt2_backbone_pt2_head")
+    assert not summary._selected(":W98/stage/backbone")
+    assert not summary._selected(":W98/pure_dit/pt2")
