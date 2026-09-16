@@ -85,6 +85,7 @@ def test_w80_contract_is_python_owned() -> None:
 def test_w80_contract_requires_paired_timing_and_hash_chain() -> None:
     contract = _contract()
 
+    assert contract["numeric_gates"]["vit_cosine_min"] == 0.999
     assert contract["statistics"]["paired_order"] == "alternating_ab_ba"
     assert contract["statistics"]["paired_measured"] == 30
     assert (
