@@ -32,6 +32,32 @@ from common_boundary_b8 import make_explicit_noise_head, prepare_cuda_inputs
 from persistent_trt import PersistentEngine
 
 
+class _CudaTimedForward:
+    """Collect CUDA-event samples around one DiT forward invocation."""
+
+    def __init__(self, forward: Any) -> None:
+        self.forward = forward
+        self.events: list[tuple[Any, Any]] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        import torch
+
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        output = self.forward(*args, **kwargs)
+        end.record()
+        self.events.append((start, end))
+        return output
+
+    def take_samples(self) -> list[float]:
+        if self.events:
+            self.events[-1][1].synchronize()
+        samples = [float(start.elapsed_time(end)) for start, end in self.events]
+        self.events.clear()
+        return samples
+
+
 def _statistics(values: list[float]) -> dict[str, Any]:
     ordered = sorted(values)
 
@@ -167,6 +193,59 @@ def _measure(
     return {name: _statistics(values) for name, values in samples.items()}
 
 
+def _measure_pure_dit(
+    model: Any,
+    explicit_head: Any,
+    prepared: tuple[Any, Any],
+    initial_actions: Any,
+    warmup: int,
+    measured: int,
+) -> dict[str, Any]:
+    """Measure DiT separately after the uninstrumented main benchmark."""
+
+    import torch
+
+    backbone_inputs, action_inputs = prepared
+    with torch.inference_mode():
+        backbone_output = model.backbone(backbone_inputs)
+    torch.cuda.synchronize()
+
+    action_model = model.action_head.model
+    original_forward = action_model.forward
+    timer = _CudaTimedForward(original_forward)
+    action_model.forward = timer
+
+    def call_head() -> None:
+        with torch.inference_mode():
+            explicit_head(
+                backbone_output["backbone_features"],
+                backbone_output["backbone_attention_mask"],
+                backbone_output["image_mask"],
+                action_inputs["state"],
+                action_inputs["embodiment_id"],
+                initial_actions,
+            )
+
+    try:
+        for _ in range(warmup):
+            call_head()
+        timer.take_samples()
+        for _ in range(measured):
+            call_head()
+        samples = timer.take_samples()
+    finally:
+        action_model.forward = original_forward
+    expected = measured * model.action_head.num_inference_timesteps
+    if len(samples) != expected:
+        raise RuntimeError(f"unexpected DiT sample count: {len(samples)} != {expected}")
+    return {
+        "boundary": "one B8 DiT invocation; collected after the main benchmark",
+        "instrumented_main_timing": False,
+        "invocations_per_action_head": model.action_head.num_inference_timesteps,
+        "statistics": _statistics(samples),
+    }
+
+
 def _dtype_counts(module: Any) -> dict[str, int]:
     result: dict[str, int] = {}
     for parameter in module.parameters():
@@ -251,6 +330,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         args.warmup,
         args.measured,
     )
+    pure_dit = _measure_pure_dit(
+        policy.model,
+        explicit_head,
+        prepared,
+        initial_actions,
+        args.diagnostic_warmup,
+        args.diagnostic_measured,
+    )
     if compile_receipt is not None:
         compile_receipt["unique_graphs_after_measurement"] = int(
             torch._dynamo.utils.counters["stats"]["unique_graphs"]
@@ -293,6 +380,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "fixed_initial_actions": str(initial_actions.dtype),
         },
         "timing": timing,
+        "diagnostic": {"pure_dit": pure_dit},
         "compile": compile_receipt,
         "trt_telemetry_after_measurement": telemetry,
         "cuda": {
@@ -324,6 +412,8 @@ def main() -> int:
         "--action-head-backend", choices=("eager", "pt2"), default="eager"
     )
     parser.add_argument("--compile-mode", default="max-autotune")
+    parser.add_argument("--diagnostic-warmup", type=int, default=2)
+    parser.add_argument("--diagnostic-measured", type=int, default=30)
     parser.add_argument("--seed", type=int, default=47)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--measured", type=int, default=30)
