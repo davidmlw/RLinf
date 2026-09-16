@@ -55,3 +55,24 @@ pinned IsaacLab checkout is not modified and routine assets do not use the
 system temporary directory. These gates intentionally validate tensors and
 finite outputs. Retained performance launchers must not perform hashes, cosine
 comparisons, or output validation inside their measured resident interval.
+
+The Rollout+Env benchmark composes one genuine B8 policy call with sixteen
+physical Vulkan environment steps. It retains one discarded full-path warmup
+and five measured decisions by default. Set the durable inputs, then select one
+of `eager-eager`, `trt-eager`, `trt-pt2`, or `trt-refit-trt`:
+
+```bash
+export W04_NATIVE_VENV=/home/horde/rlinf-workspace/runtime/venvs/isaacsim-6.0-native
+export W04_ASSET_MIRROR=/home/horde/rlinf-workspace/runtime/assets/W04-healthcare-cache
+export W04_GR00T_SOURCE=/home/horde/rlinf-workspace/source/Isaac-GR00T
+export W04_MODEL=/home/horde/rlinf-workspace/runs/W03/true-b8-r1/model-view
+
+toolkits/horde/gr00t_trocar/run_rollout_env_benchmark.sh \
+  --run-root /home/horde/rlinf-workspace/runs/W04/W04-6-eager-eager \
+  --backend eager-eager --warmup 1 --measured 5
+```
+
+Lifecycle work, including model load, TensorRT setup, PT2 compilation and DiT
+refit/adoption, is reported separately. The retained loop contains no hashes,
+cosine checks or output comparisons. This is a single-process systems boundary,
+not a Ray/Trainer or PPO-correctness result.

@@ -9,15 +9,18 @@
   "python": "3.12",
   "packages": {
     "isaacsim": "6.0.0.1",
-    "torch": "2.11.0+cu128",
-    "torchvision": "0.26.0+cu128",
-    "torchaudio": "2.11.0+cu128",
+    "torch": "2.9.0+cu128",
+    "torchvision": "0.24.0+cu128",
+    "torchaudio": "2.9.0+cu128",
     "isaaclab": "8.0.2",
     "isaaclab_tasks": "8.1.2",
     "isaaclab_physx": "2.6.2",
     "isaaclab_ovphysx": "5.0.1",
     "tensorrt-cu12": "10.15.1.29",
-    "transformers": "4.57.3"
+    "transformers": "4.57.3",
+    "flash-attn": "2.8.3",
+    "torchcodec": "0.8.1",
+    "gr00t": "0.1.0"
   },
   "sources": {
     "rlinf_base": "109820c8ddb75619b0522cc9003359d4b588b622",
