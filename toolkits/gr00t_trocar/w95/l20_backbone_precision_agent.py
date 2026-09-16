@@ -21,6 +21,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -87,7 +88,7 @@ def _benchmark_command(
         "--source",
         str(args.gr00t_source),
         "--model",
-        str(args.old_artifacts / "model-view"),
+        str(args.output / "model-view"),
         "--collated",
         str(args.old_artifacts / "fixture/collated-inputs.pt"),
         "--output",
@@ -124,7 +125,7 @@ def commands(args: argparse.Namespace) -> list[tuple[str, list[str]]]:
                 "--expected-source-revision",
                 ISAAC_GR00T_REVISION,
                 "--model",
-                str(old / "model-view"),
+                str(args.output / "model-view"),
                 "--collated",
                 str(old / "fixture/collated-inputs.pt"),
                 "--fixture-receipt",
@@ -160,7 +161,7 @@ def commands(args: argparse.Namespace) -> list[tuple[str, list[str]]]:
                 "--source",
                 str(args.gr00t_source),
                 "--model",
-                str(old / "model-view"),
+                str(args.output / "model-view"),
                 "--collated",
                 str(old / "fixture/collated-inputs.pt"),
                 "--raw",
@@ -224,6 +225,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     for relative in required:
         (args.old_artifacts / relative).resolve(strict=True)
+    shutil.copytree(
+        args.old_artifacts / "model-view",
+        args.output / "model-view",
+        symlinks=True,
+    )
     stages = {
         name: _run_stage(name, command, args.output)
         for name, command in commands(args)
@@ -282,6 +288,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "backbone_mean_ms": means,
         "stages": stages,
         "artifacts": {
+            "relocated_model_view": {
+                "config_sha256": _sha256(args.output / "model-view/config.json"),
+                "source": str(args.old_artifacts / "model-view"),
+                "reason": (
+                    "preserve the frozen /w96-run/artifacts/model-view local Cosmos "
+                    "path while reusing all model payload symlinks"
+                ),
+            },
             "engine_receipt": {
                 "path": str(engine_receipt_path),
                 "sha256": _sha256(engine_receipt_path),
