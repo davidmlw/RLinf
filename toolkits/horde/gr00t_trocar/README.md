@@ -76,3 +76,8 @@ Lifecycle work, including model load, TensorRT setup, PT2 compilation and DiT
 refit/adoption, is reported separately. The retained loop contains no hashes,
 cosine checks or output comparisons. This is a single-process systems boundary,
 not a Ray/Trainer or PPO-correctness result.
+
+The refittable TensorRT DiT runtime enforces at least 8 GiB of free device
+memory before online refit. The launcher adds its selected clean RLinf source
+root to `PYTHONPATH`; callers do not need to inject a second checkout to load
+the runtime's package dependencies.

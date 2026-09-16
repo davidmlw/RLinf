@@ -29,6 +29,11 @@ model=${W04_MODEL:?set W04_MODEL}
 [[ -d $gr00t_source ]]
 [[ -d $model ]]
 
+# The benchmark is executed by file path, so Python would otherwise expose only
+# the toolkit directory. Keep the selected RLinf checkout authoritative for
+# dynamically loaded backend modules and their package imports.
+export PYTHONPATH="$source_root${PYTHONPATH:+:$PYTHONPATH}"
+
 mkdir -p "$run_root/tmp" "$run_root/cache"
 exec > >(tee "$run_root/stdout.log") 2> >(tee "$run_root/stderr.log" >&2)
 printf '%q ' "$0" --run-root "$run_root" "$@" >"$run_root/command.sh"
@@ -40,6 +45,7 @@ python=$venv/bin/python
 asset_mirror=$(realpath "$asset_mirror")
 gr00t_source=$(realpath "$gr00t_source")
 model=$(realpath "$model")
+pythonpath=$PYTHONPATH
 EOF
 sha256sum \
   "$source_root/toolkits/horde/gr00t_trocar/native-runtime-spec.json" \

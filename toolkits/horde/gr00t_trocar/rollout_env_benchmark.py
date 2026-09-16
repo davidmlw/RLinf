@@ -720,7 +720,7 @@ def main() -> None:
     parser.add_argument("--refittable-dit-engine", type=_path)
     parser.add_argument("--refittable-dit-receipt", type=_path)
     parser.add_argument("--refittable-dit-parameter-map", type=_path)
-    parser.add_argument("--refittable-minimum-free-bytes", type=int, default=4 << 30)
+    parser.add_argument("--refittable-minimum-free-bytes", type=int, default=8 << 30)
     parser.add_argument("--compile-mode", default="max-autotune")
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--measured", type=int, default=5)
