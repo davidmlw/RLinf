@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(TOOLS))
 
 from toolkits.eos.gr00t_trocar.tensorrt import (  # noqa: E402
+    benchmark_precision_b8,
     build_true_b8,
     builder_probe,
     common_boundary_b8,
@@ -482,6 +483,30 @@ def test_true_b8_export_constants_match_fixture_contract() -> None:
     assert export_true_b8.PATCHES_PER_ROW == 768
     assert export_true_b8.VISUAL_TOKENS_PER_ROW == 192
     assert export_true_b8.EXPECTED_SEQUENCE_LENGTH == 208
+
+
+def test_true_b8_builder_accepts_one_explicit_vit_precision() -> None:
+    assert build_true_b8.VIT_ONNX_PRECISIONS == {
+        "vit_bf16.onnx": "bf16",
+        "vit_fp32.onnx": "fp32",
+    }
+
+
+def test_precision_benchmark_hot_path_has_no_numerical_checks() -> None:
+    source = inspect.getsource(benchmark_precision_b8._timed_sample)
+
+    for forbidden in ("_compare", ".cpu(", ".numpy(", "sha256", "cosine"):
+        assert forbidden not in source
+    assert "torch.cuda.Event" in source
+    assert "action_done.synchronize()" in source
+
+
+def test_precision_benchmark_statistics_retain_raw_samples() -> None:
+    result = benchmark_precision_b8._statistics([1.0, 2.0, 3.0, 4.0])
+
+    assert result["samples_ms"] == [1.0, 2.0, 3.0, 4.0]
+    assert result["p50_ms"] == 2.5
+    assert result["p95_ms"] == pytest.approx(3.85)
 
 
 def test_true_b8_standalone_statistics_retain_raw_samples() -> None:

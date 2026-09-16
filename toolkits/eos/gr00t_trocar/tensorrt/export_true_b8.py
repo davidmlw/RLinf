@@ -222,6 +222,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "embodiment_tag": "new_embodiment",
         "export_mode": "full_pipeline",
         "precision": "bf16",
+        "vit_precision": args.vit_precision,
+        "llm_precision": "bf16",
         "batch_size": BATCH_SIZE,
         "visual_batch_expansion": "per-row-capture-times-static-batch",
         "vit_grid_thw": [[1, 16, 16]] * CAMERA_COUNT,
@@ -234,12 +236,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     export_vit_to_onnx(
-        policy, str(output), vit_capture, use_bf16=False, batch_size=BATCH_SIZE
+        policy,
+        str(output),
+        vit_capture,
+        use_bf16=args.vit_precision == "bf16",
+        batch_size=BATCH_SIZE,
     )
     export_llm_to_onnx(
         policy, llm_capture, str(output), use_bf16=True, batch_size=BATCH_SIZE
     )
-    expected = {"vit_fp32.onnx", "llm_bf16.onnx"}
+    expected = {f"vit_{args.vit_precision}.onnx", "llm_bf16.onnx"}
     actual = {path.name for path in output.glob("*.onnx")}
     if actual != expected:
         raise RuntimeError(f"unexpected ONNX set: {actual} != {expected}")
@@ -277,6 +283,7 @@ def main() -> int:
     parser.add_argument("--fixture-receipt", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=47)
+    parser.add_argument("--vit-precision", choices=("bf16", "fp32"), default="fp32")
     args = parser.parse_args()
     try:
         receipt = run(args)
