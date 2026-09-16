@@ -26,6 +26,10 @@ from pathlib import Path
 from typing import Any
 
 EXPECTED_ENGINES = frozenset({"vit.engine", "llm_bf16.engine"})
+VIT_ONNX_PRECISIONS = {
+    "vit_bf16.onnx": "bf16",
+    "vit_fp32.onnx": "fp32",
+}
 
 
 def _sha256(path: Path) -> str:
@@ -112,8 +116,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(f"output already exists: {output}")
     output.mkdir(parents=True, exist_ok=args.reuse_existing)
     actual_onnx = {path.name for path in onnx.glob("*.onnx")}
-    if actual_onnx != {"vit_fp32.onnx", "llm_bf16.onnx"}:
+    vit_onnx = actual_onnx.intersection(VIT_ONNX_PRECISIONS)
+    if len(vit_onnx) != 1 or actual_onnx != vit_onnx | {"llm_bf16.onnx"}:
         raise RuntimeError(f"unexpected ONNX set: {actual_onnx}")
+    vit_precision = VIT_ONNX_PRECISIONS[vit_onnx.pop()]
 
     from build_tensorrt_engine import build_full_pipeline  # noqa: PLC0415
 
@@ -130,6 +136,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("build did not produce the exact two-engine bundle")
     bindings = {path.name: _binding_table(path) for path in engine_paths}
     _assert_static_b8(bindings)
+    vit_binding_dtypes = {
+        item["dtype"] for item in bindings["vit.engine"] if "dtype" in item
+    }
+    expected_vit_dtype = {
+        "bf16": "DataType.BF16",
+        "fp32": "DataType.FLOAT",
+    }[vit_precision]
+    if vit_binding_dtypes != {expected_vit_dtype}:
+        raise RuntimeError(
+            f"ViT engine dtype mismatch: {vit_binding_dtypes} != {expected_vit_dtype}"
+        )
     metadata = onnx / "export_metadata.json"
     shutil.copyfile(metadata, output / "export_metadata.json")
     receipt = {
@@ -148,6 +165,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         },
         "static_batch": 8,
         "sequence_opt": 208,
+        "vit_precision": vit_precision,
+        "llm_precision": "bf16",
         "silent_fallback": False,
     }
     (output / "rlinf-engine-receipt.json").write_text(
