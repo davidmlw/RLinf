@@ -80,11 +80,22 @@ def _onnx_dtype_audit(path: Path) -> dict[str, Any]:
 
 def _precision_tokens(value: Any) -> set[str]:
     text = json.dumps(value, sort_keys=True).upper()
-    return {
-        token
-        for token in ("BF16", "FP16", "FP32", "TF32", "INT8", "INT32", "BOOL")
-        if token in text
+    result = set()
+    if "BFLOAT16" in text or "BF16" in text:
+        result.add("BF16")
+    text_without_bfloat = text.replace("BFLOAT16", "")
+    aliases = {
+        "FP16": ("FLOAT16", "FP16", "HALF"),
+        "FP32": ("FLOAT32", "FP32", '"FLOAT"'),
+        "TF32": ("TF32",),
+        "INT8": ("INT8",),
+        "INT32": ("INT32",),
+        "BOOL": ("BOOL",),
     }
+    for canonical, spellings in aliases.items():
+        if any(spelling in text_without_bfloat for spelling in spellings):
+            result.add(canonical)
+    return result
 
 
 def _tactic_precision(tactic: str) -> str:
@@ -125,19 +136,33 @@ def _inspector_precision_summary(raw: Any) -> dict[str, Any]:
         outputs = layer.get("Outputs", layer.get("outputs", []))
         tokens = _precision_tokens({"inputs": inputs, "outputs": outputs})
         tactic_precision = _tactic_precision(tactic)
+        resolved_precision = tactic_precision
+        precision_authority = "tactic_name"
+        if tactic_precision == "unclassified":
+            floating_tokens = tokens.intersection({"BF16", "FP16", "FP32", "TF32"})
+            if len(floating_tokens) == 1:
+                resolved_precision = {
+                    "BF16": "bf16",
+                    "FP16": "fp16",
+                    "FP32": "fp32",
+                    "TF32": "tf32",
+                }[next(iter(floating_tokens))]
+                precision_authority = "inspector_io_dtype"
         layer_types[layer_type] += 1
         io_precisions.update(tokens)
-        tactic_precisions[tactic_precision] += 1
+        tactic_precisions[resolved_precision] += 1
         record = {
             "name": name,
             "layer_type": layer_type,
             "tactic": tactic,
             "tactic_precision": tactic_precision,
+            "resolved_precision": resolved_precision,
+            "precision_authority": precision_authority,
             "io_precisions": sorted(tokens),
         }
         if "gemm" in tactic.lower() or "xmma" in tactic.lower():
             key_gemms.append(record)
-        if "FP32" in tokens or tactic_precision in {"fp32", "tf32"}:
+        if "FP32" in tokens or resolved_precision in {"fp32", "tf32"}:
             fp32_islands.append(record)
     return {
         "layer_count": len(layers),
@@ -309,7 +334,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     non_bf16_gemms = [
         item
         for item in vit_summary["key_gemms"]
-        if item["tactic_precision"] != "bf16"
+        if item["resolved_precision"] != "bf16"
     ]
     if vit_precision == "bf16" and not vit_summary["key_gemms"]:
         raise RuntimeError("BF16 ViT inspector identified no GEMM/XMMA tactics")

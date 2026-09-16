@@ -510,6 +510,24 @@ def test_tensorrt_inspector_precision_summary_identifies_bf16_gemm() -> None:
     assert summary["io_precision_histogram"] == {"BF16": 1}
 
 
+def test_tensorrt_inspector_uses_io_dtype_for_opaque_tactic() -> None:
+    summary = build_true_b8._inspector_precision_summary(
+        [
+            {
+                "Name": "_gemm_mha_v2_myl0_6",
+                "LayerType": "kgen",
+                "TacticName": "_gemm_mha_v2_0x91f4784142912fee99c2b53f8649aaf5",
+                "Inputs": [{"Format/Datatype": "BFloat16"}],
+                "Outputs": [{"Format/Datatype": "BFloat16"}],
+            }
+        ]
+    )
+
+    assert summary["key_gemms"][0]["tactic_precision"] == "unclassified"
+    assert summary["key_gemms"][0]["resolved_precision"] == "bf16"
+    assert summary["key_gemms"][0]["precision_authority"] == "inspector_io_dtype"
+
+
 def test_tensorrt_inspector_precision_summary_exposes_tf32_gemm() -> None:
     summary = build_true_b8._inspector_precision_summary(
         [
