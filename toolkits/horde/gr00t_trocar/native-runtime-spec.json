@@ -12,13 +12,21 @@
     "torch": "2.11.0+cu128",
     "torchvision": "0.26.0+cu128",
     "torchaudio": "2.11.0+cu128",
+    "isaaclab": "8.0.2",
+    "isaaclab_tasks": "8.1.2",
+    "isaaclab_physx": "2.6.2",
+    "isaaclab_ovphysx": "5.0.1",
     "tensorrt-cu12": "10.15.1.29",
     "transformers": "4.57.3"
   },
   "sources": {
     "rlinf_base": "109820c8ddb75619b0522cc9003359d4b588b622",
     "isaac_gr00t": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
-    "isaaclab_trocar": "dd562ef0f8913c3b514eb221e3c61207307f2b10"
+    "isaaclab_trocar": {
+      "origin_image": "chenchaox72877/trocar-rlinf-bench@sha256:9f02e069ccb0e0a7e536833e789666e85f039c9024a77ac2f219c42cb1dfcf01",
+      "tree_manifest_sha256": "4d455f709c137f51a967d12276c8b24946d6dfbb785cd6a8d29079b47f607ec3",
+      "file_count": 3261
+    }
   },
   "task": {
     "id": "Isaac-Assemble-Trocar-G129-Dex3-RLinf-v0",

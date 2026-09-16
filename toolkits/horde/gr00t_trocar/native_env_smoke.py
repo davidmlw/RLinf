@@ -28,10 +28,21 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from offline_asset_mirror import install_offline_asset_mirror
+try:
+    from .offline_asset_mirror import install_offline_asset_mirror
+except ImportError:  # Direct script execution.
+    from offline_asset_mirror import install_offline_asset_mirror
 
 TASK_ID = "Isaac-Assemble-Trocar-G129-Dex3-RLinf-v0"
 CAMERAS = ("front_camera", "left_wrist_camera", "right_wrist_camera")
+
+
+def _write_receipt(output: Path, receipt: dict[str, Any]) -> None:
+    """Atomically retain progress even if a native plugin later terminates Python."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(f".{output.name}.pending")
+    temporary.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    os.replace(temporary, output)
 
 
 def _tensor_inventory(value: Any, prefix: str = "") -> dict[str, dict[str, Any]]:
@@ -67,11 +78,12 @@ def _package_versions() -> dict[str, str | None]:
     return versions
 
 
-def run(num_envs: int, steps: int, asset_mirror: Path) -> dict[str, Any]:
+def run(num_envs: int, steps: int, asset_mirror: Path, output: Path) -> dict[str, Any]:
     started_ns = time.monotonic_ns()
     receipt: dict[str, Any] = {
         "schema": "rlinf.w04.horde-native-env-smoke/v1",
-        "status": "failed",
+        "status": "pending",
+        "stage": "pre_app_launch",
         "task_id": TASK_ID,
         "num_envs": num_envs,
         "steps": steps,
@@ -84,6 +96,7 @@ def run(num_envs: int, steps: int, asset_mirror: Path) -> dict[str, Any]:
         },
         "started_ns": started_ns,
     }
+    _write_receipt(output, receipt)
     simulation_app = None
     env = None
     cleanup_errors = []
@@ -92,6 +105,9 @@ def run(num_envs: int, steps: int, asset_mirror: Path) -> dict[str, Any]:
 
         launcher = AppLauncher(headless=True, enable_cameras=True)
         simulation_app = launcher.app
+        receipt["stage"] = "app_launched"
+        receipt["packages"] = _package_versions()
+        _write_receipt(output, receipt)
 
         import gymnasium as gym
         import torch
@@ -103,19 +119,33 @@ def run(num_envs: int, steps: int, asset_mirror: Path) -> dict[str, Any]:
         torch.cuda.reset_peak_memory_stats()
         cfg = parse_env_cfg(TASK_ID, device="cuda:0", num_envs=num_envs)
         env = gym.make(TASK_ID, cfg=cfg, render_mode="rgb_array").unwrapped
+        receipt["stage"] = "env_created"
+        _write_receipt(output, receipt)
 
         torch.cuda.synchronize()
+        receipt["stage"] = "reset_started"
+        _write_receipt(output, receipt)
         reset_start = time.monotonic_ns()
         observation, _ = env.reset()
         torch.cuda.synchronize()
         reset_end = time.monotonic_ns()
         reset_tensors = _tensor_inventory(observation)
+        receipt["stage"] = "reset_completed"
+        receipt["reset"] = {
+            "start_ns": reset_start,
+            "end_ns": reset_end,
+            "wall_ms": (reset_end - reset_start) / 1e6,
+            "tensors": reset_tensors,
+        }
+        _write_receipt(output, receipt)
 
         action = torch.zeros(env.action_space.shape, device=env.device)
         step_receipts = []
         latest_observation = observation
         for index in range(steps):
             torch.cuda.synchronize()
+            receipt["stage"] = f"step_{index}_started"
+            _write_receipt(output, receipt)
             start = time.monotonic_ns()
             latest_observation, reward, terminated, truncated, _ = env.step(action)
             torch.cuda.synchronize()
@@ -131,6 +161,9 @@ def run(num_envs: int, steps: int, asset_mirror: Path) -> dict[str, Any]:
                     "truncated": int(truncated.sum().item()),
                 }
             )
+            receipt["stage"] = f"step_{index}_completed"
+            receipt["step_receipts"] = step_receipts
+            _write_receipt(output, receipt)
 
         step_tensors = _tensor_inventory(latest_observation)
         camera_paths = {
@@ -144,14 +177,7 @@ def run(num_envs: int, steps: int, asset_mirror: Path) -> dict[str, Any]:
 
         receipt.update(
             {
-                "status": "passed",
-                "packages": _package_versions(),
-                "reset": {
-                    "start_ns": reset_start,
-                    "end_ns": reset_end,
-                    "wall_ms": (reset_end - reset_start) / 1e6,
-                    "tensors": reset_tensors,
-                },
+                "stage": "execution_completed",
                 "step_receipts": step_receipts,
                 "step_tensors": step_tensors,
                 "camera_paths": camera_paths,
@@ -159,13 +185,18 @@ def run(num_envs: int, steps: int, asset_mirror: Path) -> dict[str, Any]:
                 "peak_cuda_reserved_bytes": torch.cuda.max_memory_reserved(),
             }
         )
+        _write_receipt(output, receipt)
     except BaseException as exc:  # Retain diagnostics even when Kit raises during startup.
+        receipt["status"] = "failed"
         receipt["error"] = {
             "type": type(exc).__name__,
             "message": str(exc),
             "traceback": traceback.format_exc(),
         }
+        _write_receipt(output, receipt)
     finally:
+        receipt["stage"] = "cleanup_started"
+        _write_receipt(output, receipt)
         if env is not None:
             try:
                 env.close()
@@ -189,8 +220,13 @@ def run(num_envs: int, steps: int, asset_mirror: Path) -> dict[str, Any]:
         "errors": cleanup_errors,
     }
     receipt["ended_ns"] = time.monotonic_ns()
-    if cleanup_errors:
+    if receipt.get("error") is None and not cleanup_errors:
+        receipt["status"] = "passed"
+        receipt["stage"] = "completed"
+    else:
         receipt["status"] = "failed"
+        receipt["stage"] = "cleanup_failed" if cleanup_errors else "failed"
+    _write_receipt(output, receipt)
     return receipt
 
 
@@ -203,9 +239,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.num_envs < 1 or args.steps < 1:
         parser.error("--num-envs and --steps must be positive")
-    receipt = run(args.num_envs, args.steps, args.asset_mirror)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    receipt = run(args.num_envs, args.steps, args.asset_mirror, args.output)
     print(json.dumps(receipt, indent=2, sort_keys=True))
     if receipt["status"] != "passed":
         raise SystemExit(1)
