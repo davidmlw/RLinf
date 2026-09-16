@@ -492,6 +492,41 @@ def test_true_b8_builder_accepts_one_explicit_vit_precision() -> None:
     }
 
 
+def test_tensorrt_inspector_precision_summary_identifies_bf16_gemm() -> None:
+    summary = build_true_b8._inspector_precision_summary(
+        [
+            {
+                "Name": "encoder.matmul",
+                "LayerType": "CaskConvolution",
+                "TacticName": "sm89_xmma_gemm_bf16",
+                "Inputs": [{"Format/Datatype": "Row major linear BF16"}],
+                "Outputs": [{"Format/Datatype": "Row major linear BF16"}],
+            }
+        ]
+    )
+
+    assert summary["key_gemms"][0]["tactic_precision"] == "bf16"
+    assert summary["fp32_islands"] == []
+    assert summary["io_precision_histogram"] == {"BF16": 1}
+
+
+def test_tensorrt_inspector_precision_summary_exposes_tf32_gemm() -> None:
+    summary = build_true_b8._inspector_precision_summary(
+        [
+            {
+                "Name": "encoder.matmul",
+                "LayerType": "CaskConvolution",
+                "TacticName": "sm89_xmma_gemm_tf32",
+                "Inputs": [{"Format/Datatype": "Row major linear FP32"}],
+                "Outputs": [{"Format/Datatype": "Row major linear FP32"}],
+            }
+        ]
+    )
+
+    assert summary["key_gemms"][0]["tactic_precision"] == "tf32"
+    assert summary["fp32_islands"][0]["name"] == "encoder.matmul"
+
+
 def test_precision_benchmark_hot_path_has_no_numerical_checks() -> None:
     source = inspect.getsource(benchmark_precision_b8._timed_sample)
 

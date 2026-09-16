@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
+import re
 import shutil
 import sys
 import traceback
@@ -32,6 +34,121 @@ VIT_ONNX_PRECISIONS = {
 }
 
 
+def _onnx_dtype_audit(path: Path) -> dict[str, Any]:
+    import onnx
+
+    model = onnx.load_model(path, load_external_data=False)
+
+    def tensor_type(value: Any) -> str:
+        return onnx.TensorProto.DataType.Name(value.type.tensor_type.elem_type)
+
+    initializer_dtypes = Counter(
+        onnx.TensorProto.DataType.Name(value.data_type)
+        for value in model.graph.initializer
+    )
+    cast_targets = Counter()
+    cast_nodes = []
+    for node in model.graph.node:
+        if node.op_type != "Cast":
+            continue
+        target = next(
+            (attribute.i for attribute in node.attribute if attribute.name == "to"),
+            None,
+        )
+        target_name = (
+            onnx.TensorProto.DataType.Name(target) if target is not None else "UNKNOWN"
+        )
+        cast_targets[target_name] += 1
+        cast_nodes.append(
+            {
+                "name": node.name,
+                "inputs": list(node.input),
+                "outputs": list(node.output),
+                "to": target_name,
+            }
+        )
+    return {
+        "sha256": _sha256(path),
+        "bytes": path.stat().st_size,
+        "inputs": {value.name: tensor_type(value) for value in model.graph.input},
+        "outputs": {value.name: tensor_type(value) for value in model.graph.output},
+        "initializer_dtype_histogram": dict(sorted(initializer_dtypes.items())),
+        "cast_target_histogram": dict(sorted(cast_targets.items())),
+        "cast_nodes": cast_nodes,
+    }
+
+
+def _precision_tokens(value: Any) -> set[str]:
+    text = json.dumps(value, sort_keys=True).upper()
+    return {
+        token
+        for token in ("BF16", "FP16", "FP32", "TF32", "INT8", "INT32", "BOOL")
+        if token in text
+    }
+
+
+def _tactic_precision(tactic: str) -> str:
+    lowered = tactic.lower()
+    if "bf16" in lowered:
+        return "bf16"
+    if "tf32" in lowered:
+        return "tf32"
+    if re.search(r"(^|[^a-z0-9])f32([^a-z0-9]|$)", lowered):
+        return "fp32"
+    if "fp16" in lowered or re.search(r"(^|[^a-z0-9])f16([^a-z0-9]|$)", lowered):
+        return "fp16"
+    return "unclassified"
+
+
+def _inspector_precision_summary(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        layers = raw.get("Layers", raw.get("layers", []))
+    elif isinstance(raw, list):
+        layers = raw
+    else:
+        raise RuntimeError(f"unexpected TensorRT inspector JSON type: {type(raw)}")
+    if not isinstance(layers, list) or not layers:
+        raise RuntimeError("TensorRT inspector returned no layers")
+
+    layer_types = Counter()
+    io_precisions = Counter()
+    tactic_precisions = Counter()
+    key_gemms = []
+    fp32_islands = []
+    for layer in layers:
+        if not isinstance(layer, dict):
+            raise RuntimeError("TensorRT inspector layer is not an object")
+        name = str(layer.get("Name", layer.get("name", "")))
+        layer_type = str(layer.get("LayerType", layer.get("type", "unknown")))
+        tactic = str(layer.get("TacticName", layer.get("tactic", "")))
+        inputs = layer.get("Inputs", layer.get("inputs", []))
+        outputs = layer.get("Outputs", layer.get("outputs", []))
+        tokens = _precision_tokens({"inputs": inputs, "outputs": outputs})
+        tactic_precision = _tactic_precision(tactic)
+        layer_types[layer_type] += 1
+        io_precisions.update(tokens)
+        tactic_precisions[tactic_precision] += 1
+        record = {
+            "name": name,
+            "layer_type": layer_type,
+            "tactic": tactic,
+            "tactic_precision": tactic_precision,
+            "io_precisions": sorted(tokens),
+        }
+        if "gemm" in tactic.lower() or "xmma" in tactic.lower():
+            key_gemms.append(record)
+        if "FP32" in tokens or tactic_precision in {"fp32", "tf32"}:
+            fp32_islands.append(record)
+    return {
+        "layer_count": len(layers),
+        "layer_type_histogram": dict(sorted(layer_types.items())),
+        "io_precision_histogram": dict(sorted(io_precisions.items())),
+        "tactic_precision_histogram": dict(sorted(tactic_precisions.items())),
+        "key_gemms": key_gemms,
+        "fp32_islands": fp32_islands,
+    }
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -40,7 +157,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _binding_table(path: Path) -> list[dict[str, Any]]:
+def _engine_audit(path: Path, inspector_output: Path) -> dict[str, Any]:
     import tensorrt as trt
 
     logger = trt.Logger(trt.Logger.ERROR)
@@ -48,7 +165,7 @@ def _binding_table(path: Path) -> list[dict[str, Any]]:
     engine = runtime.deserialize_cuda_engine(path.read_bytes())
     if engine is None:
         raise RuntimeError(f"TensorRT failed to deserialize {path}")
-    result = []
+    bindings = []
     for index in range(engine.num_io_tensors):
         name = engine.get_tensor_name(index)
         shape = list(engine.get_tensor_shape(name))
@@ -61,7 +178,7 @@ def _binding_table(path: Path) -> list[dict[str, Any]]:
                 "opt": list(optimum),
                 "max": list(maximum),
             }
-        result.append(
+        bindings.append(
             {
                 "index": index,
                 "name": name,
@@ -71,7 +188,20 @@ def _binding_table(path: Path) -> list[dict[str, Any]]:
                 "profile": profile,
             }
         )
-    return result
+    inspector = engine.create_engine_inspector()
+    raw_text = inspector.get_engine_information(trt.LayerInformationFormat.JSON)
+    raw = json.loads(raw_text)
+    inspector_output.write_text(
+        json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return {
+        "bindings": bindings,
+        "inspector": {
+            "path": inspector_output.name,
+            "sha256": _sha256(inspector_output),
+            "summary": _inspector_precision_summary(raw),
+        },
+    }
 
 
 def _assert_static_b8(bindings: dict[str, list[dict[str, Any]]]) -> None:
@@ -130,7 +260,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             engine_dir=str(output),
             precision="bf16",
             workspace_mb=args.workspace,
-            only=frozenset({"ViT"}) if args.reuse_llm_engine else frozenset({"ViT", "LLM"}),
+            only=(
+                frozenset({"ViT"})
+                if args.reuse_llm_engine
+                else frozenset({"ViT", "LLM"})
+            ),
         )
         if args.reuse_llm_engine:
             reused_llm = args.reuse_llm_engine.resolve(strict=True)
@@ -138,7 +272,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     engine_paths = sorted(output.glob("*.engine"))
     if {path.name for path in engine_paths} != EXPECTED_ENGINES:
         raise RuntimeError("build did not produce the exact two-engine bundle")
-    bindings = {path.name: _binding_table(path) for path in engine_paths}
+    audits = {
+        path.name: _engine_audit(path, output / f"{path.name}.inspector.json")
+        for path in engine_paths
+    }
+    bindings = {name: audit["bindings"] for name, audit in audits.items()}
     _assert_static_b8(bindings)
     vit_binding_dtypes = {
         item["dtype"] for item in bindings["vit.engine"] if "dtype" in item
@@ -150,6 +288,34 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if vit_binding_dtypes != {expected_vit_dtype}:
         raise RuntimeError(
             f"ViT engine dtype mismatch: {vit_binding_dtypes} != {expected_vit_dtype}"
+        )
+    onnx_audits = {
+        path.name: _onnx_dtype_audit(path) for path in sorted(onnx.glob("*.onnx"))
+    }
+    vit_onnx_name = next(iter(set(onnx_audits).intersection(VIT_ONNX_PRECISIONS)))
+    expected_onnx_dtype = {"bf16": "BFLOAT16", "fp32": "FLOAT"}[vit_precision]
+    pixel_dtype = onnx_audits[vit_onnx_name]["inputs"].get("pixel_values")
+    if pixel_dtype != expected_onnx_dtype:
+        raise RuntimeError(
+            "ViT ONNX pixel_values dtype mismatch: "
+            f"{pixel_dtype} != {expected_onnx_dtype}"
+        )
+    llm_binding_dtypes = {
+        item["dtype"] for item in bindings["llm_bf16.engine"] if "dtype" in item
+    }
+    if "DataType.FLOAT" in llm_binding_dtypes:
+        raise RuntimeError(f"LLM engine exposes FP32 bindings: {llm_binding_dtypes}")
+    vit_summary = audits["vit.engine"]["inspector"]["summary"]
+    non_bf16_gemms = [
+        item
+        for item in vit_summary["key_gemms"]
+        if item["tactic_precision"] != "bf16"
+    ]
+    if vit_precision == "bf16" and not vit_summary["key_gemms"]:
+        raise RuntimeError("BF16 ViT inspector identified no GEMM/XMMA tactics")
+    if vit_precision == "bf16" and non_bf16_gemms:
+        raise RuntimeError(
+            f"BF16 ViT retained non-BF16 key GEMMs: {non_bf16_gemms}"
         )
     metadata = onnx / "export_metadata.json"
     shutil.copyfile(metadata, output / "export_metadata.json")
@@ -172,8 +338,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "bytes": path.stat().st_size,
                 "sha256": _sha256(path),
                 "bindings": bindings[path.name],
+                "inspector": audits[path.name]["inspector"],
             }
             for path in engine_paths
+        },
+        "onnx": onnx_audits,
+        "precision_gates": {
+            "vit_onnx_pixel_values": pixel_dtype,
+            "vit_engine_binding_dtypes": sorted(vit_binding_dtypes),
+            "llm_engine_binding_dtypes": sorted(llm_binding_dtypes),
+            "vit_key_gemm_count": len(vit_summary["key_gemms"]),
+            "vit_non_bf16_key_gemms": non_bf16_gemms,
+            "vit_fp32_islands": vit_summary["fp32_islands"],
         },
         "static_batch": 8,
         "sequence_opt": 208,

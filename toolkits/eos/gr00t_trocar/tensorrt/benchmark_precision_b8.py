@@ -175,6 +175,67 @@ def _dtype_counts(module: Any) -> dict[str, int]:
     return result
 
 
+def _runtime_cast_diagnostic(
+    model: Any,
+    prepared: tuple[Any, Any],
+    vit_engine: Any | None,
+    llm_engine: Any | None,
+) -> dict[str, Any]:
+    import torch
+
+    if vit_engine is None or llm_engine is None:
+        return {
+            "scope": "TensorRT precision bridge only",
+            "expected_bridge_casts": 0,
+            "observed_cast_operator_calls": 0,
+            "observed_cast_operator_device_ms": 0.0,
+            "operators": [],
+        }
+    pixel_dtype = prepared[0]["pixel_values"].dtype
+    vit_dtype = vit_engine.dtype_of("pixel_values")
+    llm_dtype = llm_engine.dtype_of("inputs_embeds")
+    expected = int(pixel_dtype != vit_dtype) + 4 * int(vit_dtype != llm_dtype)
+    with torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ]
+    ) as profile:
+        with torch.inference_mode():
+            model.backbone(prepared[0])
+        torch.cuda.synchronize()
+    operators = []
+    for event in profile.key_averages():
+        if event.key not in {"aten::to", "aten::_to_copy", "aten::copy_"}:
+            continue
+        device_us = float(
+            getattr(event, "self_device_time_total", 0.0)
+            or getattr(event, "self_cuda_time_total", 0.0)
+        )
+        operators.append(
+            {
+                "name": event.key,
+                "count": event.count,
+                "self_device_ms": device_us / 1000.0,
+            }
+        )
+    return {
+        "scope": (
+            "diagnostic outside the timed hot path; expected bridge casts are the "
+            "explicit pixel/image/deepstack precision conversions in trt_model_forward"
+        ),
+        "prepared_pixel_dtype": str(pixel_dtype),
+        "vit_input_dtype": str(vit_dtype),
+        "llm_input_dtype": str(llm_dtype),
+        "expected_bridge_casts": expected,
+        "observed_cast_operator_calls": sum(item["count"] for item in operators),
+        "observed_cast_operator_device_ms": sum(
+            item["self_device_ms"] for item in operators
+        ),
+        "operators": operators,
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     import torch
 
@@ -206,7 +267,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         }[vit_engine.dtype_of("pixel_values")]
         if actual_precision != args.vit_precision:
             raise RuntimeError(
-                f"ViT engine precision is {actual_precision}, expected {args.vit_precision}"
+                "ViT engine precision is "
+                f"{actual_precision}, expected {args.vit_precision}"
             )
     prepared = prepare_cuda_inputs(policy.model, inputs)
     explicit_head = make_explicit_noise_head(policy.model.action_head)
@@ -231,6 +293,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         args.warmup,
         args.measured,
     )
+    cast_diagnostic = _runtime_cast_diagnostic(
+        policy.model, prepared, vit_engine, llm_engine
+    )
     telemetry = None
     if vit_engine is not None and llm_engine is not None:
         telemetry = {
@@ -252,8 +317,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "measured": args.measured,
         "seed_used_only_to_materialize_fixed_initial_actions": args.seed,
         "hot_path": (
-            "CUDA-resident prepared inputs + fixed explicit noise -> normalized action; "
-            "Backbone and Action Head CUDA events; no output copy or comparison"
+            "CUDA-resident prepared inputs + fixed explicit noise -> normalized "
+            "action; Backbone and Action Head CUDA events; no output copy or comparison"
         ),
         "load_and_prepare_ms": load_ms,
         "dtype_evidence": {
@@ -268,6 +333,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "fixed_initial_actions": str(initial_actions.dtype),
         },
         "timing": timing,
+        "runtime_cast_diagnostic": cast_diagnostic,
         "trt_telemetry_after_measurement": telemetry,
         "cuda": {
             "device": torch.cuda.get_device_name(),
