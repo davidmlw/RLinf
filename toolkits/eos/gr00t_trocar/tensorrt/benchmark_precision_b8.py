@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
+import importlib.util
 import json
 import math
 import statistics
@@ -25,11 +27,16 @@ import sys
 import time
 import traceback
 import types
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from common_boundary_b8 import make_explicit_noise_head, prepare_cuda_inputs
 from persistent_trt import PersistentEngine
+
+VISION_ATTENTION_CLASS = "Qwen3VLVisionAttention"
+EXPECTED_VISION_SEGMENTS = 24
+EXPECTED_VISION_SEQUENCE_LENGTH = 256
 
 
 class _CudaTimedForward:
@@ -94,6 +101,109 @@ def _tree_to_dtype(value: Any, dtype: Any) -> Any:
     if isinstance(value, dict):
         return {key: _tree_to_dtype(item, dtype) for key, item in value.items()}
     return value
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _uniform_vision_sequence_length(
+    grid_rows: Sequence[Sequence[int]],
+) -> tuple[int, int]:
+    lengths = []
+    for row in grid_rows:
+        if len(row) != 3:
+            raise ValueError(f"image_grid_thw row must have three values: {row!r}")
+        temporal, height, width = (int(value) for value in row)
+        if temporal < 1 or height < 1 or width < 1:
+            raise ValueError(f"image_grid_thw values must be positive: {row!r}")
+        lengths.extend([height * width] * temporal)
+    if not lengths:
+        raise ValueError("image_grid_thw must contain at least one vision segment")
+    unique_lengths = set(lengths)
+    if len(unique_lengths) != 1:
+        raise ValueError(
+            "PT2 static vision adapter requires one sequence length: "
+            f"{sorted(unique_lengths)}"
+        )
+    return lengths[0], len(lengths)
+
+
+def _install_static_vision_flash_attention(
+    backbone: Any,
+    prepared: tuple[Any, Any],
+) -> tuple[dict[str, Any], Any]:
+    """Freeze true-B8 visual geometry without changing the attention backend."""
+
+    backbone_inputs, _ = prepared
+    image_grid_thw = backbone_inputs.get("image_grid_thw")
+    if image_grid_thw is None:
+        raise RuntimeError("PT2 Backbone requires image_grid_thw")
+    grid_rows = image_grid_thw.detach().cpu().tolist()
+    sequence_length, segment_count = _uniform_vision_sequence_length(grid_rows)
+    if (
+        sequence_length != EXPECTED_VISION_SEQUENCE_LENGTH
+        or segment_count != EXPECTED_VISION_SEGMENTS
+    ):
+        raise RuntimeError(
+            "PT2 Backbone visual geometry changed: "
+            f"segments={segment_count}, sequence_length={sequence_length}"
+        )
+    vision_modules = sum(
+        type(module).__name__ == VISION_ATTENTION_CLASS for module in backbone.modules()
+    )
+    if vision_modules < 1:
+        raise RuntimeError("PT2 Backbone found no Qwen vision attention modules")
+
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS  # noqa: PLC0415
+
+    local_mapping = ALL_ATTENTION_FUNCTIONS._local_mapping
+    had_local_override = "flash_attention_2" in local_mapping
+    previous_local = local_mapping.get("flash_attention_2")
+    original = ALL_ATTENTION_FUNCTIONS["flash_attention_2"]
+
+    def static_vision_flash_attention(
+        module: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if type(module).__name__ == VISION_ATTENTION_CLASS:
+            kwargs["max_length_q"] = sequence_length
+            kwargs["max_length_k"] = sequence_length
+        return original(module, *args, **kwargs)
+
+    ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = static_vision_flash_attention
+
+    def restore() -> None:
+        if had_local_override:
+            ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = previous_local
+        else:
+            del ALL_ATTENTION_FUNCTIONS["flash_attention_2"]
+
+    return (
+        {
+            "policy": "fixture-validated static Qwen vision FlashAttention max length",
+            "sequence_length": sequence_length,
+            "segment_count": segment_count,
+            "vision_attention_modules": vision_modules,
+            "kernel": "flash_attention_2",
+            "changes_attention_backend": False,
+        },
+        restore,
+    )
+
+
+def _load_refittable_runtime(source: Path) -> Any:
+    spec = importlib.util.spec_from_file_location("w03_refittable_tensorrt_dit", source)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load refittable TensorRT DiT from {source}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _install_fp32_visual_bridge(policy: Any) -> None:
@@ -266,6 +376,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(f"output already exists: {output}")
     if args.backend == "trt" and engines is None:
         raise ValueError("--engines is required for the TensorRT backend")
+    if args.backend == "pt2" and args.vit_precision != "bf16":
+        raise ValueError("the PT2 Backbone arm supports the production BF16 path only")
+    refit_arguments = (
+        args.refittable_runtime_source,
+        args.refittable_dit_engine,
+        args.refittable_dit_receipt,
+        args.refittable_dit_parameter_map,
+    )
+    if args.action_head_backend == "refittable-trt" and not all(refit_arguments):
+        raise ValueError(
+            "the refittable TensorRT Action Head requires runtime, engine, receipt, "
+            "and parameter-map arguments"
+        )
 
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
@@ -297,7 +420,39 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     torch.cuda.synchronize()
     load_ms = (time.perf_counter_ns() - load_started) / 1_000_000
 
+    backbone_compile_receipt = None
+    restore_vision_flash_attention = None
+    if args.backend == "pt2":
+        torch._dynamo.reset()
+        torch._dynamo.utils.counters.clear()
+        adapter, restore_vision_flash_attention = _install_static_vision_flash_attention(
+            policy.model.backbone, prepared
+        )
+        compile_started = time.perf_counter_ns()
+        policy.model.backbone.forward = torch.compile(
+            policy.model.backbone.forward,
+            mode=args.backbone_compile_mode,
+            dynamic=False,
+        )
+        _timed_sample(policy.model, explicit_head, prepared, initial_actions)
+        torch.cuda.synchronize()
+        backbone_compile_receipt = {
+            "mode": args.backbone_compile_mode,
+            "first_call_wall_ms": (time.perf_counter_ns() - compile_started)
+            / 1_000_000,
+            "unique_graphs_after_first_call": int(
+                torch._dynamo.utils.counters["stats"]["unique_graphs"]
+            ),
+            "graph_breaks_after_first_call": {
+                str(key): int(value)
+                for key, value in torch._dynamo.utils.counters["graph_break"].items()
+            },
+            "static_vision_adapter": adapter,
+        }
+
     compile_receipt = None
+    refittable_dit = None
+    refit_receipt = None
     if args.action_head_backend == "pt2":
         torch._dynamo.reset()
         compile_started = time.perf_counter_ns()
@@ -315,6 +470,69 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "unique_graphs_after_first_call": int(
                 torch._dynamo.utils.counters["stats"]["unique_graphs"]
             ),
+        }
+    elif args.action_head_backend == "refittable-trt":
+        runtime_source = args.refittable_runtime_source.resolve(strict=True)
+        engine_path = args.refittable_dit_engine.resolve(strict=True)
+        receipt_path = args.refittable_dit_receipt.resolve(strict=True)
+        parameter_map_path = args.refittable_dit_parameter_map.resolve(strict=True)
+        runtime = _load_refittable_runtime(runtime_source)
+        parameter_map = json.loads(parameter_map_path.read_text(encoding="utf-8"))
+        action_model = policy.model.action_head.model
+        source_digest = runtime._ordered_source_digest(
+            action_model, parameter_map["dit_refit"]["entries"]
+        )
+        import tensorrt as trt  # noqa: PLC0415
+
+        setup_started = time.perf_counter_ns()
+        refittable_dit = runtime.RefittableTensorRTDiT(
+            action_model,
+            {
+                "engine_path": str(engine_path),
+                "receipt_path": str(receipt_path),
+                "receipt_sha256": _sha256(receipt_path),
+                "parameter_map_path": str(parameter_map_path),
+                "parameter_map_sha256": _sha256(parameter_map_path),
+                "source_digest_revision_0": source_digest,
+                "revision": 0,
+                "runtime_version": trt.__version__,
+                "runtime_distribution": args.refittable_runtime_distribution,
+                "compute_capability": list(torch.cuda.get_device_capability()),
+                "online_refit": True,
+                "probe_each_revision": True,
+                "minimum_free_device_bytes": args.refittable_minimum_free_bytes,
+                "ppo_authority_status": (
+                    "failed_ratio_kl_approximate_behavior_only"
+                ),
+                "lineage_receipt_mode": "gpu_transform_validation",
+                "shadow_eager": False,
+            },
+        )
+        refittable_dit.verify_revision(0)
+        action_model.forward = refittable_dit
+        _timed_sample(policy.model, explicit_head, prepared, initial_actions)
+        torch.cuda.synchronize()
+        refittable_dit.verify_revision(1)
+        _timed_sample(policy.model, explicit_head, prepared, initial_actions)
+        torch.cuda.synchronize()
+        setup_telemetry = refittable_dit.telemetry()
+        refit_receipt = {
+            "scope": (
+                "double-slot online-refittable TensorRT DiT; setup, initial probe, "
+                "and one real 456-weight refit/adopt excluded from hot timing"
+            ),
+            "runtime_source": str(runtime_source),
+            "runtime_source_sha256": _sha256(runtime_source),
+            "source_digest_revision_0": source_digest,
+            "setup_and_refit_wall_ms": (
+                time.perf_counter_ns() - setup_started
+            )
+            / 1_000_000,
+            "active_revision_before_measurement": setup_telemetry["active_revision"],
+            "active_slot_before_measurement": setup_telemetry["active_slot"],
+            "online_refit": setup_telemetry["online_refit"],
+            "refit_records": setup_telemetry["refit_records"],
+            "memory": setup_telemetry["memory"],
         }
 
     visual_dtypes = (
@@ -342,6 +560,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         compile_receipt["unique_graphs_after_measurement"] = int(
             torch._dynamo.utils.counters["stats"]["unique_graphs"]
         )
+    if backbone_compile_receipt is not None:
+        backbone_compile_receipt["unique_graphs_after_measurement"] = int(
+            torch._dynamo.utils.counters["stats"]["unique_graphs"]
+        )
     telemetry = None
     if vit_engine is not None and llm_engine is not None:
         telemetry = {
@@ -349,6 +571,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "llm": llm_engine.telemetry(),
         }
         trt_api.close_tensorrt_engines(policy)
+    if refittable_dit is not None:
+        refit_receipt["telemetry_after_measurement"] = refittable_dit.telemetry()
+        refittable_dit.close()
+    if restore_vision_flash_attention is not None:
+        restore_vision_flash_attention()
 
     receipt = {
         "schema": "rlinf.gr00t-n1d7-b8-precision-performance.v1",
@@ -382,6 +609,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "timing": timing,
         "diagnostic": {"pure_dit": pure_dit},
         "compile": compile_receipt,
+        "backbone_compile": backbone_compile_receipt,
+        "refittable_dit": refit_receipt,
         "trt_telemetry_after_measurement": telemetry,
         "cuda": {
             "device": torch.cuda.get_device_name(),
@@ -406,12 +635,27 @@ def main() -> int:
     parser.add_argument("--collated", type=Path, required=True)
     parser.add_argument("--engines", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--backend", choices=("eager", "trt"), required=True)
+    parser.add_argument("--backend", choices=("eager", "pt2", "trt"), required=True)
     parser.add_argument("--vit-precision", choices=("bf16", "fp32"), required=True)
     parser.add_argument(
-        "--action-head-backend", choices=("eager", "pt2"), default="eager"
+        "--action-head-backend",
+        choices=("eager", "pt2", "refittable-trt"),
+        default="eager",
     )
     parser.add_argument("--compile-mode", default="max-autotune")
+    parser.add_argument(
+        "--backbone-compile-mode", default="max-autotune-no-cudagraphs"
+    )
+    parser.add_argument("--refittable-runtime-source", type=Path)
+    parser.add_argument("--refittable-dit-engine", type=Path)
+    parser.add_argument("--refittable-dit-receipt", type=Path)
+    parser.add_argument("--refittable-dit-parameter-map", type=Path)
+    parser.add_argument(
+        "--refittable-runtime-distribution", default="tensorrt-cu12"
+    )
+    parser.add_argument(
+        "--refittable-minimum-free-bytes", type=int, default=8 << 30
+    )
     parser.add_argument("--diagnostic-warmup", type=int, default=2)
     parser.add_argument("--diagnostic-measured", type=int, default=30)
     parser.add_argument("--seed", type=int, default=47)
