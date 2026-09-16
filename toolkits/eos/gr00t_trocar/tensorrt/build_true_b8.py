@@ -123,14 +123,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     from build_tensorrt_engine import build_full_pipeline  # noqa: PLC0415
 
+    reused_llm = None
     if not args.reuse_existing:
         build_full_pipeline(
             onnx_dir=str(onnx),
             engine_dir=str(output),
             precision="bf16",
             workspace_mb=args.workspace,
-            only=frozenset({"ViT", "LLM"}),
+            only=frozenset({"ViT"}) if args.reuse_llm_engine else frozenset({"ViT", "LLM"}),
         )
+        if args.reuse_llm_engine:
+            reused_llm = args.reuse_llm_engine.resolve(strict=True)
+            shutil.copyfile(reused_llm, output / "llm_bf16.engine")
     engine_paths = sorted(output.glob("*.engine"))
     if {path.name for path in engine_paths} != EXPECTED_ENGINES:
         raise RuntimeError("build did not produce the exact two-engine bundle")
@@ -154,6 +158,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "status": "passed",
         "workspace_mib": args.workspace,
         "reused_existing_plans": args.reuse_existing,
+        "reused_llm_engine": (
+            {
+                "source": str(reused_llm),
+                "sha256": _sha256(reused_llm),
+            }
+            if reused_llm
+            else None
+        ),
         "export_metadata_sha256": _sha256(metadata),
         "engines": {
             path.name: {
@@ -181,6 +193,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workspace", type=int, default=8192)
     parser.add_argument("--reuse-existing", action="store_true")
+    parser.add_argument("--reuse-llm-engine", type=Path)
     args = parser.parse_args()
     try:
         receipt = run(args)
