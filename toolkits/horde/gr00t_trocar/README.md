@@ -17,3 +17,38 @@ python toolkits/horde/gr00t_trocar/runtime_probe.py \
 
 TensorRT plans from SM89 L20 or SM90 H100 hosts are evidence only. Production
 ViT and LLM plans must be rebuilt and qualified on the SM120 target.
+
+## Native Rollout and Env runtime
+
+W04 extends the standalone model qualification with a native Isaac Sim runtime.
+Docker is not used on Horde. The runtime lives outside the source tree at
+`/home/horde/rlinf-workspace/runtime/venvs/isaacsim-6.0-native`; the exact
+package and source contract is recorded in `native-runtime-spec.json`.
+
+The native environment uses the Assemble Trocar task from the pinned
+`mingxue/timeline_benchmark` IsaacLab checkout. It also requires the immutable
+Healthcare asset cache and local asset resolver qualified by W02. Keep those
+inputs separate from writable Isaac shader and application caches.
+
+After installing the runtime and editable IsaacLab packages, run the bounded
+environment gates before starting RLinf:
+
+```bash
+VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_icd.json \
+python toolkits/horde/gr00t_trocar/native_env_smoke.py \
+  --num-envs 1 --steps 1 \
+  --asset-mirror /home/horde/rlinf-workspace/runtime/assets/W04-healthcare-cache \
+  --output runs/W04/env-smoke-1.json
+
+VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_icd.json \
+python toolkits/horde/gr00t_trocar/native_env_smoke.py \
+  --num-envs 8 --steps 2 \
+  --asset-mirror /home/horde/rlinf-workspace/runtime/assets/W04-healthcare-cache \
+  --output runs/W04/env-smoke-8.json
+```
+
+The resolver is installed in-process before task modules are imported, so the
+pinned IsaacLab checkout is not modified and routine assets do not use the
+system temporary directory. These gates intentionally validate tensors and
+finite outputs. Retained performance launchers must not perform hashes, cosine
+comparisons, or output validation inside their measured resident interval.

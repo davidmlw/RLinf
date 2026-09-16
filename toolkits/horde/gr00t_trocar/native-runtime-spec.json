@@ -1,0 +1,38 @@
+{
+  "schema": "rlinf.w04.horde-native-runtime/v1",
+  "host": {
+    "gpu": "NVIDIA RTX PRO 4500 Blackwell Server Edition",
+    "compute_capability": [12, 0],
+    "driver": "595.80",
+    "vulkan_icd": "/etc/vulkan/icd.d/nvidia_icd.json"
+  },
+  "python": "3.12",
+  "packages": {
+    "isaacsim": "6.0.0.1",
+    "torch": "2.11.0+cu128",
+    "torchvision": "0.26.0+cu128",
+    "torchaudio": "2.11.0+cu128",
+    "tensorrt-cu12": "10.15.1.29",
+    "transformers": "4.57.3"
+  },
+  "sources": {
+    "rlinf_base": "109820c8ddb75619b0522cc9003359d4b588b622",
+    "isaac_gr00t": "51d4c89f72fda44cbf77285c6a8114b52676b8a1",
+    "isaaclab_trocar": "dd562ef0f8913c3b514eb221e3c61207307f2b10"
+  },
+  "task": {
+    "id": "Isaac-Assemble-Trocar-G129-Dex3-RLinf-v0",
+    "canonical_envs": 8,
+    "cameras": [
+      "front_camera",
+      "left_wrist_camera",
+      "right_wrist_camera"
+    ]
+  },
+  "assets": {
+    "file_count": 30,
+    "source": "W02 qualified Healthcare closure",
+    "assets_override_sha256": "71f7d05805cd18066f1f93fe3073cf716f590c5bf8ee93f4213b48cbc11647bb",
+    "extension_override_sha256": "c650d2d1f81a47d40e75138d7d2f5ae6f77cbf545c7d926238355f7c3f8e0db8"
+  }
+}
