@@ -1232,7 +1232,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     expected_execute_count = sum(phase["expected"] for phase in engine_phases.values())
     gates = {
         "finite": all(value["finite"] for value in comparisons.values()),
-        "vit_cosine": comparisons["vit_image_embeds"]["cosine"] >= 0.997,
+        "vit_cosine": comparisons["vit_image_embeds"]["cosine"] >= 0.999,
         "backbone_cosine": comparisons["pre_final_backbone"]["cosine"] >= 0.9995,
         "public_action": (
             comparisons["public_action"]["cosine"] >= 0.999

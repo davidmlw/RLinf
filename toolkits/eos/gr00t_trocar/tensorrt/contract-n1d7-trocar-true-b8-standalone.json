@@ -179,7 +179,7 @@
   },
   "numeric_gates": {
     "all_tensors_finite": true,
-    "vit_cosine_min": 0.997,
+    "vit_cosine_min": 0.999,
     "pre_final_hidden_cosine_min": 0.9995,
     "public_action_cosine_min": 0.999,
     "public_action_mean_abs_max": 0.005,
