@@ -218,6 +218,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     torch.cuda.synchronize()
     load_ms = (time.perf_counter_ns() - load_started) / 1_000_000
 
+    compile_receipt = None
+    if args.action_head_backend == "pt2":
+        torch._dynamo.reset()
+        compile_started = time.perf_counter_ns()
+        action_model = policy.model.action_head.model
+        action_model.forward = torch.compile(
+            action_model.forward,
+            mode=args.compile_mode,
+        )
+        _timed_sample(policy.model, explicit_head, prepared, initial_actions)
+        torch.cuda.synchronize()
+        compile_receipt = {
+            "mode": args.compile_mode,
+            "first_call_wall_ms": (time.perf_counter_ns() - compile_started)
+            / 1_000_000,
+            "unique_graphs_after_first_call": int(
+                torch._dynamo.utils.counters["stats"]["unique_graphs"]
+            ),
+        }
+
     visual_dtypes = (
         {"TensorRT": 1}
         if args.backend == "trt"
@@ -231,6 +251,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         args.warmup,
         args.measured,
     )
+    if compile_receipt is not None:
+        compile_receipt["unique_graphs_after_measurement"] = int(
+            torch._dynamo.utils.counters["stats"]["unique_graphs"]
+        )
     telemetry = None
     if vit_engine is not None and llm_engine is not None:
         telemetry = {
@@ -247,6 +271,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "vit_precision": args.vit_precision,
         "llm_precision": "bf16",
         "action_head_precision": "bf16",
+        "action_head_backend": args.action_head_backend,
         "batch_size": 8,
         "warmup": args.warmup,
         "measured": args.measured,
@@ -268,6 +293,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "fixed_initial_actions": str(initial_actions.dtype),
         },
         "timing": timing,
+        "compile": compile_receipt,
         "trt_telemetry_after_measurement": telemetry,
         "cuda": {
             "device": torch.cuda.get_device_name(),
@@ -294,6 +320,10 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--backend", choices=("eager", "trt"), required=True)
     parser.add_argument("--vit-precision", choices=("bf16", "fp32"), required=True)
+    parser.add_argument(
+        "--action-head-backend", choices=("eager", "pt2"), default="eager"
+    )
+    parser.add_argument("--compile-mode", default="max-autotune")
     parser.add_argument("--seed", type=int, default=47)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--measured", type=int, default=30)
