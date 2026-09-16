@@ -33,7 +33,7 @@ try:
 except ImportError:  # Direct script execution.
     from offline_asset_mirror import install_offline_asset_mirror
 
-TASK_ID = "Isaac-Assemble-Trocar-G129-Dex3-RLinf-v0"
+TASK_ID = "IsaacContrib-Assemble-Trocar-G129-Dex3"
 CAMERAS = ("front_camera", "left_wrist_camera", "right_wrist_camera")
 
 
@@ -83,6 +83,7 @@ def run(num_envs: int, steps: int, asset_mirror: Path, output: Path) -> dict[str
     receipt: dict[str, Any] = {
         "schema": "rlinf.w04.horde-native-env-smoke/v1",
         "status": "pending",
+        "execution_status": "pending",
         "stage": "pre_app_launch",
         "task_id": TASK_ID,
         "num_envs": num_envs,
@@ -177,6 +178,7 @@ def run(num_envs: int, steps: int, asset_mirror: Path, output: Path) -> dict[str
 
         receipt.update(
             {
+                "execution_status": "passed",
                 "stage": "execution_completed",
                 "step_receipts": step_receipts,
                 "step_tensors": step_tensors,
@@ -188,6 +190,7 @@ def run(num_envs: int, steps: int, asset_mirror: Path, output: Path) -> dict[str
         _write_receipt(output, receipt)
     except BaseException as exc:  # Retain diagnostics even when Kit raises during startup.
         receipt["status"] = "failed"
+        receipt["execution_status"] = "failed"
         receipt["error"] = {
             "type": type(exc).__name__,
             "message": str(exc),

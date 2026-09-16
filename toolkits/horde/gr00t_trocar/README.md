@@ -25,28 +25,31 @@ Docker is not used on Horde. The runtime lives outside the source tree at
 `/home/horde/rlinf-workspace/runtime/venvs/isaacsim-6.0-native`; the exact
 package and source contract is recorded in `native-runtime-spec.json`.
 
-The native environment uses the Assemble Trocar task from the pinned
-`mingxue/timeline_benchmark` IsaacLab checkout. It also requires the immutable
-Healthcare asset cache and local asset resolver qualified by W02. Keep those
-inputs separate from writable Isaac shader and application caches.
+The native environment uses the exact IsaacLab 8.0.2 source tree recovered
+from the qualified Trocar image recorded in `native-runtime-spec.json`. It also
+requires the immutable Healthcare asset cache and local asset resolver
+qualified by W02. Keep those inputs separate from writable Isaac shader and
+application caches.
 
 After installing the runtime and editable IsaacLab packages, run the bounded
 environment gates before starting RLinf:
 
 ```bash
-VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_icd.json \
-python toolkits/horde/gr00t_trocar/native_env_smoke.py \
-  --num-envs 1 --steps 1 \
-  --asset-mirror /home/horde/rlinf-workspace/runtime/assets/W04-healthcare-cache \
-  --output runs/W04/env-smoke-1.json
+toolkits/horde/gr00t_trocar/run_native_env_smoke.sh \
+  --run-root /home/horde/rlinf-workspace/runs/W04/env-smoke-1 \
+  --num-envs 1 --steps 1 --timeout-seconds 900 \
+  --venv /home/horde/rlinf-workspace/runtime/venvs/isaacsim-6.0-native \
+  --asset-mirror /home/horde/rlinf-workspace/runtime/assets/W04-healthcare-cache
 
-VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_icd.json \
-python toolkits/horde/gr00t_trocar/native_env_smoke.py \
-  --num-envs 8 --steps 2 \
-  --asset-mirror /home/horde/rlinf-workspace/runtime/assets/W04-healthcare-cache \
-  --output runs/W04/env-smoke-8.json
+toolkits/horde/gr00t_trocar/run_native_env_smoke.sh \
+  --run-root /home/horde/rlinf-workspace/runs/W04/env-smoke-8 \
+  --num-envs 8 --steps 2 --timeout-seconds 900 \
+  --venv /home/horde/rlinf-workspace/runtime/venvs/isaacsim-6.0-native \
+  --asset-mirror /home/horde/rlinf-workspace/runtime/assets/W04-healthcare-cache
 ```
 
+The launcher treats the execution receipt and post-run process census as the
+authority because Isaac Kit may terminate Python from `SimulationApp.close()`.
 The resolver is installed in-process before task modules are imported, so the
 pinned IsaacLab checkout is not modified and routine assets do not use the
 system temporary directory. These gates intentionally validate tensors and

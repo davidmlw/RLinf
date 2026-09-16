@@ -29,7 +29,7 @@
     }
   },
   "task": {
-    "id": "Isaac-Assemble-Trocar-G129-Dex3-RLinf-v0",
+    "id": "IsaacContrib-Assemble-Trocar-G129-Dex3",
     "canonical_envs": 8,
     "cameras": [
       "front_camera",
