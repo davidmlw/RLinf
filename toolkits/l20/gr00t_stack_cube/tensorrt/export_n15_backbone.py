@@ -27,6 +27,7 @@ from typing import Any
 
 import torch
 from omegaconf import OmegaConf
+from transformers import BatchFeature
 from transformers.models.siglip.modeling_siglip import SiglipVisionTransformer
 
 
@@ -70,6 +71,60 @@ def _metrics(reference: torch.Tensor, candidate: torch.Tensor) -> dict[str, Any]
         "mean_abs": float(difference.mean()),
         "max_abs": float(difference.max()),
         "relative_l2": float(torch.linalg.vector_norm(left - right) / left_norm),
+    }
+
+
+def _masked_metrics(
+    reference: torch.Tensor,
+    candidate: torch.Tensor,
+    attention_mask: torch.Tensor,
+) -> dict[str, Any]:
+    valid = attention_mask.bool()
+    return {
+        "valid_tokens": _metrics(reference[valid], candidate[valid]),
+        "padding_tokens": _metrics(reference[~valid], candidate[~valid]),
+        "valid_token_count": int(valid.sum()),
+        "padding_token_count": int((~valid).sum()),
+    }
+
+
+def _action_parity(
+    model: torch.nn.Module,
+    reference_features: torch.Tensor,
+    candidate_features: torch.Tensor,
+    attention_mask: torch.Tensor,
+    fixture: dict[str, torch.Tensor],
+) -> dict[str, Any]:
+    action_input = BatchFeature(
+        data={
+            name: fixture[name]
+            for name in ("state", "state_mask", "embodiment_id")
+        }
+    )
+
+    def evaluate(features: torch.Tensor) -> dict[str, torch.Tensor]:
+        torch.manual_seed(260918)
+        torch.cuda.manual_seed_all(260918)
+        backbone_output = BatchFeature(
+            data={
+                "backbone_features": features.clone(),
+                "backbone_attention_mask": attention_mask.clone(),
+            }
+        )
+        _, diagnostics = model.action_head.get_rl_action(
+            backbone_output,
+            action_input,
+            mode="eval",
+        )
+        return diagnostics
+
+    with torch.inference_mode():
+        reference = evaluate(reference_features)
+        candidate = evaluate(candidate_features)
+    return {
+        "actions": _metrics(reference["actions"], candidate["actions"]),
+        "values": _metrics(reference["prev_values"], candidate["prev_values"]),
+        "chains": _metrics(reference["chains"], candidate["chains"]),
     }
 
 
@@ -302,12 +357,41 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         source_vision_features = language(
             eager_inputs_embeds, fixture["eagle_attention_mask"]
         )
-        export_features = language(
-            inputs_embeds, fixture["eagle_attention_mask"]
+        export_outputs = language.decoder(
+            inputs_embeds=inputs_embeds,
+            attention_mask=fixture["eagle_attention_mask"],
+            use_cache=False,
+            output_attentions=False,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        export_features = language.projection(
+            export_outputs.hidden_states[language.select_layer]
         )
     source_language_parity = _metrics(expected_output, source_features)
     eager_attention_parity = _metrics(expected_output, source_vision_features)
     feature_parity = _metrics(expected_output, export_features)
+    masked_feature_parity = _masked_metrics(
+        expected_output,
+        export_features,
+        fixture["eagle_attention_mask"],
+    )
+    layer_parity = [
+        {
+            "hidden_state": index,
+            **_metrics(reference, candidate),
+        }
+        for index, (reference, candidate) in enumerate(
+            zip(source_outputs.hidden_states, export_outputs.hidden_states, strict=True)
+        )
+    ]
+    action_parity = _action_parity(
+        model,
+        expected_output,
+        export_features,
+        fixture["eagle_attention_mask"],
+        fixture,
+    )
     if not feature_parity["finite"] or feature_parity["cosine"] < 0.999:
         diagnostics = {
             "fixture_replay": fixture_replay,
@@ -315,7 +399,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "source_language": source_language_parity,
             "export_llm_source_vision": eager_attention_parity,
             "combined_export": feature_parity,
+            "combined_export_by_mask": masked_feature_parity,
+            "qwen_hidden_states": layer_parity,
+            "eager_head": action_parity,
         }
+        (output / "parity-diagnostics.json").write_text(
+            json.dumps(diagnostics, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         raise RuntimeError(f"partial-Qwen export parity failed: {diagnostics}")
 
     del model
@@ -402,6 +493,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "source_language_reconstruction": source_language_parity,
             "llm_export_attention_with_source_vision": eager_attention_parity,
             "partial_qwen_vs_backbone_fixture": feature_parity,
+            "partial_qwen_by_mask": masked_feature_parity,
+            "qwen_hidden_states": layer_parity,
+            "eager_head": action_parity,
         },
         "onnx": {
             name: {
