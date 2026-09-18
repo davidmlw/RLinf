@@ -234,9 +234,19 @@ class StaticB8PartialQwen(torch.nn.Module):
         for layer in self.decoder.layers:
             if isinstance(layer.self_attn, QueryMaskedAttention):
                 layer.self_attn.query_mask = attention_mask
+        sequence = attention_mask.shape[-1]
+        positions = torch.arange(sequence, device=inputs_embeds.device)
+        causal = positions[:, None] >= positions[None, :]
+        valid_keys = attention_mask[:, None, None, :].bool()
+        allowed = causal[None, None, :, :] & valid_keys
+        zero = inputs_embeds.new_zeros(())
+        minimum = inputs_embeds.new_full(
+            (), torch.finfo(inputs_embeds.dtype).min
+        )
+        additive_mask = torch.where(allowed, zero, minimum)
         return self.decoder(
             inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
+            attention_mask=additive_mask,
             use_cache=False,
             output_attentions=False,
             output_hidden_states=True,
