@@ -92,7 +92,11 @@ def capture(args: argparse.Namespace) -> dict[str, Any]:
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     cfg = _model_config(args.config_root.resolve(strict=True), args.model.resolve(strict=True))
-    model = get_model(cfg, torch_dtype=torch.bfloat16).cuda().eval()
+    model = get_model(cfg, torch_dtype=torch.bfloat16)
+    model.cuda()
+    # GR00T N1.5 overrides eval() without returning self, so this cannot be
+    # chained with model construction or device placement.
+    model.eval()
 
     main, wrist = _deterministic_images(args.batch_size)
     env_observation = {
