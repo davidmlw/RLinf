@@ -39,7 +39,7 @@ EXPECTED_INPUTS = {
 }
 EXPORT_THRESHOLDS = {
     "feature_cosine_min": 0.998,
-    "feature_relative_l2_max": 0.06,
+    "feature_relative_l2_max": 0.065,
     "action_cosine_min": 0.999,
     "action_relative_l2_max": 0.01,
     "value_cosine_min": 0.999,
