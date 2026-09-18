@@ -212,11 +212,6 @@ class TensorRTFrozenEagleBackbone:
             raise
         self.vit_engine = vit_engine
         self.llm_engine = llm_engine
-        device = next(self._embedding_layer.parameters()).device
-        self._position_ids = torch.arange(
-            256, device=device, dtype=torch.int64
-        ).expand(self.expected_image_batch, -1).contiguous()
-
         del eagle.vision_model
         del eagle.language_model
         del eagle.mlp1
@@ -264,7 +259,7 @@ class TensorRTFrozenEagleBackbone:
             raise RuntimeError("TensorRT Eagle backbone is closed")
         self._validate_input(values)
         pixel_values = values["eagle_pixel_values"]
-        vit_outputs = self.vit_engine(pixel_values, self._position_ids)
+        vit_outputs = self.vit_engine(pixel_values)
         image_features = vit_outputs["image_features"]
 
         input_ids = values["eagle_input_ids"]

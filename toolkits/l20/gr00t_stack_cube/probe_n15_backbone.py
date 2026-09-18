@@ -36,6 +36,7 @@ EAGLE_KEYS = (
     "eagle_pixel_values",
     "eagle_image_sizes",
 )
+ACTION_KEYS = ("state", "state_mask", "embodiment_id")
 
 
 def _sha256(path: Path) -> str:
@@ -129,10 +130,15 @@ def capture(args: argparse.Namespace) -> dict[str, Any]:
             value=0,
         )
 
-    backbone_inputs, _ = model.prepare_input(normalized)
+    backbone_inputs, action_inputs = model.prepare_input(normalized)
     with torch.inference_mode():
         backbone_outputs = model.backbone(backbone_inputs)
-    input_fixture = {name: backbone_inputs[name].detach().cpu() for name in EAGLE_KEYS}
+    input_fixture = {
+        name: backbone_inputs[name].detach().cpu() for name in EAGLE_KEYS
+    }
+    input_fixture.update(
+        {name: action_inputs[name].detach().cpu() for name in ACTION_KEYS}
+    )
     output_fixture = {
         name: backbone_outputs[name].detach().cpu()
         for name in ("backbone_features", "backbone_attention_mask")
