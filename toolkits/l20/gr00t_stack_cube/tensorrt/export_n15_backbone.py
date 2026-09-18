@@ -234,6 +234,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     model.eval()
     backbone = model.backbone
     eagle = backbone.eagle_model
+    with torch.inference_mode():
+        live_backbone = backbone(
+            {
+                name: fixture[name]
+                for name in (
+                    "eagle_input_ids",
+                    "eagle_attention_mask",
+                    "eagle_pixel_values",
+                    "eagle_image_sizes",
+                )
+            }
+        )["backbone_features"]
+    fixture_replay = _metrics(expected_output, live_backbone)
+    if not fixture_replay["finite"] or fixture_replay["cosine"] < 0.99999:
+        raise RuntimeError(f"live backbone fixture replay failed: {fixture_replay}")
     source_vision = eagle.vision_model.vision_model
     vision = StaticB8VisionProjection(source_vision, eagle.mlp1).cuda().bfloat16()
     vision.eval()
@@ -247,8 +262,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     embedding = eagle.language_model.get_input_embeddings()
     with torch.inference_mode():
-        inputs_embeds = embedding(fixture["eagle_input_ids"])
         selected = fixture["eagle_input_ids"] == eagle.image_token_index
+        eager_inputs_embeds = embedding(fixture["eagle_input_ids"])
+        eager_flattened = eager_image_features.reshape(
+            -1, eager_image_features.shape[-1]
+        )
+        eager_inputs_embeds[selected] = eager_flattened
+        source_outputs = eagle.language_model(
+            inputs_embeds=eager_inputs_embeds,
+            attention_mask=fixture["eagle_attention_mask"],
+            use_cache=False,
+            output_attentions=False,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        source_features = backbone.eagle_linear(
+            source_outputs.hidden_states[backbone.select_layer]
+        )
+        inputs_embeds = embedding(fixture["eagle_input_ids"])
         flattened = export_image_features.reshape(-1, export_image_features.shape[-1])
         if int(selected.sum()) != flattened.shape[0]:
             raise RuntimeError("fixture image token count does not match ViT output")
@@ -263,12 +294,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ).cuda().bfloat16()
     language.eval()
     with torch.inference_mode():
+        source_vision_features = language(
+            eager_inputs_embeds, fixture["eagle_attention_mask"]
+        )
         export_features = language(
             inputs_embeds, fixture["eagle_attention_mask"]
         )
+    source_language_parity = _metrics(expected_output, source_features)
+    eager_attention_parity = _metrics(expected_output, source_vision_features)
     feature_parity = _metrics(expected_output, export_features)
     if not feature_parity["finite"] or feature_parity["cosine"] < 0.999:
-        raise RuntimeError(f"partial-Qwen export parity failed: {feature_parity}")
+        diagnostics = {
+            "fixture_replay": fixture_replay,
+            "vision": vision_parity,
+            "source_language": source_language_parity,
+            "eager_llm_source_vision": eager_attention_parity,
+            "combined_export": feature_parity,
+        }
+        raise RuntimeError(f"partial-Qwen export parity failed: {diagnostics}")
 
     del model
     torch.cuda.empty_cache()
@@ -348,7 +391,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "outputs": _artifact(fixture_root / "backbone-outputs.pt", fixture_root),
         },
         "export_parity": {
+            "fixture_replay": fixture_replay,
             "vision_eager_attention_vs_runtime_eager": vision_parity,
+            "source_language_reconstruction": source_language_parity,
+            "llm_eager_attention_with_source_vision": eager_attention_parity,
             "partial_qwen_vs_backbone_fixture": feature_parity,
         },
         "onnx": {
