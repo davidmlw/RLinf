@@ -145,6 +145,16 @@ def test_n1d5_artifact_contract_rejects_export_metadata_drift(
         tensorrt_backbone._validate_artifacts(config)
 
 
+def test_n1d5_component_mode_is_explicit_and_fail_closed() -> None:
+    assert tensorrt_backbone._component_mode({}) == "full"
+    assert (
+        tensorrt_backbone._component_mode({"components": "llm_only"})
+        == "llm_only"
+    )
+    with pytest.raises(ValueError, match="unsupported TensorRT backbone"):
+        tensorrt_backbone._component_mode({"components": "vit_only"})
+
+
 def test_persistent_engine_hot_path_has_no_copy_or_host_sync() -> None:
     source = inspect.getsource(PersistentEngine.__call__)
 
@@ -161,6 +171,7 @@ def test_n1d5_backend_hot_path_stays_cuda_resident() -> None:
     assert ".numpy()" not in source
     assert ".item()" not in source
     assert "inputs_embeds[selected] = flattened" in source
+    assert "extract_feature" in source
 
 
 def test_rollout_checkpoint_load_precedes_tensorrt_backbone_replacement() -> None:

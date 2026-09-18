@@ -110,12 +110,7 @@ def _benchmark(
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    from rlinf.hybrid_engines.tensorrt import PersistentEngine
     from rlinf.models.embodiment.gr00t.gr00t_n1d5 import get_model
-    from rlinf.models.embodiment.gr00t.gr00t_n1d5.tensorrt_backbone import (
-        _validate_artifacts,
-        _validate_runtime,
-    )
 
     output = args.output.resolve()
     if output.exists():
@@ -174,58 +169,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "runtime_version": args.tensorrt_version,
         "runtime_distribution": "tensorrt-cu12",
         "compute_capability": [8, 9],
+        "components": args.components,
     }
-    llm_engine = None
-    if args.components == "full":
-        model.enable_tensorrt_backbone(backend_config)
+    model.enable_tensorrt_backbone(backend_config)
 
-        def candidate_backbone() -> BatchFeature:
-            return model._forward_backbone(backbone_input)
-
-        telemetry = model.hybrid_runtime_telemetry
-        close = model.close_hybrid_runtime
-    else:
-        artifacts = _validate_artifacts(backend_config)
-        runtime = _validate_runtime(backend_config)
-        llm_engine = PersistentEngine(str(engine_root / "llm_bf16.engine"))
-        eagle = model.backbone.eagle_model
-        embedding = eagle.language_model.get_input_embeddings()
-        image_token_index = int(eagle.image_token_index)
-
-        def candidate_backbone() -> BatchFeature:
-            image_features = eagle.extract_feature(
-                backbone_input["eagle_pixel_values"]
-            )
-            input_ids = backbone_input["eagle_input_ids"]
-            inputs_embeds = embedding(input_ids)
-            selected = input_ids == image_token_index
-            inputs_embeds[selected] = image_features.reshape(
-                -1, image_features.shape[-1]
-            )
-            attention_mask = backbone_input["eagle_attention_mask"]
-            features = llm_engine(inputs_embeds, attention_mask)[
-                "backbone_features"
-            ]
-            return BatchFeature(
-                data={
-                    "backbone_features": features,
-                    "backbone_attention_mask": attention_mask,
-                }
-            )
-
-        def telemetry() -> dict[str, Any]:
-            return {
-                "llm_only": {
-                    "artifacts": {
-                        "receipt_sha256": artifacts["receipt_sha256"],
-                        "metadata_sha256": artifacts["metadata_sha256"],
-                    },
-                    "runtime": runtime,
-                    "llm": llm_engine.telemetry(),
-                }
-            }
-
-        close = llm_engine.close
+    def candidate_backbone() -> BatchFeature:
+        return model._forward_backbone(backbone_input)
 
     with torch.inference_mode():
         candidate_feature = candidate_backbone()
@@ -297,13 +246,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "reduction_percent": 100
             * (1 - candidate_timing["mean_ms"] / eager_timing["mean_ms"]),
         },
-        "telemetry": telemetry(),
+        "telemetry": model.hybrid_runtime_telemetry(),
     }
     receipt = output / "qualification.json"
     receipt.write_text(
         json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    close()
+    model.close_hybrid_runtime()
     if status != "passed":
         raise RuntimeError(f"TensorRT qualification failed: {comparisons}")
     return result

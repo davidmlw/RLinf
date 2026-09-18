@@ -36,6 +36,7 @@ _INPUT_KEYS = (
     "eagle_image_sizes",
 )
 _RECEIPT_SCHEMA = "rlinf.gr00t-n1d5-stack-cube-true-b8-engines.v1"
+_COMPONENT_MODES = ("full", "llm_only")
 
 
 def _sha256(path: Path) -> str:
@@ -50,6 +51,16 @@ def _required(config: Mapping[str, Any], name: str) -> Any:
     value = config.get(name)
     if value is None or value == "":
         raise ValueError(f"rollout.model.tensorrt_backbone.{name} is required")
+    return value
+
+
+def _component_mode(config: Mapping[str, Any]) -> str:
+    value = str(config.get("components", "full"))
+    if value not in _COMPONENT_MODES:
+        raise ValueError(
+            f"unsupported TensorRT backbone components={value!r}; "
+            f"expected one of {_COMPONENT_MODES}"
+        )
     return value
 
 
@@ -179,6 +190,7 @@ class TensorRTFrozenEagleBackbone:
     def __init__(self, backbone: torch.nn.Module, config: Mapping[str, Any]):
         self.backbone = backbone
         self.config = dict(config)
+        self.components = _component_mode(config)
         self.artifacts = _validate_artifacts(config)
         self.runtime = _validate_runtime(config)
         receipt = self.artifacts["receipt"]
@@ -200,9 +212,11 @@ class TensorRTFrozenEagleBackbone:
         vit_engine = None
         llm_engine = None
         try:
-            vit_engine = PersistentEngine(str(root / "vit_bf16.engine"))
+            if self.components == "full":
+                vit_engine = PersistentEngine(str(root / "vit_bf16.engine"))
             llm_engine = PersistentEngine(str(root / "llm_bf16.engine"))
-            self._validate_bindings("vit_bf16.engine", vit_engine)
+            if vit_engine is not None:
+                self._validate_bindings("vit_bf16.engine", vit_engine)
             self._validate_bindings("llm_bf16.engine", llm_engine)
         except Exception:
             if llm_engine is not None:
@@ -212,9 +226,10 @@ class TensorRTFrozenEagleBackbone:
             raise
         self.vit_engine = vit_engine
         self.llm_engine = llm_engine
-        del eagle.vision_model
         del eagle.language_model
-        del eagle.mlp1
+        if self.components == "full":
+            del eagle.vision_model
+            del eagle.mlp1
         torch.cuda.empty_cache()
         self.closed = False
 
@@ -259,8 +274,12 @@ class TensorRTFrozenEagleBackbone:
             raise RuntimeError("TensorRT Eagle backbone is closed")
         self._validate_input(values)
         pixel_values = values["eagle_pixel_values"]
-        vit_outputs = self.vit_engine(pixel_values)
-        image_features = vit_outputs["image_features"]
+        if self.components == "full":
+            image_features = self.vit_engine(pixel_values)["image_features"]
+        else:
+            image_features = self.backbone.eagle_model.extract_feature(
+                pixel_values
+            )
 
         input_ids = values["eagle_input_ids"]
         inputs_embeds = self._embedding_layer(input_ids)
@@ -305,8 +324,13 @@ class TensorRTFrozenEagleBackbone:
                 "files": self.artifacts["files"],
             },
             "runtime": self.runtime,
+            "components": self.components,
             "structure": self.structure(),
-            "vit": self.vit_engine.telemetry(),
+            "vit": (
+                self.vit_engine.telemetry()
+                if self.vit_engine is not None
+                else None
+            ),
             "llm": self.llm_engine.telemetry(),
             "closed": self.closed,
         }
@@ -315,5 +339,6 @@ class TensorRTFrozenEagleBackbone:
         if self.closed:
             return
         self.llm_engine.close()
-        self.vit_engine.close()
+        if self.vit_engine is not None:
+            self.vit_engine.close()
         self.closed = True
