@@ -509,6 +509,36 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         else:
             raise NotImplementedError
 
+    def _forward_backbone(self, backbone_inputs: BatchFeature) -> BatchFeature:
+        tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
+        if tensorrt_backbone is not None:
+            return tensorrt_backbone(backbone_inputs)
+        return self.backbone(backbone_inputs)
+
+    def enable_tensorrt_backbone(self, config: Mapping[str, Any]) -> None:
+        """Replace frozen Eagle vision/LLM modules with qualified TRT engines."""
+
+        if getattr(self, "_tensorrt_backbone", None) is not None:
+            raise RuntimeError("TensorRT Eagle backbone is already enabled")
+        from .tensorrt_backbone import TensorRTFrozenEagleBackbone
+
+        self._tensorrt_backbone = TensorRTFrozenEagleBackbone(self.backbone, config)
+
+    def hybrid_runtime_telemetry(self) -> dict[str, Any]:
+        tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
+        return {
+            "tensorrt_backbone": (
+                tensorrt_backbone.telemetry()
+                if tensorrt_backbone is not None
+                else None
+            )
+        }
+
+    def close_hybrid_runtime(self) -> None:
+        tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
+        if tensorrt_backbone is not None:
+            tensorrt_backbone.close()
+
     def _prepare_action_head_input(
         self, forward_inputs: Mapping[str, torch.Tensor]
     ) -> BatchFeature:
@@ -554,7 +584,7 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
                 "embodiment_id": forward_inputs["embodiment_id"],
             }
             backbone_inputs, action_inputs = self.prepare_input(normalized_input)
-            backbone_outputs = self.backbone(backbone_inputs)
+            backbone_outputs = self._forward_backbone(backbone_inputs)
         else:
             action_inputs = self._prepare_action_head_input(forward_inputs)
             backbone_outputs = BatchFeature(data=dict(precomputed_backbone))
@@ -690,7 +720,7 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         # We expand get_action() and replace action head inference with RL inference.
         backbone_inputs, action_inputs = self.prepare_input(normalized_input)
         # Because the behavior of backbones remains the same for training and inference, we can use `forward` for backbones.
-        backbone_outputs = self.backbone(backbone_inputs)
+        backbone_outputs = self._forward_backbone(backbone_inputs)
         rollout_backbone_output = None
         if getattr(self, "capture_rollout_backbone_output", False):
             # The action head mutates backbone_outputs, so retain the raw frozen

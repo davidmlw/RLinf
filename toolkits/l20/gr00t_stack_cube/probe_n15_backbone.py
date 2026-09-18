@@ -76,7 +76,10 @@ def _deterministic_images(batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         [((base + rank * 17) % 256).to(torch.uint8) for rank in range(batch_size)]
     )
     wrist = torch.stack(
-        [((base.flip(1) + rank * 29 + 7) % 256).to(torch.uint8) for rank in range(batch_size)]
+        [
+            ((base.flip(1) + rank * 29 + 7) % 256).to(torch.uint8)
+            for rank in range(batch_size)
+        ]
     )
     return main, wrist
 
@@ -91,7 +94,9 @@ def capture(args: argparse.Namespace) -> dict[str, Any]:
 
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
-    cfg = _model_config(args.config_root.resolve(strict=True), args.model.resolve(strict=True))
+    cfg = _model_config(
+        args.config_root.resolve(strict=True), args.model.resolve(strict=True)
+    )
     model = get_model(cfg, torch_dtype=torch.bfloat16)
     model.cuda()
     # GR00T N1.5 overrides eval() without returning self, so this cannot be
@@ -157,10 +162,12 @@ def capture(args: argparse.Namespace) -> dict[str, Any]:
             "select_layer": backbone.select_layer,
             "tune_visual": backbone.tune_visual,
             "tune_llm": backbone.tune_llm,
-            "vision_num_patches": eagle.vision_model.vision_model.embeddings.num_patches,
+            "vision_num_patches": (
+                eagle.vision_model.vision_model.embeddings.num_patches
+            ),
             "image_token_index": eagle.image_token_index,
             "use_pixel_shuffle": eagle.use_pixel_shuffle,
-            "downsample_ratio": backbone.downsample_ratio,
+            "downsample_ratio": eagle.downsample_ratio,
             "backbone_parameter_count": sum(
                 parameter.numel() for parameter in backbone.parameters()
             ),
@@ -184,7 +191,9 @@ def capture(args: argparse.Namespace) -> dict[str, Any]:
         },
     }
     receipt = output / "backbone-abi.json"
-    receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    receipt.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
     return result
 

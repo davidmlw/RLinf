@@ -450,6 +450,21 @@ class MultiStepRolloutWorker(Worker):
             model_dict = torch.load(self.cfg.runner.ckpt_path)
             self.hf_model.load_state_dict(model_dict)
 
+        tensorrt_config = OmegaConf.select(
+            self.cfg, "rollout.model.tensorrt_backbone", default=None
+        )
+        if tensorrt_config is not None and bool(tensorrt_config.get("enabled", False)):
+            if self.enable_offload:
+                raise ValueError(
+                    "TensorRT backbone requires rollout.enable_offload=false"
+                )
+            enable_tensorrt_backbone = getattr(
+                self.hf_model, "enable_tensorrt_backbone", None
+            )
+            if not callable(enable_tensorrt_backbone):
+                raise TypeError("rollout model does not support a TensorRT backbone")
+            enable_tensorrt_backbone(tensorrt_config)
+
         rlt_feature_model_config = OmegaConf.select(
             self.cfg, "rollout.rlt_feature_model", default=None
         )
@@ -1307,3 +1322,9 @@ class MultiStepRolloutWorker(Worker):
     def set_global_step(self, global_step: int):
         if hasattr(self.hf_model, "set_global_step"):
             self.hf_model.set_global_step(global_step)
+
+    def _close(self) -> None:
+        model = getattr(self, "hf_model", None)
+        close_hybrid_runtime = getattr(model, "close_hybrid_runtime", None)
+        if callable(close_hybrid_runtime):
+            close_hybrid_runtime()
