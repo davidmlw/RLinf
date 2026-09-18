@@ -349,7 +349,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(f"live backbone fixture replay failed: {fixture_replay}")
     source_vision = eagle.vision_model.vision_model
     vision = StaticB8VisionProjection(
-        source_vision, eagle.mlp1, args.attention_backend
+        source_vision, eagle.mlp1, args.vision_attention_backend
     ).cuda().bfloat16()
     vision.eval()
 
@@ -391,7 +391,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         decoder,
         backbone.eagle_linear,
         backbone.select_layer,
-        args.attention_backend,
+        args.llm_attention_backend,
     ).cuda().bfloat16()
     language.eval()
     with torch.inference_mode():
@@ -514,7 +514,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "image_batch": 16,
         "sequence_length": 570,
         "precision": "bfloat16",
-        "export_attention_backend": args.attention_backend,
+        "export_attention_backends": {
+            "vision": args.vision_attention_backend,
+            "language": args.llm_attention_backend,
+        },
         "vision_tokens_per_image": 256,
         "vision_pixel_shuffle": False,
         "llm_loaded_layers": loaded_llm_layers,
@@ -562,7 +565,14 @@ def main() -> int:
     parser.add_argument("--fixture", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--attention-backend", choices=("eager", "sdpa"), default="sdpa"
+        "--vision-attention-backend",
+        choices=("eager", "sdpa"),
+        default="eager",
+    )
+    parser.add_argument(
+        "--llm-attention-backend",
+        choices=("eager", "sdpa"),
+        default="sdpa",
     )
     args = parser.parse_args()
     try:
