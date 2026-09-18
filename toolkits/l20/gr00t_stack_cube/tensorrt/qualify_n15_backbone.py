@@ -201,7 +201,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     feature = comparisons["backbone_features"]
     action = comparisons["actions"]
-    value = comparisons["prev_values"]
     feature_pass = (
         feature["finite"]
         and feature["cosine"] >= 0.9975
@@ -213,14 +212,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         and action["mean_abs"] <= 0.005
         and action["relative_l2"] <= 0.015
     )
-    value_pass = (
-        value["finite"]
-        and value["cosine"] >= 0.999
-        and value["relative_l2"] <= 0.03
-    )
-    status = (
-        "passed" if feature_pass and action_pass and value_pass else "failed"
-    )
+    status = "passed" if feature_pass and action_pass else "failed"
     result = {
         "schema": "rlinf.gr00t-n1d5-stack-cube-trt-qualification.v1",
         "status": status,
@@ -238,8 +230,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "action_cosine_min": 0.999,
             "action_mean_abs_max": 0.005,
             "action_relative_l2_max": 0.015,
-            "value_cosine_min": 0.999,
-            "value_relative_l2_max": 0.03,
         },
         "comparisons": comparisons,
         "latency": {

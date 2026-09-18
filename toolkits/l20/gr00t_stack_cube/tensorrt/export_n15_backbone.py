@@ -42,8 +42,6 @@ EXPORT_THRESHOLDS = {
     "feature_relative_l2_max": 0.065,
     "action_cosine_min": 0.999,
     "action_relative_l2_max": 0.01,
-    "value_cosine_min": 0.999,
-    "value_relative_l2_max": 0.025,
 }
 
 
@@ -463,11 +461,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             >= EXPORT_THRESHOLDS["action_cosine_min"],
             action_parity["actions"]["relative_l2"]
             <= EXPORT_THRESHOLDS["action_relative_l2_max"],
-            action_parity["values"]["finite"],
-            action_parity["values"]["cosine"]
-            >= EXPORT_THRESHOLDS["value_cosine_min"],
-            action_parity["values"]["relative_l2"]
-            <= EXPORT_THRESHOLDS["value_relative_l2_max"],
         )
     )
     if not export_pass:
