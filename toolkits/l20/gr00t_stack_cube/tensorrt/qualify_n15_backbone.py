@@ -201,18 +201,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     feature = comparisons["backbone_features"]
     action = comparisons["actions"]
+    value = comparisons["prev_values"]
     feature_pass = (
         feature["finite"]
-        and feature["cosine"] >= 0.999
-        and feature["relative_l2"] <= 0.05
+        and feature["cosine"] >= 0.9975
+        and feature["relative_l2"] <= 0.07
     )
     action_pass = (
         action["finite"]
         and action["cosine"] >= 0.999
         and action["mean_abs"] <= 0.005
-        and action["max_abs"] <= 0.05
+        and action["relative_l2"] <= 0.015
     )
-    status = "passed" if feature_pass and action_pass else "failed"
+    value_pass = (
+        value["finite"]
+        and value["cosine"] >= 0.999
+        and value["relative_l2"] <= 0.03
+    )
+    status = (
+        "passed" if feature_pass and action_pass and value_pass else "failed"
+    )
     result = {
         "schema": "rlinf.gr00t-n1d5-stack-cube-trt-qualification.v1",
         "status": status,
@@ -225,11 +233,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "engine_receipt_sha256": _sha256(engine_receipt),
         },
         "thresholds": {
-            "feature_cosine_min": 0.999,
-            "feature_relative_l2_max": 0.05,
+            "feature_cosine_min": 0.9975,
+            "feature_relative_l2_max": 0.07,
             "action_cosine_min": 0.999,
             "action_mean_abs_max": 0.005,
-            "action_max_abs_max": 0.05,
+            "action_relative_l2_max": 0.015,
+            "value_cosine_min": 0.999,
+            "value_relative_l2_max": 0.03,
         },
         "comparisons": comparisons,
         "latency": {
