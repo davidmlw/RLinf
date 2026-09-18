@@ -44,9 +44,16 @@ SAVE_INTERVAL=${SAVE_INTERVAL:-10}
 VAL_CHECK_INTERVAL=${VAL_CHECK_INTERVAL:-10}
 VERIFY_TRAJECTORY=${VERIFY_TRAJECTORY:-false}
 RESUME_DIR=${RESUME_DIR:-}
-TMP_BASE=${W05_TMP_ROOT:-$HOME/tmp/W05/$ATTEMPT}
+TMP_BASE=${W05_TMP_ROOT:-$HOME/r/w05}
 RAY_TMPDIR=$TMP_BASE/ray
 HF_HOME=${HF_HOME:-$HOME/tmp/W05-hf-cache}
+
+# Ray appends a long session/sockets suffix and AF_UNIX paths are limited to
+# 107 bytes. Keep the configurable prefix short enough to fail before launch.
+if (( ${#RAY_TMPDIR} > 40 )); then
+    echo "RAY_TMPDIR is too long for Ray Unix sockets: $RAY_TMPDIR" >&2
+    exit 1
+fi
 
 for path in "$PYTHON" "$RAY" "$ISAAC/setup_conda_env.sh" "$MODEL"; do
     if [[ ! -e "$path" ]]; then
