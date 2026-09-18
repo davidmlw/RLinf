@@ -154,6 +154,22 @@ class StaticB8VisionProjection(torch.nn.Module):
         return self.projection(hidden)
 
 
+class QueryMaskedAttention(torch.nn.Module):
+    """Match FlashAttention's zero-filled output for padded query rows."""
+
+    def __init__(self, attention: torch.nn.Module) -> None:
+        super().__init__()
+        self.attention = attention
+        self.query_mask: torch.Tensor | None = None
+
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        output = self.attention(*args, **kwargs)
+        if self.query_mask is None:
+            raise RuntimeError("query mask was not set before attention")
+        valid = self.query_mask.unsqueeze(-1).to(output[0].dtype)
+        return (output[0] * valid, *output[1:])
+
+
 class StaticB8PartialQwen(torch.nn.Module):
     """Return the exact selected Qwen hidden state used by N1.5."""
 
@@ -175,6 +191,9 @@ class StaticB8PartialQwen(torch.nn.Module):
             decoder.layers = torch.nn.ModuleList(
                 list(decoder.layers[: select_layer + 1])
             )
+        if attention_backend != "flash_attention_2":
+            for layer in decoder.layers:
+                layer.self_attn = QueryMaskedAttention(layer.self_attn)
         self.decoder = decoder
         self.projection = projection
         self.select_layer = select_layer
@@ -184,7 +203,18 @@ class StaticB8PartialQwen(torch.nn.Module):
         inputs_embeds: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        outputs = self.decoder(
+        outputs = self.decode(inputs_embeds, attention_mask)
+        return self.projection(outputs.hidden_states[self.select_layer])
+
+    def decode(
+        self,
+        inputs_embeds: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> Any:
+        for layer in self.decoder.layers:
+            if isinstance(layer.self_attn, QueryMaskedAttention):
+                layer.self_attn.query_mask = attention_mask
+        return self.decoder(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             use_cache=False,
@@ -192,7 +222,6 @@ class StaticB8PartialQwen(torch.nn.Module):
             output_hidden_states=True,
             return_dict=True,
         )
-        return self.projection(outputs.hidden_states[self.select_layer])
 
 
 def _onnx_inventory(path: Path) -> dict[str, Any]:
@@ -357,13 +386,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         source_vision_features = language(
             eager_inputs_embeds, fixture["eagle_attention_mask"]
         )
-        export_outputs = language.decoder(
-            inputs_embeds=inputs_embeds,
-            attention_mask=fixture["eagle_attention_mask"],
-            use_cache=False,
-            output_attentions=False,
-            output_hidden_states=True,
-            return_dict=True,
+        export_outputs = language.decode(
+            inputs_embeds,
+            fixture["eagle_attention_mask"],
         )
         export_features = language.projection(
             export_outputs.hidden_states[language.select_layer]
