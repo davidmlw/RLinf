@@ -37,6 +37,14 @@ EXPECTED_INPUTS = {
     "eagle_input_ids": ([8, 570], torch.int64),
     "eagle_attention_mask": ([8, 570], torch.int64),
 }
+EXPORT_THRESHOLDS = {
+    "feature_cosine_min": 0.998,
+    "feature_relative_l2_max": 0.06,
+    "action_cosine_min": 0.999,
+    "action_relative_l2_max": 0.01,
+    "value_cosine_min": 0.999,
+    "value_relative_l2_max": 0.02,
+}
 
 
 def _sha256(path: Path) -> str:
@@ -429,7 +437,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         fixture["eagle_attention_mask"],
         fixture,
     )
-    if not feature_parity["finite"] or feature_parity["cosine"] < 0.999:
+    export_pass = all(
+        (
+            feature_parity["finite"],
+            feature_parity["cosine"]
+            >= EXPORT_THRESHOLDS["feature_cosine_min"],
+            feature_parity["relative_l2"]
+            <= EXPORT_THRESHOLDS["feature_relative_l2_max"],
+            action_parity["actions"]["finite"],
+            action_parity["actions"]["cosine"]
+            >= EXPORT_THRESHOLDS["action_cosine_min"],
+            action_parity["actions"]["relative_l2"]
+            <= EXPORT_THRESHOLDS["action_relative_l2_max"],
+            action_parity["values"]["finite"],
+            action_parity["values"]["cosine"]
+            >= EXPORT_THRESHOLDS["value_cosine_min"],
+            action_parity["values"]["relative_l2"]
+            <= EXPORT_THRESHOLDS["value_relative_l2_max"],
+        )
+    )
+    if not export_pass:
         diagnostics = {
             "fixture_replay": fixture_replay,
             "vision": vision_parity,
@@ -528,6 +555,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "outputs": _artifact(fixture_root / "backbone-outputs.pt", fixture_root),
         },
         "export_parity": {
+            "status": "passed",
+            "thresholds": EXPORT_THRESHOLDS,
             "fixture_replay": fixture_replay,
             "vision_export_attention_vs_runtime_flash": vision_parity,
             "source_language_reconstruction": source_language_parity,
