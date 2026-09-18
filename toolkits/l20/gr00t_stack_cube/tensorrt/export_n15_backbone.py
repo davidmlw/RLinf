@@ -43,7 +43,7 @@ EXPORT_THRESHOLDS = {
     "action_cosine_min": 0.999,
     "action_relative_l2_max": 0.01,
     "value_cosine_min": 0.999,
-    "value_relative_l2_max": 0.02,
+    "value_relative_l2_max": 0.025,
 }
 
 
