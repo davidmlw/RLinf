@@ -48,6 +48,17 @@ TMP_BASE=${W05_TMP_ROOT:-$HOME/r/w05}
 RAY_TMPDIR=$TMP_BASE/ray
 HF_HOME=${HF_HOME:-$HOME/tmp/W05-hf-cache}
 
+for interval in "$SAVE_INTERVAL" "$VAL_CHECK_INTERVAL"; do
+    if [[ ! "$interval" =~ ^-?[0-9]+$ ]]; then
+        echo "save/eval intervals must be integers: $interval" >&2
+        exit 2
+    fi
+done
+if (( SAVE_INTERVAL >= 0 && VAL_CHECK_INTERVAL > 0 && SAVE_INTERVAL % VAL_CHECK_INTERVAL != 0 )); then
+    echo "SAVE_INTERVAL must be divisible by VAL_CHECK_INTERVAL" >&2
+    exit 2
+fi
+
 # Ray appends a long session/sockets suffix and AF_UNIX paths are limited to
 # 107 bytes. Keep the configurable prefix short enough to fail before launch.
 if (( ${#RAY_TMPDIR} > 40 )); then
