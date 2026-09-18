@@ -140,18 +140,30 @@ class StaticB8VisionProjection(torch.nn.Module):
         super().__init__()
         config = copy.deepcopy(source.config)
         config._attn_implementation = attention_backend
-        self.vision = SiglipVisionTransformer(config)
+        self.vision = ExportableSiglipVisionTransformer(config)
         self.vision.load_state_dict(source.state_dict(), strict=True)
         self.projection = projection
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        hidden = self.vision(
-            pixel_values=pixel_values,
+        hidden = self.vision(pixel_values)
+        return self.projection(hidden)
+
+
+class ExportableSiglipVisionTransformer(SiglipVisionTransformer):
+    """Static inference path that omits SigLIP's unused pooling head."""
+
+    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.embeddings(
+            pixel_values,
+            interpolate_pos_encoding=False,
+        )
+        encoder_outputs = self.encoder(
+            inputs_embeds=hidden_states,
             output_attentions=False,
             output_hidden_states=False,
             return_dict=True,
-        ).last_hidden_state
-        return self.projection(hidden)
+        )
+        return self.post_layernorm(encoder_outputs.last_hidden_state)
 
 
 class QueryMaskedAttention(torch.nn.Module):
