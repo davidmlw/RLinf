@@ -105,9 +105,9 @@ def capture(args: argparse.Namespace) -> dict[str, Any]:
         "states": torch.linspace(
             -0.25,
             0.25,
-            steps=args.batch_size * 7,
+            steps=args.batch_size * 8,
             dtype=torch.float32,
-        ).reshape(args.batch_size, 7),
+        ).reshape(args.batch_size, 8),
         "task_descriptions": [TASK] * args.batch_size,
     }
     observations = model.obs_convert_fn(env_observation)
