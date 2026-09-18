@@ -150,11 +150,11 @@ class StaticB8VisionProjection(torch.nn.Module):
         config._attn_implementation = attention_backend
         self.vision = ExportableSiglipVisionTransformer(config)
         self.vision.load_state_dict(source.state_dict(), strict=True)
-        self.projection = projection
+        self.projection = copy.deepcopy(projection)
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         hidden = self.vision(pixel_values)
-        return self.projection(hidden)
+        return self.projection(hidden).to(pixel_values.dtype)
 
 
 class ExportableSiglipVisionTransformer(SiglipVisionTransformer):
@@ -368,7 +368,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     source_vision = eagle.vision_model.vision_model
     vision = StaticB8VisionProjection(
         source_vision, eagle.mlp1, args.vision_attention_backend
-    ).cuda().bfloat16()
+    ).cuda()
+    if args.vision_compute_precision == "float32":
+        vision.float()
+    else:
+        vision.bfloat16()
     vision.eval()
 
     with torch.inference_mode():
@@ -555,6 +559,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "vision": args.vision_attention_backend,
             "language": args.llm_attention_backend,
         },
+        "vision_compute_precision": args.vision_compute_precision,
         "vision_tokens_per_image": 256,
         "vision_pixel_shuffle": False,
         "llm_loaded_layers": loaded_llm_layers,
@@ -612,6 +617,11 @@ def main() -> int:
         "--llm-attention-backend",
         choices=("eager", "sdpa"),
         default="sdpa",
+    )
+    parser.add_argument(
+        "--vision-compute-precision",
+        choices=("bfloat16", "float32"),
+        default="float32",
     )
     args = parser.parse_args()
     try:
