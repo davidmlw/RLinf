@@ -99,7 +99,7 @@ class StaticB8VisionProjection(torch.nn.Module):
 
 
 class StaticB8PartialQwen(torch.nn.Module):
-    """Return the exact pre-layer-12 Qwen hidden state used by N1.5."""
+    """Return the exact selected Qwen hidden state used by N1.5."""
 
     def __init__(
         self,
@@ -108,15 +108,16 @@ class StaticB8PartialQwen(torch.nn.Module):
         select_layer: int,
     ) -> None:
         super().__init__()
-        if select_layer < 1 or select_layer >= len(decoder.layers):
+        if select_layer < 1 or select_layer > len(decoder.layers):
             raise ValueError(
                 f"unsupported Eagle select_layer={select_layer} for "
                 f"{len(decoder.layers)} Qwen layers"
             )
         decoder.config._attn_implementation = "eager"
-        decoder.layers = torch.nn.ModuleList(
-            list(decoder.layers[: select_layer + 1])
-        )
+        if select_layer < len(decoder.layers):
+            decoder.layers = torch.nn.ModuleList(
+                list(decoder.layers[: select_layer + 1])
+            )
         self.decoder = decoder
         self.projection = projection
         self.select_layer = select_layer
@@ -254,6 +255,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         inputs_embeds[selected] = flattened
 
     decoder = eagle.language_model.model
+    loaded_llm_layers = len(decoder.layers)
     language = StaticB8PartialQwen(
         decoder,
         backbone.eagle_linear,
@@ -338,7 +340,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "precision": "bfloat16",
         "vision_tokens_per_image": 256,
         "vision_pixel_shuffle": False,
-        "llm_total_layers": 28,
+        "llm_loaded_layers": loaded_llm_layers,
         "llm_selected_hidden_state": 12,
         "fixture": {
             "receipt": _artifact(fixture_root / "backbone-abi.json", fixture_root),
