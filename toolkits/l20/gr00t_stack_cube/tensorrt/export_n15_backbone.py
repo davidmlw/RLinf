@@ -74,16 +74,17 @@ def _metrics(reference: torch.Tensor, candidate: torch.Tensor) -> dict[str, Any]
 
 
 class StaticB8VisionProjection(torch.nn.Module):
-    """Eager-attention SigLIP plus the frozen Eagle visual projector."""
+    """Exportable SigLIP plus the frozen Eagle visual projector."""
 
     def __init__(
         self,
         source: SiglipVisionTransformer,
         projection: torch.nn.Module,
+        attention_backend: str,
     ) -> None:
         super().__init__()
         config = copy.deepcopy(source.config)
-        config._attn_implementation = "eager"
+        config._attn_implementation = attention_backend
         self.vision = SiglipVisionTransformer(config)
         self.vision.load_state_dict(source.state_dict(), strict=True)
         self.projection = projection
@@ -106,6 +107,7 @@ class StaticB8PartialQwen(torch.nn.Module):
         decoder: torch.nn.Module,
         projection: torch.nn.Module,
         select_layer: int,
+        attention_backend: str,
     ) -> None:
         super().__init__()
         if select_layer < 1 or select_layer > len(decoder.layers):
@@ -113,7 +115,7 @@ class StaticB8PartialQwen(torch.nn.Module):
                 f"unsupported Eagle select_layer={select_layer} for "
                 f"{len(decoder.layers)} Qwen layers"
             )
-        decoder.config._attn_implementation = "eager"
+        decoder.config._attn_implementation = attention_backend
         if select_layer < len(decoder.layers):
             decoder.layers = torch.nn.ModuleList(
                 list(decoder.layers[: select_layer + 1])
@@ -250,7 +252,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not fixture_replay["finite"] or fixture_replay["cosine"] < 0.99999:
         raise RuntimeError(f"live backbone fixture replay failed: {fixture_replay}")
     source_vision = eagle.vision_model.vision_model
-    vision = StaticB8VisionProjection(source_vision, eagle.mlp1).cuda().bfloat16()
+    vision = StaticB8VisionProjection(
+        source_vision, eagle.mlp1, args.attention_backend
+    ).cuda().bfloat16()
     vision.eval()
 
     with torch.inference_mode():
@@ -291,6 +295,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         decoder,
         backbone.eagle_linear,
         backbone.select_layer,
+        args.attention_backend,
     ).cuda().bfloat16()
     language.eval()
     with torch.inference_mode():
@@ -308,7 +313,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "fixture_replay": fixture_replay,
             "vision": vision_parity,
             "source_language": source_language_parity,
-            "eager_llm_source_vision": eager_attention_parity,
+            "export_llm_source_vision": eager_attention_parity,
             "combined_export": feature_parity,
         }
         raise RuntimeError(f"partial-Qwen export parity failed: {diagnostics}")
@@ -381,6 +386,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "image_batch": 16,
         "sequence_length": 570,
         "precision": "bfloat16",
+        "export_attention_backend": args.attention_backend,
         "vision_tokens_per_image": 256,
         "vision_pixel_shuffle": False,
         "llm_loaded_layers": loaded_llm_layers,
@@ -392,9 +398,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         },
         "export_parity": {
             "fixture_replay": fixture_replay,
-            "vision_eager_attention_vs_runtime_eager": vision_parity,
+            "vision_export_attention_vs_runtime_flash": vision_parity,
             "source_language_reconstruction": source_language_parity,
-            "llm_eager_attention_with_source_vision": eager_attention_parity,
+            "llm_export_attention_with_source_vision": eager_attention_parity,
             "partial_qwen_vs_backbone_fixture": feature_parity,
         },
         "onnx": {
@@ -424,6 +430,9 @@ def main() -> int:
     parser.add_argument("--config-root", type=Path, required=True)
     parser.add_argument("--fixture", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--attention-backend", choices=("eager", "sdpa"), default="sdpa"
+    )
     args = parser.parse_args()
     try:
         result = run(args)
