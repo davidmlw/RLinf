@@ -15,6 +15,7 @@
 import asyncio
 import copy
 import gc
+import json
 import time
 from typing import Any, Callable, Literal, Optional
 
@@ -1362,6 +1363,12 @@ class MultiStepRolloutWorker(Worker):
 
     def _close(self) -> None:
         model = getattr(self, "hf_model", None)
+        hybrid_runtime_telemetry = getattr(model, "hybrid_runtime_telemetry", None)
+        if callable(hybrid_runtime_telemetry):
+            self.log_info(
+                "HYBRID_RUNTIME_TELEMETRY "
+                + json.dumps(hybrid_runtime_telemetry(), sort_keys=True)
+            )
         close_hybrid_runtime = getattr(model, "close_hybrid_runtime", None)
         if callable(close_hybrid_runtime):
             close_hybrid_runtime()

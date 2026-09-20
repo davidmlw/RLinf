@@ -164,6 +164,95 @@ def compute_rollout_train_kl(
     return masked_mean(kl, loss_mask)
 
 
+def compute_preupdate_ppo_gate_stats(
+    logprobs: torch.Tensor,
+    old_logprobs: torch.Tensor,
+    loss_mask: Optional[torch.Tensor],
+    *,
+    logprob_type: str,
+    single_action_dim: int,
+    clip_ratio_low: float,
+    clip_ratio_high: float,
+) -> dict[str, torch.Tensor]:
+    """Summarize executor-only PPO drift before any optimizer update."""
+
+    if logprobs.shape != old_logprobs.shape:
+        raise ValueError(
+            "pre-update PPO logprob shapes differ: "
+            f"{tuple(logprobs.shape)} != {tuple(old_logprobs.shape)}"
+        )
+    batch_size = logprobs.shape[0]
+    if logprob_type == "token_level":
+        current = logprobs.reshape(batch_size, -1, single_action_dim)
+        previous = old_logprobs.reshape(batch_size, -1, single_action_dim)
+        if loss_mask is not None:
+            mask = loss_mask.reshape(batch_size, -1, 1).expand_as(current)
+        else:
+            mask = torch.ones_like(current, dtype=torch.bool)
+    elif logprob_type == "action_level":
+        current = logprobs.reshape(batch_size, -1, single_action_dim).sum(dim=-1)
+        previous = old_logprobs.reshape(batch_size, -1, single_action_dim).sum(
+            dim=-1
+        )
+        if loss_mask is None:
+            mask = torch.ones_like(current, dtype=torch.bool)
+        else:
+            mask = loss_mask.reshape(batch_size, -1).bool()
+            if mask.shape[-1] == 1:
+                mask = mask.expand_as(current)
+            elif mask.shape != current.shape:
+                raise ValueError(
+                    "pre-update PPO action-level mask shape differs: "
+                    f"{tuple(mask.shape)} != {tuple(current.shape)}"
+                )
+    elif logprob_type == "chunk_level":
+        current = logprobs.reshape(batch_size, -1, single_action_dim).sum(dim=(1, 2))
+        previous = old_logprobs.reshape(batch_size, -1, single_action_dim).sum(
+            dim=(1, 2)
+        )
+        mask = (
+            torch.ones_like(current, dtype=torch.bool)
+            if loss_mask is None
+            else loss_mask.reshape(batch_size, -1).any(dim=-1)
+        )
+    else:
+        raise ValueError(f"unsupported W08 pre-update logprob_type: {logprob_type}")
+
+    current = current.float()
+    previous = previous.float()
+    selected_current = current[mask]
+    selected_previous = previous[mask]
+    log_ratio = selected_current - selected_previous
+    ratio = torch.exp(log_ratio)
+    finite = (
+        torch.isfinite(selected_current)
+        & torch.isfinite(selected_previous)
+        & torch.isfinite(log_ratio)
+        & torch.isfinite(ratio)
+    )
+    safe_log_ratio = torch.where(finite, log_ratio, torch.zeros_like(log_ratio))
+    safe_ratio = torch.where(finite, ratio, torch.ones_like(ratio))
+    outside_clip = (safe_ratio < (1.0 - clip_ratio_low)) | (
+        safe_ratio > (1.0 + clip_ratio_high)
+    )
+    if safe_ratio.numel() == 0:
+        ratio_min = torch.tensor(float("inf"), device=logprobs.device)
+        ratio_max = torch.tensor(float("-inf"), device=logprobs.device)
+    else:
+        ratio_min = safe_ratio.min()
+        ratio_max = safe_ratio.max()
+    return {
+        "count": torch.tensor(float(log_ratio.numel()), device=logprobs.device),
+        "finite_count": finite.float().sum(),
+        "log_ratio_sum": safe_log_ratio.sum(),
+        "abs_log_ratio_sum": safe_log_ratio.abs().sum(),
+        "ratio_sum": safe_ratio.sum(),
+        "outside_clip_count": outside_clip.float().sum(),
+        "ratio_min": ratio_min,
+        "ratio_max": ratio_max,
+    }
+
+
 class FSDPActor(FSDPModelManager, Worker):
     def __init__(
         self,
@@ -1534,6 +1623,149 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             forward_inputs = rollout_batch.get("forward_inputs", {})
             forward_inputs.pop(ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None)
 
+    def _measure_preupdate_ppo_gate(
+        self,
+        pinned_rollout_cache: Optional[PinnedRolloutBackboneCache],
+    ) -> dict[str, float]:
+        gate_cfg = self.cfg.actor.get("ppo_preupdate_gate", None)
+        if gate_cfg is None or not bool(gate_cfg.get("enabled", False)):
+            return {}
+        if pinned_rollout_cache is None or self._pinned_backbone_metadata is None:
+            raise RuntimeError(
+                "W08 pre-update PPO gate requires the pinned feature cache"
+            )
+
+        clip_ratio_low = float(self.cfg.algorithm.clip_ratio_low)
+        clip_ratio_high = float(self.cfg.algorithm.clip_ratio_high)
+        action_dim = int(self.cfg.actor.model.get("action_dim", 7))
+        logprob_type = str(self.cfg.algorithm.logprob_type)
+        rollout_size = self.rollout_batch["prev_logprobs"].size(0)
+        batch_size_per_rank = self.cfg.actor.global_batch_size // self._world_size
+        aggregate = None
+        ratio_min = torch.tensor(float("inf"), device=self.device)
+        ratio_max = torch.tensor(float("-inf"), device=self.device)
+        values_finite = torch.tensor(1.0, device=self.device)
+
+        self.model.eval()
+        with torch.no_grad():
+            for global_batch in split_dict_to_chunk(
+                self.rollout_batch, rollout_size // batch_size_per_rank
+            ):
+                global_batch_size = global_batch["prev_logprobs"].shape[0]
+                for batch in split_dict_to_chunk(
+                    global_batch,
+                    global_batch_size // self.cfg.actor.micro_batch_size,
+                ):
+                    batch = put_tensor_device(batch, self.device)
+                    forward_inputs = dict(batch["forward_inputs"])
+                    sample_ids = forward_inputs.pop(
+                        ROLLOUT_BACKBONE_SAMPLE_IDS_KEY, None
+                    )
+                    if sample_ids is None:
+                        raise RuntimeError(
+                            "W08 pre-update PPO gate is missing backbone sample IDs"
+                        )
+                    metadata = self._pinned_backbone_metadata
+                    local_sample_ids = sample_ids - int(metadata["sample_id_base"])
+                    pinned_output = pinned_rollout_cache.load(local_sample_ids)
+                    forward_inputs[ROLLOUT_BACKBONE_FEATURE_KEY] = pinned_output[
+                        "backbone_features"
+                    ]
+                    forward_inputs[ROLLOUT_BACKBONE_MASK_KEY] = pinned_output[
+                        "backbone_attention_mask"
+                    ]
+                    with self.amp_context:
+                        output = self.model(
+                            forward_inputs=forward_inputs,
+                            compute_logprobs=True,
+                            compute_entropy=False,
+                            compute_values=True,
+                            use_cache=False,
+                            precomputed_backbone={
+                                "backbone_features": pinned_output[
+                                    "backbone_features"
+                                ].detach(),
+                                "backbone_attention_mask": pinned_output[
+                                    "backbone_attention_mask"
+                                ].detach(),
+                            },
+                            prev_logprobs=batch["prev_logprobs"],
+                        )
+                    stats = compute_preupdate_ppo_gate_stats(
+                        output["logprobs"],
+                        output["prev_logprobs"],
+                        batch.get("loss_mask", None),
+                        logprob_type=logprob_type,
+                        single_action_dim=action_dim,
+                        clip_ratio_low=clip_ratio_low,
+                        clip_ratio_high=clip_ratio_high,
+                    )
+                    sums = torch.stack(
+                        [
+                            stats["count"],
+                            stats["finite_count"],
+                            stats["log_ratio_sum"],
+                            stats["abs_log_ratio_sum"],
+                            stats["ratio_sum"],
+                            stats["outside_clip_count"],
+                        ]
+                    )
+                    aggregate = sums if aggregate is None else aggregate + sums
+                    ratio_min = torch.minimum(ratio_min, stats["ratio_min"])
+                    ratio_max = torch.maximum(ratio_max, stats["ratio_max"])
+                    values = output.get("values", None)
+                    if values is not None:
+                        values_finite = torch.minimum(
+                            values_finite,
+                            torch.isfinite(values).all().float(),
+                        )
+        self.model.train()
+
+        if aggregate is None:
+            raise RuntimeError("W08 pre-update PPO gate observed no samples")
+        torch.distributed.all_reduce(aggregate, op=torch.distributed.ReduceOp.SUM)
+        torch.distributed.all_reduce(ratio_min, op=torch.distributed.ReduceOp.MIN)
+        torch.distributed.all_reduce(ratio_max, op=torch.distributed.ReduceOp.MAX)
+        torch.distributed.all_reduce(values_finite, op=torch.distributed.ReduceOp.MIN)
+
+        count = float(aggregate[0].item())
+        finite_count = float(aggregate[1].item())
+        metrics = {
+            "actor/preupdate_count": count,
+            "actor/preupdate_finite_fraction": finite_count / count,
+            "actor/preupdate_approx_kl": -float(aggregate[2].item()) / count,
+            "actor/preupdate_mean_abs_log_ratio": float(aggregate[3].item()) / count,
+            "actor/preupdate_ratio_mean": float(aggregate[4].item()) / count,
+            "actor/preupdate_inside_clip_fraction": 1.0
+            - float(aggregate[5].item()) / count,
+            "actor/preupdate_ratio_min": float(ratio_min.item()),
+            "actor/preupdate_ratio_max": float(ratio_max.item()),
+            "actor/preupdate_values_finite": float(values_finite.item()),
+        }
+        max_abs_kl = float(gate_cfg.get("max_abs_approx_kl", 0.01))
+        min_inside = float(gate_cfg.get("min_inside_clip_fraction", 0.99))
+        if metrics["actor/preupdate_finite_fraction"] != 1.0:
+            raise RuntimeError(
+                f"W08 pre-update PPO gate found non-finite values: {metrics}"
+            )
+        if metrics["actor/preupdate_values_finite"] != 1.0:
+            raise RuntimeError(
+                "W08 pre-update PPO gate found non-finite critic values: "
+                f"{metrics}"
+            )
+        if abs(metrics["actor/preupdate_approx_kl"]) > max_abs_kl:
+            raise RuntimeError(f"W08 pre-update PPO KL gate failed: {metrics}")
+        if metrics["actor/preupdate_inside_clip_fraction"] < min_inside:
+            raise RuntimeError(f"W08 pre-update PPO clipping gate failed: {metrics}")
+        self.log_info(
+            "W08_PREUPDATE_PPO_GATE "
+            + " ".join(
+                f"{key.split('/')[-1]}={value:.9g}"
+                for key, value in metrics.items()
+            )
+        )
+        return metrics
+
     def run_training(self) -> None:
         try:
             return self._run_training_impl()
@@ -1571,6 +1803,9 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             self.rollout_batch = process_nested_dict_for_train(
                 self.rollout_batch, shuffle_id
             )
+
+        preupdate_metrics = self._measure_preupdate_ppo_gate(pinned_rollout_cache)
+        optimizer_steps_before = self.optimizer_steps
 
         # Split to make minibatch iterator for updating the actor
         # See PPO paper for details. https://arxiv.org/abs/1707.06347
@@ -1716,6 +1951,25 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             append_to_dict(
                 metrics,
                 {"actor/reuse_feature_fallbacks": float(self._reuse_feature_fallbacks)},
+            )
+        if preupdate_metrics:
+            append_to_dict(metrics, preupdate_metrics)
+            optimizer_step_delta = self.optimizer_steps - optimizer_steps_before
+            if optimizer_step_delta <= 0:
+                raise RuntimeError("W08 pre-update PPO gate observed no optimizer update")
+            finite_update_metrics = [
+                value
+                for key, values in metrics.items()
+                if key == "actor/grad_norm" or "loss" in key
+                for value in values
+            ]
+            if not all(np.isfinite(float(value)) for value in finite_update_metrics):
+                raise RuntimeError(
+                    "W08 pre-update PPO gate observed a non-finite loss or gradient"
+                )
+            append_to_dict(
+                metrics,
+                {"actor/preupdate_optimizer_step_delta": float(optimizer_step_delta)},
             )
         # put LR scheduler step here
         self.lr_scheduler.step()

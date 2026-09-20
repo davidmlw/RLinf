@@ -1,0 +1,30 @@
+defaults:
+  - isaaclab_franka_stack_cube_ppo_gr00t_w08_te
+  - _self_
+
+runner:
+  logger:
+    experiment_name: "w08_n15_stack_cube_trt_backbone_refittable_trt_dit"
+
+rollout:
+  model:
+    tensorrt_dit:
+      enabled: true
+      online_refit: true
+      engine_path: ${oc.env:W08_DIT_ENGINE}
+      receipt_path: ${oc.env:W08_DIT_RECEIPT}
+      receipt_sha256: ${oc.env:W08_DIT_RECEIPT_SHA256}
+      parameter_map_path: ${oc.env:W08_DIT_PARAMETER_MAP}
+      parameter_map_sha256: ${oc.env:W08_DIT_PARAMETER_MAP_SHA256}
+      source_digest_revision_0: ${oc.env:W08_DIT_SOURCE_DIGEST_REVISION_0}
+      revision: 0
+      runtime_version: 10.15.1.29
+      runtime_distribution: tensorrt-cu12
+      compute_capability: [8, 9]
+      lineage_receipt_mode: gpu_transform_validation
+      probe_each_revision: true
+      minimum_probe_cosine: 0.999
+      maximum_probe_relative_l2: 0.05
+      minimum_free_device_bytes: 8589934592
+      ppo_authority_status: unqualified_requires_convergence_validation
+      shadow_eager: false

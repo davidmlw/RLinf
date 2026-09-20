@@ -1,0 +1,30 @@
+defaults:
+  - isaaclab_franka_stack_cube_ppo_gr00t_feature_bundle
+  - _self_
+
+runner:
+  logger:
+    experiment_name: "w08_n15_stack_cube_trt_backbone_eager_head"
+
+rollout:
+  enable_offload: false
+  model:
+    tensorrt_backbone:
+      enabled: true
+      components: full
+      engine_dir: ${oc.env:W08_BACKBONE_ENGINE_DIR}
+      receipt_path: ${oc.env:W08_BACKBONE_RECEIPT}
+      receipt_sha256: ${oc.env:W08_BACKBONE_RECEIPT_SHA256}
+      static_batch_size: 8
+      image_views: 2
+      image_batch_size: 16
+      sequence_length: 570
+      runtime_version: 10.15.1.29
+      runtime_distribution: tensorrt-cu12
+      compute_capability: [8, 9]
+
+actor:
+  ppo_preupdate_gate:
+    enabled: true
+    max_abs_approx_kl: 0.01
+    min_inside_clip_fraction: 0.99

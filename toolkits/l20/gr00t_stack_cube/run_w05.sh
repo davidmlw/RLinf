@@ -12,6 +12,10 @@ Environment overrides:
   RESUME_DIR=/absolute/path/to/checkpoints/global_step_N
   W05_RUNTIME_ROOT=/home/liweim/rl-workspace/rlinf/main
   W05_ISAAC_ROOT=/home/liweim/rl-workspace/poiesis-runtime/isaac-sim-5.1.0
+  RUN_SERIES=W05
+  CONFIG_NAME=isaaclab_franka_stack_cube_ppo_gr00t_feature_bundle
+  EXTRA_PYTHONPATH=
+  EXTRA_LD_LIBRARY_PATH=
 EOF
 }
 
@@ -22,8 +26,14 @@ fi
 
 ATTEMPT=$1
 MAX_STEPS=$2
-if [[ ! "$ATTEMPT" =~ ^W05-[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
-    echo "ATTEMPT must start with W05- and contain only safe path characters" >&2
+RUN_SERIES=${RUN_SERIES:-W05}
+CONFIG_NAME=${CONFIG_NAME:-isaaclab_franka_stack_cube_ppo_gr00t_feature_bundle}
+if [[ ! "$RUN_SERIES" =~ ^W[0-9][0-9]$ ]]; then
+    echo "RUN_SERIES must have the form WNN" >&2
+    exit 2
+fi
+if [[ ! "$ATTEMPT" =~ ^${RUN_SERIES}-[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "ATTEMPT must start with $RUN_SERIES- and contain only safe path characters" >&2
     exit 2
 fi
 if [[ ! "$MAX_STEPS" =~ ^[1-9][0-9]*$ ]]; then
@@ -39,7 +49,7 @@ RAY=${W05_RAY:-$RUNTIME_ROOT/.venv/bin/ray}
 SITE=$RUNTIME_ROOT/.venv/lib/python3.11/site-packages
 GROOT=$RUNTIME_ROOT/.venv/gr00t
 MODEL=${GR00T_STACK_CUBE_MODEL_PATH:-$RUNTIME_ROOT/models/RLinf-Gr00t-SFT-Stack-cube}
-RUN_ROOT=$SOURCE/results/W05/$ATTEMPT
+RUN_ROOT=$SOURCE/results/$RUN_SERIES/$ATTEMPT
 SAVE_INTERVAL=${SAVE_INTERVAL:-10}
 VAL_CHECK_INTERVAL=${VAL_CHECK_INTERVAL:-10}
 VERIFY_TRAJECTORY=${VERIFY_TRAJECTORY:-false}
@@ -129,13 +139,15 @@ export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json
 PYTHON_BIN_DIR=$(dirname "$PYTHON")
 export PATH="/usr/local/cuda-12.6/bin:$PYTHON_BIN_DIR:$HOME/.local/bin:$PATH"
 export LD_PRELOAD=$ISAAC/kit/libcarb.so
-export LD_LIBRARY_PATH="/usr/local/cuda-12.6/lib64:$HOME/.local-libs/extracted/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
-export PYTHONPATH="$SOURCE:$GROOT:$RUNTIME_ROOT:$SITE:$ISAAC/python_packages:$ISAAC/exts/isaacsim.simulation_app:$ISAAC/extsDeprecated/omni.isaac.kit:$ISAAC/kit/kernel/py:$ISAAC/kit/plugins/bindings-python:$ISAAC/exts/isaacsim.robot_motion.lula/pip_prebundle:$ISAAC/exts/isaacsim.asset.exporter.urdf/pip_prebundle:$ISAAC/extscache/omni.kit.pip_archive-0.0.0+69cbf6ad.lx64.cp311/pip_prebundle:$ISAAC/exts/omni.isaac.core_archive/pip_prebundle:$ISAAC/exts/omni.isaac.ml_archive/pip_prebundle:$ISAAC/exts/omni.pip.compute/pip_prebundle:$ISAAC/exts/omni.pip.cloud/pip_prebundle"
+export LD_LIBRARY_PATH="${EXTRA_LD_LIBRARY_PATH:+$EXTRA_LD_LIBRARY_PATH:}/usr/local/cuda-12.6/lib64:$HOME/.local-libs/extracted/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+export PYTHONPATH="${EXTRA_PYTHONPATH:+$EXTRA_PYTHONPATH:}$SOURCE:$GROOT:$RUNTIME_ROOT:$SITE:$ISAAC/python_packages:$ISAAC/exts/isaacsim.simulation_app:$ISAAC/extsDeprecated/omni.isaac.kit:$ISAAC/kit/kernel/py:$ISAAC/kit/plugins/bindings-python:$ISAAC/exts/isaacsim.robot_motion.lula/pip_prebundle:$ISAAC/exts/isaacsim.asset.exporter.urdf/pip_prebundle:$ISAAC/extscache/omni.kit.pip_archive-0.0.0+69cbf6ad.lx64.cp311/pip_prebundle:$ISAAC/exts/omni.isaac.core_archive/pip_prebundle:$ISAAC/exts/omni.isaac.ml_archive/pip_prebundle:$ISAAC/exts/omni.pip.compute/pip_prebundle:$ISAAC/exts/omni.pip.cloud/pip_prebundle"
 
 rm -rf "$RAY_TMPDIR"
 
 {
     printf 'attempt=%s\n' "$ATTEMPT"
+    printf 'run_series=%s\n' "$RUN_SERIES"
+    printf 'config_name=%s\n' "$CONFIG_NAME"
     printf 'source=%s\n' "$SOURCE"
     printf 'source_sha=%s\n' "$(git -C "$SOURCE" rev-parse HEAD)"
     printf 'source_status_lines=%s\n' "$(git -C "$SOURCE" status --porcelain | wc -l)"
@@ -170,7 +182,7 @@ CMD=(
     "$PYTHON"
     "$SOURCE/examples/embodiment/train_embodied_agent.py"
     --config-path "$SOURCE/examples/embodiment/config"
-    --config-name isaaclab_franka_stack_cube_ppo_gr00t_feature_bundle
+    --config-name "$CONFIG_NAME"
     "runner.max_steps=$MAX_STEPS"
     "runner.save_interval=$SAVE_INTERVAL"
     "runner.val_check_interval=$VAL_CHECK_INTERVAL"
@@ -188,7 +200,7 @@ fi
 
 printf '%q ' "${CMD[@]}" >"$RUN_ROOT/command.txt"
 printf '\n' >>"$RUN_ROOT/command.txt"
-cp "$SOURCE/examples/embodiment/config/isaaclab_franka_stack_cube_ppo_gr00t_feature_bundle.yaml" "$RUN_ROOT/input-config.yaml"
+cp "$SOURCE/examples/embodiment/config/$CONFIG_NAME.yaml" "$RUN_ROOT/input-config.yaml"
 
 cleanup() {
     local rc=$?
