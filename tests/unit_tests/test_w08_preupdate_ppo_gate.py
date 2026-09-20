@@ -91,3 +91,22 @@ def test_w08_launcher_disables_static_b8_incompatible_final_eval() -> None:
 
     assert "export SAVE_INTERVAL=-1" in launcher
     assert "export VAL_CHECK_INTERVAL=-1" in launcher
+
+
+def test_w09_launcher_uses_the_full_hybrid_and_true_b8_eval() -> None:
+    root = Path(__file__).parents[2]
+    launcher = (
+        root / "toolkits/l20/gr00t_stack_cube/run_w09.sh"
+    ).read_text(encoding="utf-8")
+    config = (
+        root
+        / "examples/embodiment/config/isaaclab_franka_stack_cube_ppo_gr00t_w08.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "export W08_ENABLE_DIT=true" in launcher
+    assert "export W08_PPO_GATE_ENABLED=false" in launcher
+    assert "export W08_EVAL_TOTAL_NUM_ENVS=64" in launcher
+    assert "export SAVE_INTERVAL=${SAVE_INTERVAL:-5}" in launcher
+    assert "export VAL_CHECK_INTERVAL=${VAL_CHECK_INTERVAL:-5}" in launcher
+    assert "${oc.env:W08_EVAL_TOTAL_NUM_ENVS,32}" in config
+    assert "${oc.env:W08_PPO_GATE_ENABLED,true}" in config

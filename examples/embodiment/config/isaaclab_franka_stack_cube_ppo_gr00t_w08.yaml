@@ -94,7 +94,7 @@ env:
 
   eval:
     rollout_epoch: 3
-    total_num_envs: 32
+    total_num_envs: ${oc.decode:${oc.env:W08_EVAL_TOTAL_NUM_ENVS,32}}
     max_episode_steps: 448
     max_steps_per_rollout_epoch: 448
     auto_reset: true
@@ -161,7 +161,7 @@ actor:
   enable_offload: false
 
   ppo_preupdate_gate:
-    enabled: true
+    enabled: ${oc.decode:${oc.env:W08_PPO_GATE_ENABLED,true}}
     max_abs_approx_kl: 0.01
     min_inside_clip_fraction: 0.99
 
