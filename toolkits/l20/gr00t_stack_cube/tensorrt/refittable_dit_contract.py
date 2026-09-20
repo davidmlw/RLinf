@@ -83,6 +83,8 @@ REQUIRED_MODEL_CONFIG = {
 }
 
 DEFAULT_DOUBLE_BUFFER_HEADROOM_BYTES = 8 << 30
+RUNTIME_REFIT_DTYPE = "BF16"
+ALLOWED_CHECKPOINT_DTYPES = {"BF16", "F32"}
 
 
 def _canonical_sha256(value: Any) -> str:
@@ -322,10 +324,15 @@ def build_refit_manifest(
 
         source_dtype = _normalize_dtype(str(source["dtype"]))
         initializer_dtype = _normalize_dtype(str(initializer["dtype"]))
-        if source_dtype != initializer_dtype:
+        if (
+            source_dtype not in ALLOWED_CHECKPOINT_DTYPES
+            or initializer_dtype != RUNTIME_REFIT_DTYPE
+        ):
             raise ValueError(
-                f"dtype mismatch for {source_name}: checkpoint={source_dtype}, "
-                f"ONNX={initializer_dtype}"
+                f"unsupported dtype conversion for {source_name}: "
+                f"checkpoint={source_dtype}, runtime/ONNX={initializer_dtype}; "
+                f"expected source in {sorted(ALLOWED_CHECKPOINT_DTYPES)} and "
+                f"runtime/ONNX={RUNTIME_REFIT_DTYPE}"
             )
         expected_shape = _expected_initializer_shape(source["shape"], transform)
         actual_shape = tuple(int(dim) for dim in initializer["shape"])
@@ -344,9 +351,17 @@ def build_refit_manifest(
                 "transform": transform,
                 "source_shape": list(source["shape"]),
                 "initializer_shape": list(initializer["shape"]),
-                "dtype": source_dtype,
+                "source_dtype": source_dtype,
+                "runtime_dtype": initializer_dtype,
+                "initializer_dtype": initializer_dtype,
+                "dtype_conversion": (
+                    "identity"
+                    if source_dtype == initializer_dtype
+                    else f"{source_dtype}_to_{initializer_dtype}"
+                ),
                 "parameter_count": parameter_count,
-                "byte_count": parameter_count * DTYPE_BYTES[source_dtype],
+                "source_byte_count": parameter_count * DTYPE_BYTES[source_dtype],
+                "byte_count": parameter_count * DTYPE_BYTES[initializer_dtype],
             }
         )
 

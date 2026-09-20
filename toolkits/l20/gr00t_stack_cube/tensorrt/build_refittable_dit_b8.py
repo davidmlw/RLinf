@@ -223,6 +223,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("TensorRT failed to build the refittable DiT engine")
     plan = output / "dit_bf16_refit.engine"
     plan.write_bytes(serialized)
+    external_data_path = onnx.with_suffix(onnx.suffix + ".data")
 
     free_before, total = torch.cuda.mem_get_info()
     runtime = trt.Runtime(logger)
@@ -253,11 +254,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "bytes": onnx.stat().st_size,
             "sha256": _sha256(onnx),
         },
-        "onnx_external_data": {
-            "path": str(onnx.with_suffix(onnx.suffix + ".data")),
-            "bytes": onnx.with_suffix(onnx.suffix + ".data").stat().st_size,
-            "sha256": _sha256(onnx.with_suffix(onnx.suffix + ".data")),
-        },
+        "onnx_storage": (
+            {
+                "mode": "external_data",
+                "path": str(external_data_path),
+                "bytes": external_data_path.stat().st_size,
+                "sha256": _sha256(external_data_path),
+            }
+            if external_data_path.exists()
+            else {"mode": "embedded", "path": None, "bytes": 0, "sha256": None}
+        ),
         "parameter_map": {"path": str(mapping_path), "sha256": _sha256(mapping_path)},
         "engine": {
             "path": str(plan),

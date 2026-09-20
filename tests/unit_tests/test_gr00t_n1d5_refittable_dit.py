@@ -15,11 +15,16 @@
 import inspect
 from pathlib import Path
 
+import pytest
+
 from rlinf.models.embodiment.gr00t.gr00t_n1d5 import tensorrt_dit
 from rlinf.models.embodiment.gr00t.gr00t_n1d5.gr00t_action_model import (
     GR00T_N1_5_ForRLActionPrediction,
 )
 from rlinf.workers.rollout.hf.huggingface_worker import MultiStepRolloutWorker
+from toolkits.l20.gr00t_stack_cube.tensorrt.refittable_dit_contract import (
+    build_refit_manifest,
+)
 
 
 def test_n1d5_refittable_dit_freezes_the_production_b8_abi() -> None:
@@ -82,3 +87,47 @@ def test_n1d5_export_materializes_inputs_after_inference_scope() -> None:
     export_call = source.index("torch.onnx.export(")
     assert hook_cleanup < materialization < export_call
     assert "torch.is_inference(value)" in source
+
+
+def test_n1d5_refit_contract_records_fp32_checkpoint_to_bf16_runtime() -> None:
+    result = build_refit_manifest(
+        {
+            "action_head.model.proj_out_1.bias": {
+                "shape": [4],
+                "dtype": "F32",
+            }
+        },
+        {
+            "dit.proj_out_1.bias": {
+                "shape": [4],
+                "dtype": "BF16",
+                "consumers": [],
+            }
+        },
+    )
+
+    entry = result["entries"][0]
+    assert entry["source_dtype"] == "F32"
+    assert entry["runtime_dtype"] == "BF16"
+    assert entry["dtype_conversion"] == "F32_to_BF16"
+    assert entry["source_byte_count"] == 16
+    assert entry["byte_count"] == 8
+
+
+def test_n1d5_refit_contract_rejects_non_bf16_runtime_initializer() -> None:
+    with pytest.raises(ValueError, match="unsupported dtype conversion"):
+        build_refit_manifest(
+            {
+                "action_head.model.proj_out_1.bias": {
+                    "shape": [4],
+                    "dtype": "F32",
+                }
+            },
+            {
+                "dit.proj_out_1.bias": {
+                    "shape": [4],
+                    "dtype": "F32",
+                    "consumers": [],
+                }
+            },
+        )
