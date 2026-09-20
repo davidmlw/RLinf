@@ -117,7 +117,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         data={name: fixture[name] for name in ("state", "state_mask", "embodiment_id")}
     )
     cfg = _model_config(args.config_root.resolve(strict=True), model_path)
-    model = get_model(cfg, torch_dtype=torch.bfloat16).cuda().eval()
+    model = get_model(cfg, torch_dtype=torch.bfloat16)
+    model.cuda()
+    model.eval()
     capture = _Capture()
     hook = model.action_head.model.register_forward_pre_hook(
         capture.hook, with_kwargs=True
