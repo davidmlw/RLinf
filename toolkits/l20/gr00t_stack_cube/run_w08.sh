@@ -61,5 +61,7 @@ export W08_ENABLE_DIT
 export EXTRA_PYTHONPATH=$TRT_ROOT
 export EXTRA_LD_LIBRARY_PATH=$TRT_ROOT/tensorrt_libs
 export W05_TMP_ROOT=${W08_TMP_ROOT:-$HOME/r/w08}
+export SAVE_INTERVAL=-1
+export VAL_CHECK_INTERVAL=-1
 
 exec "$SOURCE/toolkits/l20/gr00t_stack_cube/run_w05.sh" "$ATTEMPT" "$MAX_STEPS"

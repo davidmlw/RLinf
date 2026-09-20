@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import inspect
+from pathlib import Path
 
 import pytest
 import torch
@@ -80,3 +81,13 @@ def test_rollout_retains_hybrid_telemetry_before_close() -> None:
 
 def test_rollout_hybrid_cleanup_does_not_override_worker_group_close() -> None:
     assert "_close" not in MultiStepRolloutWorker.__dict__
+
+
+def test_w08_launcher_disables_static_b8_incompatible_final_eval() -> None:
+    launcher = (
+        Path(__file__).parents[2]
+        / "toolkits/l20/gr00t_stack_cube/run_w08.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "export SAVE_INTERVAL=-1" in launcher
+    assert "export VAL_CHECK_INTERVAL=-1" in launcher
