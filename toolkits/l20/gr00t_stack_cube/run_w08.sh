@@ -10,11 +10,11 @@ ARM=$1
 ATTEMPT=$2
 case "$ARM" in
     te)
-        CONFIG_NAME=isaaclab_franka_stack_cube_ppo_gr00t_w08_te
+        W08_ENABLE_DIT=false
         MAX_STEPS=1
         ;;
     tr)
-        CONFIG_NAME=isaaclab_franka_stack_cube_ppo_gr00t_w08_tr
+        W08_ENABLE_DIT=true
         # Revision 1 is refitted and adopted only at the next weight sync.
         MAX_STEPS=2
         ;;
@@ -56,7 +56,8 @@ for path in \
 done
 
 export RUN_SERIES=W08
-export CONFIG_NAME
+export CONFIG_NAME=isaaclab_franka_stack_cube_ppo_gr00t_w08
+export W08_ENABLE_DIT
 export EXTRA_PYTHONPATH=$TRT_ROOT
 export EXTRA_LD_LIBRARY_PATH=$TRT_ROOT/tensorrt_libs
 export W05_TMP_ROOT=${W08_TMP_ROOT:-$HOME/r/w08}
