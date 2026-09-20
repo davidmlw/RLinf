@@ -49,6 +49,14 @@ runner:
   resume_dir: null
   ckpt_path: null
 
+weight_syncer:
+  patch:
+    receiver_state_dict_subset:
+      allowed_sender_prefixes:
+        - backbone.eagle_model.vision_model
+        - backbone.eagle_model.language_model
+        - backbone.eagle_model.mlp1
+
 algorithm:
   normalize_advantages: true
   kl_penalty: kl

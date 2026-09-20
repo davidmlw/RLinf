@@ -784,6 +784,7 @@ class PatchWeightSyncer(WeightSyncer):
         init_sync_enabled: bool = False,
         init_sync_prefixes: list[str] | None = None,
         init_sync_bucket_size: int = 128 * 1024 * 1024,
+        allowed_sender_only_prefixes: list[str] | None = None,
     ):
         super().__init__()
         self.snapshot: dict[str, torch.Tensor] | None = None
@@ -803,10 +804,56 @@ class PatchWeightSyncer(WeightSyncer):
         if self.init_sync_enabled and self.init_sync_prefixes == []:
             raise ValueError("Patch init sync prefixes must not be empty")
         self.init_sync_bucket_size = init_sync_bucket_size
+        self.allowed_sender_only_prefixes = (
+            None
+            if allowed_sender_only_prefixes is None
+            else [str(prefix) for prefix in allowed_sender_only_prefixes]
+        )
+        if self.allowed_sender_only_prefixes == []:
+            raise ValueError("allowed_sender_only_prefixes must not be empty")
         self.compressor = PatchCompressor.create(
             compression_algorithm=compression_algorithm,
             transport_device=self.transport_device,
         )
+
+    def _sender_state_dict_view(
+        self,
+        state_dict: dict[str, torch.Tensor | DTensor],
+    ) -> dict[str, torch.Tensor | DTensor]:
+        if self.ordered_keys is None:
+            raise RuntimeError("Receiver metadata is not initialized")
+
+        sender_keys = set(state_dict)
+        receiver_keys = set(self.ordered_keys)
+        receiver_only = sorted(receiver_keys - sender_keys)
+        sender_only = sorted(sender_keys - receiver_keys)
+        if receiver_only:
+            raise ValueError(
+                "Receiver state dict contains keys absent from sender: "
+                f"{receiver_only[:8]}"
+            )
+        if sender_only:
+            prefixes = self.allowed_sender_only_prefixes
+            if prefixes is None:
+                raise ValueError(
+                    "Sender state dict keys do not match receiver keys; "
+                    f"sender_only={sender_only[:8]}"
+                )
+            disallowed = [
+                key
+                for key in sender_only
+                if not any(
+                    key == prefix or key.startswith(f"{prefix}.")
+                    for prefix in prefixes
+                )
+            ]
+            if disallowed:
+                raise ValueError(
+                    "Sender-only state dict keys are outside the allowed prefixes: "
+                    f"{disallowed[:8]}"
+                )
+
+        return {key: state_dict[key] for key in self.ordered_keys}
 
     def _select_init_sync_weights(
         self,
@@ -926,17 +973,25 @@ class PatchWeightSyncer(WeightSyncer):
         self.param_names_need_sync = param_names_need_sync
         receiver_dtypes = metadata["receiver_dtypes"]
 
-        if set(state_dict.keys()) != set(self.ordered_keys):
-            raise ValueError("Sender state dict keys do not match receiver keys")
+        missing_sender_sync_keys = sorted(set(param_names_need_sync) - set(state_dict))
+        if missing_sender_sync_keys:
+            raise ValueError(
+                "Weight-sync parameter names are absent from sender state dict: "
+                f"{missing_sender_sync_keys[:8]}"
+            )
+        sender_state_dict = self._sender_state_dict_view(state_dict)
+        self.param_names_need_sync = [
+            key for key in param_names_need_sync if key in sender_state_dict
+        ]
 
         if self.init_sync_enabled:
-            await self._sync_init_weights(state_dict, receiver_dtypes, send)
+            await self._sync_init_weights(sender_state_dict, receiver_dtypes, send)
 
         with torch.no_grad():
             snapshot: dict[str, torch.Tensor] = {}
             for key in self.param_names_need_sync:
                 value_2dview, original_shape = as_coo_2d_view(
-                    materialize_tensor(state_dict[key])
+                    materialize_tensor(sender_state_dict[key])
                 )
                 if original_shape != self.original_shapes[key]:
                     raise ValueError(
@@ -1022,7 +1077,9 @@ class PatchWeightSyncer(WeightSyncer):
     ) -> EmptyWeightPatch | WeightPatch:
         if self.patch_builder is None:
             raise RuntimeError("Sender not initialized")
-        return self.patch_builder.create_patch(state_dict, version)
+        return self.patch_builder.create_patch(
+            self._sender_state_dict_view(state_dict), version
+        )
 
     async def sync(
         self,

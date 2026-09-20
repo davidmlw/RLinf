@@ -134,6 +134,11 @@ class WeightSyncer(ABC):
                         default=128 * 1024 * 1024,
                     ),
                 ),
+                allowed_sender_only_prefixes=OmegaConf.select(
+                    patch_config,
+                    "receiver_state_dict_subset.allowed_sender_prefixes",
+                    default=None,
+                ),
             )
         else:
             raise ValueError(f"Unsupported weight syncer type: {syncer_type}")

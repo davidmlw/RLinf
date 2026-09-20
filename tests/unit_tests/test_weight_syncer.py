@@ -239,6 +239,51 @@ def test_collect_param_names_need_sync_keeps_tied_aliases_and_persistent_buffers
     ]
 
 
+def test_patch_weight_syncer_projects_explicit_sender_only_prefixes():
+    syncer = PatchWeightSyncer(
+        allowed_sender_only_prefixes=["frozen_backbone"],
+    )
+    syncer.ordered_keys = ["head.weight", "head.bias"]
+    state_dict = OrderedDict(
+        [
+            ("frozen_backbone.weight", torch.ones(2, 2)),
+            ("head.bias", torch.zeros(2)),
+            ("head.weight", torch.ones(2, 2)),
+        ]
+    )
+
+    view = syncer._sender_state_dict_view(state_dict)
+
+    assert list(view) == syncer.ordered_keys
+    assert view["head.weight"] is state_dict["head.weight"]
+
+
+def test_patch_weight_syncer_rejects_unapproved_sender_only_keys():
+    syncer = PatchWeightSyncer(
+        allowed_sender_only_prefixes=["frozen_backbone"],
+    )
+    syncer.ordered_keys = ["head.weight"]
+
+    with pytest.raises(ValueError, match="outside the allowed prefixes"):
+        syncer._sender_state_dict_view(
+            {
+                "frozen_backbone.weight": torch.ones(2, 2),
+                "head.weight": torch.ones(2, 2),
+                "unexpected.weight": torch.ones(2, 2),
+            }
+        )
+
+
+def test_patch_weight_syncer_rejects_receiver_only_keys():
+    syncer = PatchWeightSyncer(
+        allowed_sender_only_prefixes=["frozen_backbone"],
+    )
+    syncer.ordered_keys = ["head.weight", "receiver_only.weight"]
+
+    with pytest.raises(ValueError, match="keys absent from sender"):
+        syncer._sender_state_dict_view({"head.weight": torch.ones(2, 2)})
+
+
 async def _init_patch_syncers(
     sender_syncer: PatchWeightSyncer,
     receiver_syncer: PatchWeightSyncer,
