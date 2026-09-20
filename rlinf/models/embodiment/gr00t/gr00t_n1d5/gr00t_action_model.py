@@ -524,20 +524,56 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
 
         self._tensorrt_backbone = TensorRTFrozenEagleBackbone(self.backbone, config)
 
+    def enable_tensorrt_dit(self, config: Mapping[str, Any]) -> None:
+        """Replace the rollout DiT forward with an online-refittable TRT engine."""
+
+        if not bool(config.get("online_refit", False)):
+            raise ValueError("rollout.model.tensorrt_dit requires online_refit=true")
+        if getattr(self, "_tensorrt_dit", None) is not None:
+            raise RuntimeError("TensorRT DiT is already enabled")
+        from .tensorrt_dit import RefittableTensorRTDiT
+
+        action_model = self.action_head.model
+        self._eager_dit_forward = action_model.forward
+        self._tensorrt_dit = RefittableTensorRTDiT(action_model, config)
+        action_model.forward = self._tensorrt_dit
+
+    def enable_tensorrt_dit_diagnostic(self, config: Mapping[str, Any]) -> None:
+        """Replace DiT with a revision-zero TRT executor for qualification."""
+
+        if getattr(self, "_tensorrt_dit", None) is not None:
+            raise RuntimeError("TensorRT DiT is already enabled")
+        from .tensorrt_dit import TensorRTDiTRevisionZeroDiagnostic
+
+        action_model = self.action_head.model
+        self._eager_dit_forward = action_model.forward
+        self._tensorrt_dit = TensorRTDiTRevisionZeroDiagnostic(action_model, config)
+        action_model.forward = self._tensorrt_dit
+
+    def verify_online_update_contract(self, revision: int) -> None:
+        tensorrt_dit = getattr(self, "_tensorrt_dit", None)
+        if tensorrt_dit is not None:
+            tensorrt_dit.verify_revision(revision)
+
     def hybrid_runtime_telemetry(self) -> dict[str, Any]:
         tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
+        tensorrt_dit = getattr(self, "_tensorrt_dit", None)
         return {
             "tensorrt_backbone": (
-                tensorrt_backbone.telemetry()
-                if tensorrt_backbone is not None
-                else None
-            )
+                tensorrt_backbone.telemetry() if tensorrt_backbone is not None else None
+            ),
+            "tensorrt_dit": (
+                tensorrt_dit.telemetry() if tensorrt_dit is not None else None
+            ),
         }
 
     def close_hybrid_runtime(self) -> None:
         tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
         if tensorrt_backbone is not None:
             tensorrt_backbone.close()
+        tensorrt_dit = getattr(self, "_tensorrt_dit", None)
+        if tensorrt_dit is not None:
+            tensorrt_dit.close()
 
     def _prepare_action_head_input(
         self, forward_inputs: Mapping[str, torch.Tensor]

@@ -227,9 +227,7 @@ class MultiStepRolloutWorker(Worker):
             self._pinned_stream_expected_samples,
         ) = compute_rollout_backbone_stream_counts(
             rollout_epochs=int(self.cfg.env.train.rollout_epoch),
-            max_steps_per_epoch=int(
-                self.cfg.env.train.max_steps_per_rollout_epoch
-            ),
+            max_steps_per_epoch=int(self.cfg.env.train.max_steps_per_rollout_epoch),
             num_action_chunks=int(self.model_cfg.num_action_chunks),
             pipeline_stages=int(self.num_pipeline_stages),
             total_num_envs=int(self.cfg.env.train.total_num_envs),
@@ -464,6 +462,40 @@ class MultiStepRolloutWorker(Worker):
             if not callable(enable_tensorrt_backbone):
                 raise TypeError("rollout model does not support a TensorRT backbone")
             enable_tensorrt_backbone(tensorrt_config)
+
+        online_tensorrt_dit_config = OmegaConf.select(
+            self.cfg, "rollout.model.tensorrt_dit", default=None
+        )
+        diagnostic_tensorrt_dit_config = OmegaConf.select(
+            self.cfg, "rollout.model.tensorrt_dit_diagnostic", default=None
+        )
+        if (
+            online_tensorrt_dit_config is not None
+            and diagnostic_tensorrt_dit_config is not None
+        ):
+            raise ValueError(
+                "configure either rollout.model.tensorrt_dit or "
+                "rollout.model.tensorrt_dit_diagnostic, not both"
+            )
+        tensorrt_dit_config = (
+            online_tensorrt_dit_config
+            if online_tensorrt_dit_config is not None
+            else diagnostic_tensorrt_dit_config
+        )
+        if tensorrt_dit_config is not None and bool(
+            tensorrt_dit_config.get("enabled", False)
+        ):
+            if self.enable_offload:
+                raise ValueError("TensorRT DiT requires rollout.enable_offload=false")
+            method = (
+                "enable_tensorrt_dit"
+                if online_tensorrt_dit_config is not None
+                else "enable_tensorrt_dit_diagnostic"
+            )
+            enable_tensorrt_dit = getattr(self.hf_model, method, None)
+            if not callable(enable_tensorrt_dit):
+                raise TypeError("rollout model does not support TensorRT DiT")
+            enable_tensorrt_dit(tensorrt_dit_config)
 
         rlt_feature_model_config = OmegaConf.select(
             self.cfg, "rollout.rlt_feature_model", default=None
@@ -991,6 +1023,11 @@ class MultiStepRolloutWorker(Worker):
             )
 
         applied_version = await self.weight_syncer.apply(self.hf_model, recv_func)
+        verify_online_update = getattr(
+            self.hf_model, "verify_online_update_contract", None
+        )
+        if callable(verify_online_update):
+            verify_online_update(applied_version)
         self.version = applied_version
         if self.finished_episodes is None:
             self.finished_episodes = (
