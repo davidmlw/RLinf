@@ -21,6 +21,9 @@ import pytest
 
 from rlinf.hybrid_engines.tensorrt.persistent_engine import PersistentEngine
 from rlinf.models.embodiment.gr00t.gr00t_n1d5 import tensorrt_backbone
+from rlinf.models.embodiment.gr00t.gr00t_n1d5.gr00t_action_model import (
+    GR00T_N1_5_ForRLActionPrediction,
+)
 from rlinf.workers.rollout.hf.huggingface_worker import MultiStepRolloutWorker
 
 
@@ -179,6 +182,14 @@ def test_n1d5_backend_hot_path_stays_cuda_resident() -> None:
     assert ".item()" not in source
     assert "inputs_embeds[selected] = flattened" in source
     assert "extract_feature" in source
+
+
+def test_rollout_feature_capture_owns_persistent_engine_outputs() -> None:
+    source = inspect.getsource(GR00T_N1_5_ForRLActionPrediction._get_rl_action)
+
+    assert "reuses_output_buffers" in source
+    assert "backbone_features = backbone_features.clone()" in source
+    assert "backbone_attention_mask = backbone_attention_mask.clone()" in source
 
 
 def test_rollout_checkpoint_load_precedes_tensorrt_backbone_replacement() -> None:

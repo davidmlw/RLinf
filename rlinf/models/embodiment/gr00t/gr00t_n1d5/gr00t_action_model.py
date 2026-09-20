@@ -761,13 +761,20 @@ class GR00T_N1_5_ForRLActionPrediction(GR00T_N1_5, BasePolicy):
         if getattr(self, "capture_rollout_backbone_output", False):
             # The action head mutates backbone_outputs, so retain the raw frozen
             # tensors before entering it. Disabled runs do not extend their lifetime.
+            backbone_features = backbone_outputs["backbone_features"].detach()
+            backbone_attention_mask = backbone_outputs[
+                "backbone_attention_mask"
+            ].detach()
+            tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
+            if getattr(tensorrt_backbone, "reuses_output_buffers", False):
+                # Persistent TensorRT outputs are overwritten by the next call.
+                # Feature transport keeps several calls alive concurrently, so
+                # materialize an owned block before publishing it to the Actor.
+                backbone_features = backbone_features.clone()
+                backbone_attention_mask = backbone_attention_mask.clone()
             rollout_backbone_output = {
-                ROLLOUT_BACKBONE_FEATURE_KEY: backbone_outputs[
-                    "backbone_features"
-                ].detach(),
-                ROLLOUT_BACKBONE_MASK_KEY: backbone_outputs[
-                    "backbone_attention_mask"
-                ].detach(),
+                ROLLOUT_BACKBONE_FEATURE_KEY: backbone_features,
+                ROLLOUT_BACKBONE_MASK_KEY: backbone_attention_mask,
             }
         action_head_outputs, rlinf_outputs = self.action_head.get_rl_action(
             backbone_outputs, action_inputs, mode=mode
