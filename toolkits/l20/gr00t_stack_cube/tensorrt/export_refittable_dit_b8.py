@@ -53,6 +53,23 @@ def _tensor_spec(value: torch.Tensor) -> dict[str, Any]:
     }
 
 
+def _materialize_export_inputs(
+    inputs: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    materialized = {
+        name: value.detach().clone().contiguous() for name, value in inputs.items()
+    }
+    inference_inputs = [
+        name for name, value in materialized.items() if torch.is_inference(value)
+    ]
+    if inference_inputs:
+        raise RuntimeError(
+            "DiT export inputs remain inference tensors: "
+            f"{sorted(inference_inputs)}"
+        )
+    return materialized
+
+
 class _Capture:
     def __init__(self) -> None:
         self.inputs: dict[str, torch.Tensor] | None = None
@@ -135,6 +152,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         hook.remove()
     if capture.inputs is None:
         raise RuntimeError("N1.5 DiT pre-forward hook captured no input")
+    # The hook runs inside inference_mode, whose tensors cannot participate in
+    # the autograd-backed legacy ONNX tracer. Clone after leaving that scope.
+    capture.inputs = _materialize_export_inputs(capture.inputs)
     for name, (shape, dtype) in EXPECTED_INPUTS.items():
         value = capture.inputs[name]
         if list(value.shape) != shape or value.dtype != dtype:

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import inspect
+from pathlib import Path
 
 from rlinf.models.embodiment.gr00t.gr00t_n1d5 import tensorrt_dit
 from rlinf.models.embodiment.gr00t.gr00t_n1d5.gr00t_action_model import (
@@ -66,3 +67,18 @@ def test_rollout_refits_before_publishing_revision() -> None:
     assert source.index("verify_online_update(applied_version)") < source.index(
         "self.version = applied_version"
     )
+
+
+def test_n1d5_export_materializes_inputs_after_inference_scope() -> None:
+    source = Path(
+        "toolkits/l20/gr00t_stack_cube/tensorrt/export_refittable_dit_b8.py"
+    ).read_text(encoding="utf-8")
+
+    inference_scope = source.index("with torch.inference_mode():")
+    hook_cleanup = source.index("hook.remove()", inference_scope)
+    materialization = source.index(
+        "capture.inputs = _materialize_export_inputs(capture.inputs)"
+    )
+    export_call = source.index("torch.onnx.export(")
+    assert hook_cleanup < materialization < export_call
+    assert "torch.is_inference(value)" in source
