@@ -459,6 +459,7 @@ class EmbodiedRunner:
         )
 
     def _finish_run(self) -> None:
+        self.rollout.close_hybrid_runtime_worker().wait()
         self.metric_logger.finish()
 
         # Stop logging thread

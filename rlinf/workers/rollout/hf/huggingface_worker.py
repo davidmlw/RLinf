@@ -1361,7 +1361,9 @@ class MultiStepRolloutWorker(Worker):
         if hasattr(self.hf_model, "set_global_step"):
             self.hf_model.set_global_step(global_step)
 
-    def _close(self) -> None:
+    def close_hybrid_runtime_worker(self) -> None:
+        """Retain hybrid telemetry and release its persistent resources."""
+
         model = getattr(self, "hf_model", None)
         hybrid_runtime_telemetry = getattr(model, "hybrid_runtime_telemetry", None)
         if callable(hybrid_runtime_telemetry):

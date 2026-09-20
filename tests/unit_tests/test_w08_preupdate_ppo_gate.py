@@ -70,9 +70,13 @@ def test_w08_gate_runs_before_the_first_optimizer_step() -> None:
 
 
 def test_rollout_retains_hybrid_telemetry_before_close() -> None:
-    source = inspect.getsource(MultiStepRolloutWorker._close)
+    source = inspect.getsource(MultiStepRolloutWorker.close_hybrid_runtime_worker)
 
     assert source.index("hybrid_runtime_telemetry()") < source.index(
         "close_hybrid_runtime()"
     )
     assert "HYBRID_RUNTIME_TELEMETRY" in source
+
+
+def test_rollout_hybrid_cleanup_does_not_override_worker_group_close() -> None:
+    assert "_close" not in MultiStepRolloutWorker.__dict__
