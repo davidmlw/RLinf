@@ -827,6 +827,10 @@ class PatchWeightSyncer(WeightSyncer):
         receiver_keys = set(self.ordered_keys)
         receiver_only = sorted(receiver_keys - sender_keys)
         sender_only = sorted(sender_keys - receiver_keys)
+        if self.allowed_sender_only_prefixes is None and (
+            receiver_only or sender_only
+        ):
+            raise ValueError("State dict keys do not match snapshot keys")
         if receiver_only:
             raise ValueError(
                 "Receiver state dict contains keys absent from sender: "
