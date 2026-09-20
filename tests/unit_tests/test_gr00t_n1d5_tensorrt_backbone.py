@@ -164,6 +164,13 @@ def test_persistent_engine_hot_path_has_no_copy_or_host_sync() -> None:
     assert ".synchronize()" not in source
 
 
+def test_persistent_engine_outputs_are_not_inference_tensors() -> None:
+    source = inspect.getsource(PersistentEngine._output)
+
+    assert "inference_mode(False)" in source
+    assert source.index("inference_mode(False)") < source.index("self._torch.empty(")
+
+
 def test_n1d5_backend_hot_path_stays_cuda_resident() -> None:
     source = inspect.getsource(tensorrt_backbone.TensorRTFrozenEagleBackbone.__call__)
 

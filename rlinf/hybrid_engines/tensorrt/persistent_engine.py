@@ -142,7 +142,13 @@ class PersistentEngine:
             )
         key = (name, shape, dtype, device.index)
         if key not in self._outputs:
-            self._outputs[key] = self._torch.empty(shape, dtype=dtype, device=device)
+            # Persistent outputs may be allocated by a first call made under
+            # inference_mode. Keep the cached tensor reusable by downstream
+            # PyTorch modules that can later execute in a normal grad scope.
+            with self._torch.inference_mode(False):
+                self._outputs[key] = self._torch.empty(
+                    shape, dtype=dtype, device=device
+                )
             self.allocation_count += 1
         return self._outputs[key]
 
