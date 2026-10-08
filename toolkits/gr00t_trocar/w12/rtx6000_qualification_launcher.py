@@ -180,6 +180,8 @@ def _container_args(
             "ro",
         ),
         (run_root / "scratch/assets-cache", "/tmp/Assets", "rw"),
+        (run_root / "scratch/kit-cache", "/isaac-sim/kit/cache", "rw"),
+        (run_root / "scratch/kit-data", "/isaac-sim/kit/data", "rw"),
         (inputs["metadata"], "/w96-inputs/trocar/metadata.json", "ro"),
         (run_root, "/w12-run", "rw"),
         (run_root, "/w96-run", "rw"),
@@ -208,7 +210,7 @@ def _container_args(
         "seccomp=unconfined",
     ]
     environment = {
-        "HOME": "/tmp",
+        "HOME": "/w12-run/scratch/home",
         "USER": "liweim",
         "LOGNAME": "liweim",
         "XDG_CACHE_HOME": "/w12-run/scratch/cache",
@@ -279,6 +281,8 @@ def launch(args: argparse.Namespace) -> dict[str, Any]:
     inputs = _require_inputs(source, bundle)
     inputs["graphics"] = graphics_runtime
     shutil.copytree(inputs["assets_seed"], run_root / "scratch/assets-cache")
+    for name in ("home", "kit-cache", "kit-data"):
+        (run_root / f"scratch/{name}").mkdir()
     asset_cache = run_root / "scratch/assets-cache"
     for path in [asset_cache, *asset_cache.rglob("*")]:
         if not path.is_symlink():

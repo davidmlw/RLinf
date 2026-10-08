@@ -143,10 +143,13 @@ def test_container_args_freeze_network_image_and_gpu_contract(tmp_path: Path) ->
     assert launcher.IMAGE in argv
     assert f"PYTHONPATH={launcher.PYTHONPATH}" in argv
     assert "USER=liweim" in argv
+    assert "HOME=/w12-run/scratch/home" in argv
     assert "TORCHINDUCTOR_CACHE_DIR=/w12-run/scratch/torchinductor" in argv
     assert "NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics" in argv
     assert any(value.endswith(":/w12-run:rw") for value in argv)
     assert any(value.endswith(":/w96-run:rw") for value in argv)
+    assert any(value.endswith(":/isaac-sim/kit/cache:rw") for value in argv)
+    assert any(value.endswith(":/isaac-sim/kit/data:rw") for value in argv)
 
 
 def test_container_absence_rejects_daemon_error(monkeypatch: pytest.MonkeyPatch) -> None:
