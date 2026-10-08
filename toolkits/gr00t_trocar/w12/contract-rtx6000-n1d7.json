@@ -26,6 +26,8 @@
     "torch_cuda_version": "12.8",
     "transformers_version": "4.57.3",
     "tensorrt_version": "10.15.1.29",
+    "nvidia_graphics_userspace_version": "595.58.03",
+    "nvidia_driver_installer_sha256": "8c0d4f967b7932c4ab5714272aee8103392b0a702c92afa555176d36205829f9",
     "pythonpath": "/w96-overlay:/w96-trt-runtime:/workspace/gr00t-n17:/workspace/rlinf-src",
     "offline_model_and_assets": true,
     "network_disabled_for_qualified_runs": true

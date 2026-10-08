@@ -55,6 +55,17 @@ def test_gpu_inventory_rejects_wrong_compute_capability() -> None:
     assert not probe._gpu_inventory_matches(gpus)
 
 
+def test_driver_library_authorities_are_split_by_capability() -> None:
+    assert probe._driver_library_path_allowed(
+        "nvidia_vulkan_icd_library",
+        "/w12-driver/libGLX_nvidia.so.595.58.03",
+    )
+    assert not probe._driver_library_path_allowed(
+        "nvidia_vulkan_icd_library",
+        "/usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.595.58.03",
+    )
+
+
 def test_vulkan_receipt_reinterprets_exact_rtx6000_inventory() -> None:
     receipt = {
         "status": "failed",
@@ -107,6 +118,7 @@ def test_container_args_freeze_network_image_and_gpu_contract(tmp_path: Path) ->
         "gr00t",
         "overlay",
         "tensorrt",
+        "graphics",
         "model",
         "backbone",
         "config",

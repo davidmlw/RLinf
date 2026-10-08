@@ -30,6 +30,18 @@ from toolkits.gr00t_trocar.w95 import l20_runtime_probe as common
 EXPECTED_GPU_COUNT = 8
 EXPECTED_GPU_NAME = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
 EXPECTED_COMPUTE_CAPABILITY = [12, 0]
+GRAPHICS_RUNTIME_ROOT = Path("/w12-driver")
+
+
+def _driver_library_path_allowed(name: str, path: str) -> bool:
+    resolved = Path(path)
+    if name == "libcuda":
+        return common._driver_library_path_allowed(path)
+    try:
+        resolved.relative_to(GRAPHICS_RUNTIME_ROOT)
+    except ValueError:
+        return False
+    return resolved.name == "libGLX_nvidia.so.595.58.03"
 
 
 def _gpu_inventory_matches(gpus: list[dict[str, Any]]) -> bool:
@@ -129,9 +141,9 @@ def run() -> dict[str, Any]:
         value["status"] == "passed"
         and value["soname"] == Path(value["requested"]).name
         and Path(value["resolved_path"]).is_absolute()
-        and common._driver_library_path_allowed(value["resolved_path"])
+        and _driver_library_path_allowed(name, value["resolved_path"])
         and len(value["sha256"]) == 64
-        for value in libraries.values()
+        for name, value in libraries.items()
     )
     icd_gate = (
         icd_path == expected_icd_path

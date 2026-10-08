@@ -158,6 +158,7 @@ def _container_args(
         (inputs["gr00t"], "/workspace/gr00t-n17", "ro"),
         (inputs["overlay"], "/w96-overlay", "ro"),
         (inputs["tensorrt"], "/w96-trt-runtime", "ro"),
+        (inputs["graphics"], "/w12-driver", "ro"),
         (inputs["model"], "/models/GR00T-N1.7-3B", "ro"),
         (inputs["backbone"], "/w96-model-inputs/Cosmos-Reason2-2B", "ro"),
         (
@@ -235,7 +236,7 @@ def _container_args(
 
 def _command(phase: str) -> str:
     setup = (
-        'set -euo pipefail; export LD_LIBRARY_PATH="/w96-trt-runtime/'
+        'set -euo pipefail; export LD_LIBRARY_PATH="/w12-driver:/w96-trt-runtime/'
         'tensorrt_libs:${LD_LIBRARY_PATH:-}"; '
     )
     probe = (
@@ -263,6 +264,7 @@ def _command(phase: str) -> str:
 def launch(args: argparse.Namespace) -> dict[str, Any]:
     source = args.source.resolve(strict=True)
     bundle = args.bundle.resolve(strict=True)
+    graphics_runtime = args.graphics_runtime.resolve(strict=True)
     docker = Path(shutil.which("docker") or "")
     if not docker.is_file():
         raise QualificationError("docker executable is unavailable")
@@ -270,6 +272,7 @@ def launch(args: argparse.Namespace) -> dict[str, Any]:
     run_root = args.run_root.resolve()
     (run_root / "receipts").mkdir()
     inputs = _require_inputs(source, bundle)
+    inputs["graphics"] = graphics_runtime
     shutil.copytree(inputs["assets_seed"], run_root / "scratch/assets-cache")
     asset_cache = run_root / "scratch/assets-cache"
     for path in [asset_cache, *asset_cache.rglob("*")]:
@@ -339,6 +342,7 @@ def launch(args: argparse.Namespace) -> dict[str, Any]:
         "source_revision": args.source_revision,
         "source_path": str(source),
         "bundle_path": str(bundle),
+        "graphics_runtime_path": str(graphics_runtime),
         "contract": {
             "path": str(source / "toolkits/gr00t_trocar/w12/contract-rtx6000-n1d7.json"),
             "sha256": _sha256(
@@ -364,6 +368,7 @@ def main() -> int:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--graphics-runtime", type=Path, required=True)
     parser.add_argument("--run-root", type=Path, required=True)
     args = parser.parse_args()
     try:

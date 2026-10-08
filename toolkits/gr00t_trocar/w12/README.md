@@ -10,6 +10,12 @@ The contract intentionally separates three authorities:
   bundle; and
 - the RTX 6000 host-injected CUDA/Vulkan driver stack.
 
+The host currently exposes the kernel/CUDA driver but not the Vulkan ICD
+userspace closure. The launcher therefore mounts an immutable, exact-version
+595.58.03 graphics bundle at `/w12-driver`. `libcuda` must still resolve from
+the container-runtime host injection; only the NVIDIA GLX/Vulkan library may
+resolve from this owned bundle.
+
 `rtx6000_runtime_probe.py` runs before Isaac or Ray. It reuses the audited W96
 module, shared-library and ctypes Vulkan checks while requiring exactly eight
 RTX PRO 6000 Blackwell Server Edition GPUs with compute capability 12.0.
