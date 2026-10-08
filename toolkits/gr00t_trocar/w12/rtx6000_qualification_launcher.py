@@ -209,6 +209,10 @@ def _container_args(
     ]
     environment = {
         "HOME": "/tmp",
+        "USER": "liweim",
+        "LOGNAME": "liweim",
+        "XDG_CACHE_HOME": "/w12-run/scratch/cache",
+        "TORCHINDUCTOR_CACHE_DIR": "/w12-run/scratch/torchinductor",
         "PYTHONNOUSERSITE": "1",
         "PYTHONPATH": PYTHONPATH,
         "HF_HUB_OFFLINE": "1",
