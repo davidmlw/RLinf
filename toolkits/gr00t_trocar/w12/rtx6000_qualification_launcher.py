@@ -182,6 +182,7 @@ def _container_args(
         (run_root / "scratch/assets-cache", "/tmp/Assets", "rw"),
         (inputs["metadata"], "/w96-inputs/trocar/metadata.json", "ro"),
         (run_root, "/w12-run", "rw"),
+        (run_root, "/w96-run", "rw"),
     ]
     args = [
         str(docker),
