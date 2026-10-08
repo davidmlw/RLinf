@@ -125,6 +125,7 @@ def test_container_args_freeze_network_image_and_gpu_contract(tmp_path: Path) ->
         Path("/usr/bin/docker"), "fixture", run_root, inputs, "true"
     )
     assert argv[:4] == ["/usr/bin/docker", "run", "--name", "fixture"]
+    assert argv[argv.index("--user") + 1] == f"{launcher.os.getuid()}:{launcher.os.getgid()}"
     assert argv[argv.index("--gpus") + 1] == "all"
     assert argv[argv.index("--network") + 1] == "none"
     assert launcher.IMAGE in argv

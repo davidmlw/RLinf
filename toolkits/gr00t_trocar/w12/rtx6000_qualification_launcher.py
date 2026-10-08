@@ -187,6 +187,8 @@ def _container_args(
         "run",
         "--name",
         container,
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
         "--gpus",
         "all",
         "--network",
@@ -269,6 +271,11 @@ def launch(args: argparse.Namespace) -> dict[str, Any]:
     (run_root / "receipts").mkdir()
     inputs = _require_inputs(source, bundle)
     shutil.copytree(inputs["assets_seed"], run_root / "scratch/assets-cache")
+    asset_cache = run_root / "scratch/assets-cache"
+    for path in [asset_cache, *asset_cache.rglob("*")]:
+        if not path.is_symlink():
+            writable_bits = 0o700 if path.is_dir() else 0o600
+            path.chmod(path.stat().st_mode | writable_bits)
     preflight = _preflight(docker)
     container = f"w12-{args.phase}-{int(time.time())}"
     _ensure_absent(docker, container)
