@@ -94,7 +94,29 @@ def create_manifest(root: Path) -> dict[str, Any]:
     }
 
 
-def verify_manifest(root: Path, manifest: dict[str, Any]) -> list[str]:
+def _entries_sha256(entries: list[dict[str, Any]]) -> str:
+    canonical = json.dumps(
+        entries, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode("ascii")
+    return _sha256_bytes(canonical)
+
+
+def _portable_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result = []
+    for entry in entries:
+        normalized = dict(entry)
+        if normalized.get("type") == "directory":
+            normalized.pop("size", None)
+        result.append(normalized)
+    return result
+
+
+def verify_manifest(
+    root: Path,
+    manifest: dict[str, Any],
+    *,
+    ignore_directory_size: bool = False,
+) -> list[str]:
     errors: list[str] = []
     if manifest.get("schema") != SCHEMA:
         return [f"unsupported manifest schema: {manifest.get('schema')!r}"]
@@ -102,9 +124,20 @@ def verify_manifest(root: Path, manifest: dict[str, Any]) -> list[str]:
         current = create_manifest(root)
     except (OSError, ValueError) as error:
         return [str(error)]
-    for field in ("root_name", "entry_count", "tree_sha256", "entries"):
+    if manifest.get("tree_sha256") != _entries_sha256(manifest.get("entries", [])):
+        errors.append("manifest tree_sha256 does not authenticate its entries")
+    for field in ("root_name", "entry_count"):
         if current[field] != manifest.get(field):
             errors.append(f"immutable tree differs at manifest field: {field}")
+    if ignore_directory_size:
+        if _portable_entries(current["entries"]) != _portable_entries(
+            manifest.get("entries", [])
+        ):
+            errors.append("immutable tree differs at portable manifest entries")
+    else:
+        for field in ("tree_sha256", "entries"):
+            if current[field] != manifest.get(field):
+                errors.append(f"immutable tree differs at manifest field: {field}")
     return errors
 
 
@@ -191,6 +224,7 @@ def main() -> int:
     verify = subparsers.add_parser("verify")
     verify.add_argument("--root", type=Path, required=True)
     verify.add_argument("--manifest", type=Path, required=True)
+    verify.add_argument("--ignore-directory-size", action="store_true")
     materialize = subparsers.add_parser("materialize")
     materialize.add_argument("--source", type=Path, required=True)
     materialize.add_argument("--destination", type=Path, required=True)
@@ -219,7 +253,11 @@ def main() -> int:
         )
         return 0
 
-    errors = verify_manifest(args.root, manifest)
+    errors = verify_manifest(
+        args.root,
+        manifest,
+        ignore_directory_size=args.ignore_directory_size,
+    )
     print(json.dumps({"status": "failed" if errors else "passed", "errors": errors}))
     return 1 if errors else 0
 

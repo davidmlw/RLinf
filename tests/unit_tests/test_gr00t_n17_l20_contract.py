@@ -281,6 +281,32 @@ def test_immutable_tree_manifest_records_files_modes_and_symlinks(tmp_path) -> N
     ]
 
 
+def test_tree_manifest_cross_filesystem_mode_ignores_only_directory_size(
+    tmp_path,
+) -> None:
+    module = _tree_manifest_module()
+    root = tmp_path / "runtime"
+    (root / "nested").mkdir(parents=True)
+    (root / "nested/payload").write_text("payload", encoding="ascii")
+    manifest = module.create_manifest(root)
+    for entry in manifest["entries"]:
+        if entry["type"] == "directory":
+            entry["size"] += 4096
+    manifest["tree_sha256"] = module._entries_sha256(manifest["entries"])
+
+    assert module.verify_manifest(root, manifest)
+    assert module.verify_manifest(
+        root, manifest, ignore_directory_size=True
+    ) == []
+
+    payload = next(
+        entry for entry in manifest["entries"] if entry["relative_path"] == "nested/payload"
+    )
+    payload["sha256"] = "0" * 64
+    manifest["tree_sha256"] = module._entries_sha256(manifest["entries"])
+    assert module.verify_manifest(root, manifest, ignore_directory_size=True)
+
+
 def test_immutable_tree_manifest_rejects_manifest_inside_tree(tmp_path) -> None:
     module = _tree_manifest_module()
     root = tmp_path / "bundle"
