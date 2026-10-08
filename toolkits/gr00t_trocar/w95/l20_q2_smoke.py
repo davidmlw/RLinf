@@ -605,6 +605,7 @@ def _tensor_tree(value: Any, prefix: str = "") -> dict[str, dict[str, Any]]:
 
 
 def run_env(args: argparse.Namespace) -> dict[str, Any]:
+    num_envs = getattr(args, "num_envs", 1)
     launcher_contract = _isaac_launcher_contract_receipt()
     if launcher_contract["status"] != "passed":
         return {
@@ -639,7 +640,7 @@ def run_env(args: argparse.Namespace) -> dict[str, Any]:
 
         env_cfg = load_cfg_from_registry(TASK_ID, "env_cfg_entry_point")
         env_cfg.seed = args.seed
-        env_cfg.scene.num_envs = 1
+        env_cfg.scene.num_envs = num_envs
         env_cfg.sim.device = "cuda:0"
         env = gym.make(TASK_ID, cfg=env_cfg, render_mode="rgb_array").unwrapped
         observation, reset_info = env.reset()
@@ -665,7 +666,7 @@ def run_env(args: argparse.Namespace) -> dict[str, Any]:
             "status": "pending_cleanup",
             "phase": "env",
             "task_id": TASK_ID,
-            "num_envs": 1,
+            "num_envs": num_envs,
             "steps": 1,
             "renderer": "Vulkan/RTX",
             "physics": "PhysX",
@@ -726,6 +727,7 @@ def main() -> int:
     model.add_argument("--output", type=Path, required=True)
     env = subparsers.add_parser("env")
     env.add_argument("--seed", type=int, default=64201)
+    env.add_argument("--num-envs", type=int, choices=range(1, 65), default=1)
     env.add_argument("--output", type=Path, required=True)
     bootstrap = subparsers.add_parser("bootstrap")
     bootstrap.add_argument("--output", type=Path, required=True)

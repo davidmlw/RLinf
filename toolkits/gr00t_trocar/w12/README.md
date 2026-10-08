@@ -14,6 +14,13 @@ The contract intentionally separates three authorities:
 module, shared-library and ctypes Vulkan checks while requiring exactly eight
 RTX PRO 6000 Blackwell Server Edition GPUs with compute capability 12.0.
 
+`rtx6000_qualification_launcher.py` runs the finite qualification in two
+phases. `q1` proves the injected CUDA/Vulkan runtime and immutable Python
+origins. `q2` repeats that gate, executes one eager true-B8 policy call, and
+runs one reset/step with both one and eight Vulkan/PhysX environments. Every
+phase requires a new run directory, disables container networking, records the
+exact Docker argv, and fails unless the named container is removed.
+
 Later performance work uses one source revision and configuration-only arms.
 The W13 feature A/B keeps eager execution fixed. W14 qualifies eager, runtime
 `torch.compile` and native SM120 TensorRT artifacts. W15 integrates only W14

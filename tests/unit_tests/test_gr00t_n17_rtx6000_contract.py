@@ -13,12 +13,17 @@
 # limitations under the License.
 
 import json
+import subprocess
 from pathlib import Path
 
+import pytest
+
+from toolkits.gr00t_trocar.w12 import rtx6000_qualification_launcher as launcher
 from toolkits.gr00t_trocar.w12 import rtx6000_runtime_probe as probe
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = ROOT / "toolkits/gr00t_trocar/w12/contract-rtx6000-n1d7.json"
+Q2_SMOKE = ROOT / "toolkits/gr00t_trocar/w95/l20_q2_smoke.py"
 
 
 def test_contract_freezes_rtx6000_true_b8_workload() -> None:
@@ -83,3 +88,56 @@ def test_vulkan_receipt_rejects_missing_device() -> None:
     result = probe._reinterpret_vulkan_receipt(receipt)
     assert result["status"] == "failed"
     assert result["inventory_matches"] is False
+
+
+def test_q2_command_qualifies_true_b8_and_both_env_sizes() -> None:
+    command = launcher._command("q2")
+    assert "rtx6000_runtime_probe.py" in command
+    assert " model " in command
+    assert command.count(" env --num-envs ") == 2
+    assert "env --num-envs 1" in command
+    assert "env --num-envs 8" in command
+    smoke_source = Q2_SMOKE.read_text(encoding="utf-8")
+    assert "env_cfg.scene.num_envs = num_envs" in smoke_source
+
+
+def test_container_args_freeze_network_image_and_gpu_contract(tmp_path: Path) -> None:
+    names = (
+        "source",
+        "gr00t",
+        "overlay",
+        "tensorrt",
+        "model",
+        "backbone",
+        "config",
+        "extension",
+        "assets_override",
+        "metadata",
+    )
+    inputs = {}
+    for name in names:
+        path = tmp_path / name
+        path.mkdir()
+        inputs[name] = path
+    run_root = tmp_path / "run"
+    (run_root / "scratch/assets-cache").mkdir(parents=True)
+    argv = launcher._container_args(
+        Path("/usr/bin/docker"), "fixture", run_root, inputs, "true"
+    )
+    assert argv[:4] == ["/usr/bin/docker", "run", "--name", "fixture"]
+    assert argv[argv.index("--gpus") + 1] == "all"
+    assert argv[argv.index("--network") + 1] == "none"
+    assert launcher.IMAGE in argv
+    assert f"PYTHONPATH={launcher.PYTHONPATH}" in argv
+    assert "NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics" in argv
+
+
+def test_container_absence_rejects_daemon_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(_argv, *, check=True):
+        return subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="daemon unavailable"
+        )
+
+    monkeypatch.setattr(launcher, "_run", fake_run)
+    with pytest.raises(launcher.QualificationError, match="absence check failed"):
+        launcher._ensure_absent(Path("/usr/bin/docker"), "fixture")
