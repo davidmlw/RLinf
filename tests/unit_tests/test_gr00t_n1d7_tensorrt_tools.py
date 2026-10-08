@@ -709,6 +709,8 @@ def test_standalone_provenance_chain_rejects_mismatched_input(tmp_path: Path) ->
         export_path,
         engine_path,
         engines,
+        source_revision,
+        "rlinf-test-revision",
     )
     assert result["status"] == "passed"
     assert result["isaac_gr00t_revision"] == source_revision
@@ -724,6 +726,8 @@ def test_standalone_provenance_chain_rejects_mismatched_input(tmp_path: Path) ->
             export_path,
             engine_path,
             engines,
+            source_revision,
+            "rlinf-test-revision",
         )
 
 
