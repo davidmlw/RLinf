@@ -38,6 +38,13 @@ EXPECTED_ASSETS_OVERRIDE_SHA256 = (
 EXPECTED_IMAGE_ID = (
     "sha256:db746c040dd15cdd68fdcda5b40f514bd2bf31d0fb462ae493fe83b7a0142bf1"
 )
+EXPECTED_ENV_SCHEMA = "rlinf.w96.q2-vulkan-env-turn/v1"
+EXPECTED_ENV_TASK = "IsaacContrib-Assemble-Trocar-G129-Dex3"
+EXPECTED_CAMERAS = (
+    "front_camera",
+    "left_wrist_camera",
+    "right_wrist_camera",
+)
 EXPECTED_GPU_NAME = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
 EXPECTED_GPU_COUNT = 8
 PYTHONPATH = "/w96-overlay:/w96-trt-runtime:/workspace/gr00t-n17:/workspace/rlinf-src"
@@ -162,6 +169,81 @@ def _ensure_absent(docker: Path, container: str) -> None:
         raise QualificationError(
             f"container absence check failed ({result.returncode}): {result.stderr}"
         )
+
+
+def _env_receipt_gate(value: Any, expected_num_envs: int) -> dict[str, Any]:
+    """Validate a completed Env turn despite native App.close observability."""
+    if not isinstance(value, dict):
+        return {"status": "failed", "reason": "receipt is not an object"}
+    camera_paths = value.get("camera_paths")
+    reset_tensors = value.get("reset_tensor_shapes")
+    step_tensors = value.get("step_tensor_shapes")
+    expected_camera_paths = {
+        camera: [f"camera_images.{camera}"] for camera in EXPECTED_CAMERAS
+    }
+    expected_camera_shape = [expected_num_envs, 224, 224, 3]
+
+    def tensor_tree_passes(tree: Any) -> bool:
+        return bool(tree) and all(
+            isinstance(item, dict) and item.get("finite") is True
+            for item in tree.values()
+        )
+
+    def camera_tree_passes(tree: Any) -> bool:
+        return isinstance(tree, dict) and all(
+            tree.get(f"camera_images.{camera}", {}).get("shape")
+            == expected_camera_shape
+            and tree[f"camera_images.{camera}"].get("dtype") == "torch.uint8"
+            and tree[f"camera_images.{camera}"].get("device") == "cuda:0"
+            for camera in EXPECTED_CAMERAS
+        )
+
+    reward = value.get("reward")
+    receipt_status = value.get("status")
+    cleanup_status = value.get("cleanup", {}).get("status")
+    pending_cleanup_is_scoped = (
+        receipt_status == "pending_cleanup" and cleanup_status == "pending"
+    )
+    inner_cleanup_passed = receipt_status == "passed" and cleanup_status == "passed"
+    checks = {
+        "schema": value.get("schema") == EXPECTED_ENV_SCHEMA,
+        "phase": value.get("phase") == "env",
+        "task": value.get("task_id") == EXPECTED_ENV_TASK,
+        "num_envs": value.get("num_envs") == expected_num_envs,
+        "one_step": value.get("steps") == 1,
+        "renderer": value.get("renderer") == "Vulkan/RTX",
+        "physics": value.get("physics") == "PhysX",
+        "ray_not_started": value.get("ray_started") is False,
+        "launcher_contract": value.get("isaac_launcher_contract", {}).get("status")
+        == "passed",
+        "no_primary_error": "primary_error" not in value and "error" not in value,
+        "camera_paths": camera_paths == expected_camera_paths,
+        "reset_tensors": tensor_tree_passes(reset_tensors),
+        "step_tensors": tensor_tree_passes(step_tensors),
+        "reset_cameras": camera_tree_passes(reset_tensors),
+        "step_cameras": camera_tree_passes(step_tensors),
+        "reward": isinstance(reward, dict)
+        and reward.get("finite") is True
+        and reward.get("shape") == [expected_num_envs],
+        "terminated": isinstance(value.get("terminated"), list)
+        and len(value["terminated"]) == expected_num_envs,
+        "truncated": isinstance(value.get("truncated"), list)
+        and len(value["truncated"]) == expected_num_envs,
+        "cleanup_state": inner_cleanup_passed or pending_cleanup_is_scoped,
+    }
+    passed = all(checks.values())
+    return {
+        "status": "passed" if passed else "failed",
+        "checks": checks,
+        "receipt_status": receipt_status,
+        "cleanup_observability": (
+            "complete"
+            if inner_cleanup_passed
+            else "native_close_pending_outer_cleanup"
+            if pending_cleanup_is_scoped
+            else "invalid"
+        ),
+    }
 
 
 def _container_args(
@@ -337,30 +419,44 @@ def launch(args: argparse.Namespace) -> dict[str, Any]:
             "inspect_stdout": absent.stdout,
             "inspect_stderr": absent.stderr,
         }
-    expected_receipts = [run_root / f"{args.phase}-runtime.json"]
+    expected_receipts: dict[Path, int | None] = {
+        run_root / f"{args.phase}-runtime.json": None
+    }
     if args.phase == "q2":
-        expected_receipts.extend(
-            run_root / name
-            for name in (
-                "q2-bootstrap.json",
-                "q2-model.json",
-                "q2-env1.json",
-                "q2-env8.json",
-            )
+        expected_receipts.update(
+            {
+                run_root / "q2-bootstrap.json": None,
+                run_root / "q2-model.json": None,
+                run_root / "q2-env1.json": 1,
+                run_root / "q2-env8.json": 8,
+            }
         )
     receipts = {}
-    for path in expected_receipts:
+    for path, expected_num_envs in expected_receipts.items():
         value = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+        if expected_num_envs is None:
+            acceptance = {
+                "status": (
+                    "passed"
+                    if isinstance(value, dict) and value.get("status") == "passed"
+                    else "failed"
+                )
+            }
+        else:
+            acceptance = _env_receipt_gate(value, expected_num_envs)
         receipts[path.name] = {
             "exists": path.is_file(),
             "sha256": _sha256(path) if path.is_file() else None,
             "status": value.get("status") if isinstance(value, dict) else None,
+            "acceptance": acceptance,
         }
     passed = (
         result is not None
         and result.returncode == 0
         and cleanup["status"] == "passed"
-        and all(value["status"] == "passed" for value in receipts.values())
+        and all(
+            value["acceptance"]["status"] == "passed" for value in receipts.values()
+        )
     )
     receipt = {
         "schema": f"rlinf.w12.rtx6000-{args.phase}/v1",

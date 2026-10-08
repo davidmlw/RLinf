@@ -29,7 +29,10 @@ runs one reset/step with both one and eight Vulkan/PhysX environments. Every
 phase requires a new run directory, disables container networking, records the
 exact Docker argv, requires the W02 offline resolver SHA
 `71f7d05805cd18066f1f93fe3073cf716f590c5bf8ee93f4213b48cbc11647bb`,
-and fails unless the named container is removed.
+and fails unless the named container is removed. Isaac native shutdown may
+terminate before the inner smoke promotes `pending_cleanup` to `passed`; the
+outer launcher accepts that state only after validating every Env semantic
+field and independently proving container removal.
 
 Later performance work uses one source revision and configuration-only arms.
 The W13 feature A/B keeps eager execution fixed. W14 qualifies eager, runtime

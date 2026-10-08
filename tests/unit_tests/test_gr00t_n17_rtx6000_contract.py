@@ -197,3 +197,55 @@ def test_require_inputs_rejects_unqualified_assets_override(tmp_path: Path) -> N
         launcher.QualificationError, match="offline assets override SHA256"
     ):
         launcher._require_inputs(source, bundle, assets_override)
+
+
+def _env_receipt(num_envs: int, status: str = "pending_cleanup") -> dict:
+    tensors = {
+        f"camera_images.{camera}": {
+            "shape": [num_envs, 224, 224, 3],
+            "dtype": "torch.uint8",
+            "device": "cuda:0",
+            "finite": True,
+        }
+        for camera in launcher.EXPECTED_CAMERAS
+    }
+    return {
+        "schema": launcher.EXPECTED_ENV_SCHEMA,
+        "status": status,
+        "phase": "env",
+        "task_id": launcher.EXPECTED_ENV_TASK,
+        "num_envs": num_envs,
+        "steps": 1,
+        "renderer": "Vulkan/RTX",
+        "physics": "PhysX",
+        "ray_started": False,
+        "isaac_launcher_contract": {"status": "passed"},
+        "reset_tensor_shapes": tensors,
+        "step_tensor_shapes": tensors,
+        "camera_paths": {
+            camera: [f"camera_images.{camera}"] for camera in launcher.EXPECTED_CAMERAS
+        },
+        "reward": {"finite": True, "shape": [num_envs]},
+        "terminated": [False] * num_envs,
+        "truncated": [False] * num_envs,
+        "cleanup": {"status": "pending" if status == "pending_cleanup" else "passed"},
+    }
+
+
+@pytest.mark.parametrize("num_envs", [1, 8])
+def test_env_receipt_accepts_scoped_native_close_observability(num_envs: int) -> None:
+    result = launcher._env_receipt_gate(_env_receipt(num_envs), num_envs)
+    assert result["status"] == "passed"
+    assert result["cleanup_observability"] == "native_close_pending_outer_cleanup"
+
+
+def test_env_receipt_rejects_missing_camera() -> None:
+    receipt = _env_receipt(8)
+    del receipt["step_tensor_shapes"]["camera_images.front_camera"]
+    assert launcher._env_receipt_gate(receipt, 8)["status"] == "failed"
+
+
+def test_env_receipt_rejects_primary_error() -> None:
+    receipt = _env_receipt(1)
+    receipt["primary_error"] = {"message": "fixture"}
+    assert launcher._env_receipt_gate(receipt, 1)["status"] == "failed"
