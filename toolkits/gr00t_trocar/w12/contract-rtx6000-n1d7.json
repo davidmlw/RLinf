@@ -1,0 +1,71 @@
+{
+  "schema": "rlinf.w12.rtx6000-n1d7-contract/v1",
+  "source": {
+    "base_revision": "0f9ea98c7a6d9e3ade24e8f4846c64d3b135dbcc",
+    "feature_and_workload_donor": "61326c704d9b2bb7d06e140372ef7b1d53e567e3",
+    "executor_tooling_donor": "2811a62d91afd9bc596bcafe8cea95f4223132c7",
+    "remote_branch": "david/w12/rtx6000-n17-contract",
+    "single_integration_revision_required": true,
+    "git_tree_attestation_required": true
+  },
+  "hardware": {
+    "host": "4u8g-gen-0209",
+    "gpu_count": 8,
+    "gpu_name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "compute_capability": [12, 0],
+    "memory_mib_per_gpu": 97887,
+    "nvlink": false,
+    "numa_domains": 2,
+    "vulkan_device_inventory_required": true
+  },
+  "runtime": {
+    "container_image": "chenchaox72877/trocar-rlinf-bench@sha256:9f02e069ccb0e0a7e536833e789666e85f039c9024a77ac2f219c42cb1dfcf01",
+    "python_executable": "/isaac-sim/kit/python/bin/python3",
+    "python_version": "3.12.13",
+    "torch_version": "2.10.0+cu128",
+    "torch_cuda_version": "12.8",
+    "transformers_version": "4.57.3",
+    "tensorrt_version": "10.15.1.29",
+    "pythonpath": "/w96-overlay:/w96-trt-runtime:/workspace/gr00t-n17:/workspace/rlinf-src",
+    "offline_model_and_assets": true,
+    "network_disabled_for_qualified_runs": true
+  },
+  "workload": {
+    "model": "GR00T-N1.7-3B",
+    "task": "Assemble Trocar",
+    "simulator": "Isaac Sim Vulkan/PhysX",
+    "profile": "absolute_correctness_b8",
+    "global_environments": 64,
+    "environments_per_rank": 8,
+    "policy_batch_per_rank": 8,
+    "true_static_batch": true,
+    "camera_count": 3,
+    "camera_resolution": [224, 224],
+    "sequence_length": 208,
+    "num_action_chunks": 16,
+    "resolved_config_sha256": "c4ff2d72f26adcd3282aeed717d13d155a15a133d0226cd4263c80469afe7510",
+    "resolved_config_arm": "all_off"
+  },
+  "measurement": {
+    "clean_outer_steps": 5,
+    "warmup_steps": [0],
+    "retained_steps": [1, 2, 3, 4],
+    "profiled_samples_are_headline_eligible": false,
+    "rollout_env_overlapping_timers_must_not_be_added": true
+  },
+  "qualification": {
+    "cuda_eight_gpu": true,
+    "vulkan_eight_gpu": true,
+    "one_env_reset_and_step": true,
+    "eight_env_reset_and_step": true,
+    "eager_true_b8_policy_call": true,
+    "nsight_report_generation": true,
+    "fail_closed": true
+  },
+  "storage": {
+    "workspace": "/home/scratch.liweim/rl-workspace",
+    "immutable_root": "/home/scratch.liweim/rl-workspace/runtime/W12/immutable",
+    "run_root": "/home/scratch.liweim/rl-workspace/runs/W12",
+    "system_tmp_for_routine_artifacts": false
+  }
+}

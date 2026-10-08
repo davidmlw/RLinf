@@ -12,7 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+from pathlib import Path
+
 from toolkits.gr00t_trocar.w12 import rtx6000_runtime_probe as probe
+
+ROOT = Path(__file__).resolve().parents[2]
+CONTRACT = ROOT / "toolkits/gr00t_trocar/w12/contract-rtx6000-n1d7.json"
+
+
+def test_contract_freezes_rtx6000_true_b8_workload() -> None:
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+    assert contract["hardware"]["gpu_count"] == 8
+    assert contract["hardware"]["gpu_name"] == probe.EXPECTED_GPU_NAME
+    assert contract["hardware"]["compute_capability"] == [12, 0]
+    assert contract["workload"]["profile"] == "absolute_correctness_b8"
+    assert contract["workload"]["policy_batch_per_rank"] == 8
+    assert contract["workload"]["num_action_chunks"] == 16
+    assert contract["measurement"]["retained_steps"] == [1, 2, 3, 4]
 
 
 def _gpu(index: int) -> dict:
