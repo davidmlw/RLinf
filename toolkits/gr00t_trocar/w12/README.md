@@ -8,6 +8,8 @@ The contract intentionally separates three authorities:
 - the Git-tree-attested RLinf integration source;
 - the immutable W96-derived model, Isaac-GR00T, Python, TensorRT and asset
   bundle; and
+- the W02-qualified offline Healthcare asset resolver, generated from the
+  immutable W96 IsaacLab `assets.py` and hash-bound separately; and
 - the RTX 6000 host-injected CUDA/Vulkan driver stack.
 
 The host currently exposes the kernel/CUDA driver but not the Vulkan ICD
@@ -25,7 +27,9 @@ phases. `q1` proves the injected CUDA/Vulkan runtime and immutable Python
 origins. `q2` repeats that gate, executes one eager true-B8 policy call, and
 runs one reset/step with both one and eight Vulkan/PhysX environments. Every
 phase requires a new run directory, disables container networking, records the
-exact Docker argv, and fails unless the named container is removed.
+exact Docker argv, requires the W02 offline resolver SHA
+`71f7d05805cd18066f1f93fe3073cf716f590c5bf8ee93f4213b48cbc11647bb`,
+and fails unless the named container is removed.
 
 Later performance work uses one source revision and configuration-only arms.
 The W13 feature A/B keeps eager execution fixed. W14 qualifies eager, runtime

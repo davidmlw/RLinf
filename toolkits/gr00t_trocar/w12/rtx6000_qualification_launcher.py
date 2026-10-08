@@ -32,6 +32,9 @@ IMAGE = (
     "chenchaox72877/trocar-rlinf-bench@"
     "sha256:9f02e069ccb0e0a7e536833e789666e85f039c9024a77ac2f219c42cb1dfcf01"
 )
+EXPECTED_ASSETS_OVERRIDE_SHA256 = (
+    "71f7d05805cd18066f1f93fe3073cf716f590c5bf8ee93f4213b48cbc11647bb"
+)
 EXPECTED_IMAGE_ID = (
     "sha256:db746c040dd15cdd68fdcda5b40f514bd2bf31d0fb462ae493fe83b7a0142bf1"
 )
@@ -85,7 +88,9 @@ def _preflight(docker: Path) -> dict[str, Any]:
             "--format=csv,noheader,nounits",
         ]
     )
-    rows = [[item.strip() for item in line.split(",")] for line in smi.stdout.splitlines()]
+    rows = [
+        [item.strip() for item in line.split(",")] for line in smi.stdout.splitlines()
+    ]
     gpu_gate = (
         len(rows) == EXPECTED_GPU_COUNT
         and [int(row[0]) for row in rows] == list(range(EXPECTED_GPU_COUNT))
@@ -94,13 +99,17 @@ def _preflight(docker: Path) -> dict[str, Any]:
     )
     inspect = _run([str(docker), "image", "inspect", IMAGE])
     inspected = json.loads(inspect.stdout)[0]
-    image_gate = inspected.get("Id") == EXPECTED_IMAGE_ID and IMAGE.split("@", 1)[1] in {
+    image_gate = inspected.get("Id") == EXPECTED_IMAGE_ID and IMAGE.split("@", 1)[
+        1
+    ] in {
         value.split("@", 1)[1]
         for value in inspected.get("RepoDigests", [])
         if "@" in value
     }
     if not gpu_gate or not image_gate:
-        raise QualificationError("GPU inventory or immutable image identity did not pass")
+        raise QualificationError(
+            "GPU inventory or immutable image identity did not pass"
+        )
     return {
         "gpu_rows": rows,
         "gpu_gate": gpu_gate,
@@ -116,7 +125,9 @@ def _require_new_run_root(path: Path) -> None:
     path.mkdir(parents=True)
 
 
-def _require_inputs(source: Path, bundle: Path) -> dict[str, Path]:
+def _require_inputs(
+    source: Path, bundle: Path, assets_override: Path
+) -> dict[str, Path]:
     inputs = {
         "source": source,
         "gr00t": bundle / "sources/isaac-gr00t",
@@ -126,13 +137,20 @@ def _require_inputs(source: Path, bundle: Path) -> dict[str, Path]:
         "backbone": bundle / "model/Cosmos-Reason2-2B",
         "config": bundle / "config/absolute-correctness-b8-all-off.yaml",
         "extension": bundle / "overrides/extension.py",
-        "assets_override": bundle / "overrides/assets.py",
+        "assets_override": assets_override,
         "metadata": bundle / "overrides/trocar-metadata.json",
         "assets_seed": bundle / "assets/assets-cache",
     }
     missing = [f"{name}={path}" for name, path in inputs.items() if not path.exists()]
     if missing:
         raise QualificationError("missing immutable inputs: " + ", ".join(missing))
+    assets_override_sha256 = _sha256(inputs["assets_override"])
+    if assets_override_sha256 != EXPECTED_ASSETS_OVERRIDE_SHA256:
+        raise QualificationError(
+            "offline assets override SHA256 does not match the qualified W02 "
+            f"artifact: expected {EXPECTED_ASSETS_OVERRIDE_SHA256}, "
+            f"got {assets_override_sha256}"
+        )
     return inputs
 
 
@@ -262,8 +280,7 @@ def _command(phase: str) -> str:
         "--metadata /w96-inputs/trocar/metadata.json "
         "--output /w12-run/q2-model.json"
         + f"; {ISAAC_PYTHON} {smoke} env --num-envs 1 "
-        "--output /w12-run/q2-env1.json"
-        + f"; {ISAAC_PYTHON} {smoke} env --num-envs 8 "
+        "--output /w12-run/q2-env1.json" + f"; {ISAAC_PYTHON} {smoke} env --num-envs 8 "
         "--output /w12-run/q2-env8.json"
     )
 
@@ -278,7 +295,8 @@ def launch(args: argparse.Namespace) -> dict[str, Any]:
     _require_new_run_root(args.run_root)
     run_root = args.run_root.resolve()
     (run_root / "receipts").mkdir()
-    inputs = _require_inputs(source, bundle)
+    assets_override = args.assets_override.resolve(strict=True)
+    inputs = _require_inputs(source, bundle, assets_override)
     inputs["graphics"] = graphics_runtime
     shutil.copytree(inputs["assets_seed"], run_root / "scratch/assets-cache")
     for name in ("home", "kit-cache", "kit-data"):
@@ -352,8 +370,15 @@ def launch(args: argparse.Namespace) -> dict[str, Any]:
         "source_path": str(source),
         "bundle_path": str(bundle),
         "graphics_runtime_path": str(graphics_runtime),
+        "offline_assets_override": {
+            "path": str(assets_override),
+            "sha256": _sha256(assets_override),
+            "authority": "W02 qualified offline Healthcare asset resolver",
+        },
         "contract": {
-            "path": str(source / "toolkits/gr00t_trocar/w12/contract-rtx6000-n1d7.json"),
+            "path": str(
+                source / "toolkits/gr00t_trocar/w12/contract-rtx6000-n1d7.json"
+            ),
             "sha256": _sha256(
                 source / "toolkits/gr00t_trocar/w12/contract-rtx6000-n1d7.json"
             ),
@@ -377,6 +402,7 @@ def main() -> int:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--assets-override", type=Path, required=True)
     parser.add_argument("--graphics-runtime", type=Path, required=True)
     parser.add_argument("--run-root", type=Path, required=True)
     args = parser.parse_args()

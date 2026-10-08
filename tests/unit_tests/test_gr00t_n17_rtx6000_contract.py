@@ -137,7 +137,10 @@ def test_container_args_freeze_network_image_and_gpu_contract(tmp_path: Path) ->
         Path("/usr/bin/docker"), "fixture", run_root, inputs, "true"
     )
     assert argv[:4] == ["/usr/bin/docker", "run", "--name", "fixture"]
-    assert argv[argv.index("--user") + 1] == f"{launcher.os.getuid()}:{launcher.os.getgid()}"
+    assert (
+        argv[argv.index("--user") + 1]
+        == f"{launcher.os.getuid()}:{launcher.os.getgid()}"
+    )
     assert argv[argv.index("--gpus") + 1] == "all"
     assert argv[argv.index("--network") + 1] == "none"
     assert launcher.IMAGE in argv
@@ -152,7 +155,9 @@ def test_container_args_freeze_network_image_and_gpu_contract(tmp_path: Path) ->
     assert any(value.endswith(":/isaac-sim/kit/data:rw") for value in argv)
 
 
-def test_container_absence_rejects_daemon_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_container_absence_rejects_daemon_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def fake_run(_argv, *, check=True):
         return subprocess.CompletedProcess(
             args=[], returncode=1, stdout="", stderr="daemon unavailable"
@@ -161,3 +166,34 @@ def test_container_absence_rejects_daemon_error(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(launcher, "_run", fake_run)
     with pytest.raises(launcher.QualificationError, match="absence check failed"):
         launcher._ensure_absent(Path("/usr/bin/docker"), "fixture")
+
+
+def test_require_inputs_rejects_unqualified_assets_override(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    bundle = tmp_path / "bundle"
+    source.mkdir()
+    required = (
+        "sources/isaac-gr00t",
+        "python/w96-overlay",
+        "runtime/tensorrt-10.15.1.29",
+        "model/GR00T-N1.7-3B",
+        "model/Cosmos-Reason2-2B",
+        "config/absolute-correctness-b8-all-off.yaml",
+        "overrides/extension.py",
+        "overrides/trocar-metadata.json",
+        "assets/assets-cache",
+    )
+    for relative in required:
+        path = bundle / relative
+        if path.suffix:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fixture", encoding="utf-8")
+        else:
+            path.mkdir(parents=True, exist_ok=True)
+    assets_override = tmp_path / "assets.py"
+    assets_override.write_text("unqualified", encoding="utf-8")
+
+    with pytest.raises(
+        launcher.QualificationError, match="offline assets override SHA256"
+    ):
+        launcher._require_inputs(source, bundle, assets_override)
