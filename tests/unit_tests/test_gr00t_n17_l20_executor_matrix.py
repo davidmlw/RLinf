@@ -60,10 +60,12 @@ def test_agent_freezes_ordered_build_and_measurement_stages(tmp_path: Path) -> N
         "refit-lifecycle",
     ]
     flattened = "\n".join(" ".join(command) for _, command in stages)
+    by_name = dict(stages)
     assert "--workspace 8192" in flattened
     assert "--workspace-mib 8192" in flattened
     assert "--expected-source-revision 51d4c89f" in flattened
-    assert "--vit-precision bf16" in flattened
+    assert "--vit-precision" not in by_name["fixture"]
+    assert by_name["backbone-export"][-2:] == ["--vit-precision", "bf16"]
 
 
 def test_launcher_uses_one_l20_and_w96_runtime() -> None:

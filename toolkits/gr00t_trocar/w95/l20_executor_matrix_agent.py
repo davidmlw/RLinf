@@ -103,8 +103,6 @@ def build_stage_commands(args: argparse.Namespace) -> list[tuple[str, list[str]]
                 str(fixture),
                 "--seed",
                 str(args.seed),
-                "--vit-precision",
-                args.vit_precision,
             ],
         ),
         (
@@ -126,6 +124,8 @@ def build_stage_commands(args: argparse.Namespace) -> list[tuple[str, list[str]]
                 str(backbone_onnx),
                 "--seed",
                 str(args.seed),
+                "--vit-precision",
+                args.vit_precision,
             ],
         ),
         (
