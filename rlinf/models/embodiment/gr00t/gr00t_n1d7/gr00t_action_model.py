@@ -932,6 +932,9 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
         if tensorrt_backbone is not None:
             return BatchFeature(data=tensorrt_backbone(backbone_inputs))
+        pt2_backbone = getattr(self, "_pt2_backbone", None)
+        if pt2_backbone is not None:
+            return pt2_backbone(backbone_inputs)
         if not getattr(self, "use_bounded_frozen_backbone", False):
             return self.backbone(backbone_inputs)
         output = run_bounded_frozen_qwen3_backbone(
@@ -947,11 +950,26 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
 
         if getattr(self, "_tensorrt_backbone", None) is not None:
             raise RuntimeError("TensorRT backbone is already enabled")
+        if getattr(self, "_pt2_backbone", None) is not None:
+            raise RuntimeError("PT2 and TensorRT backbones are mutually exclusive")
         from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_backbone import (
             TensorRTFrozenBackbone,
         )
 
         self._tensorrt_backbone = TensorRTFrozenBackbone(self.backbone, config)
+
+    def enable_torch_compile_backbone(self, config: Mapping[str, Any]) -> None:
+        """Compile the frozen ViT/LLM for a qualified static rollout shape."""
+
+        if getattr(self, "_pt2_backbone", None) is not None:
+            raise RuntimeError("PT2 backbone is already enabled")
+        if getattr(self, "_tensorrt_backbone", None) is not None:
+            raise RuntimeError("PT2 and TensorRT backbones are mutually exclusive")
+        from rlinf.models.embodiment.gr00t.gr00t_n1d7.pt2_backbone import (
+            PT2FrozenBackbone,
+        )
+
+        self._pt2_backbone = PT2FrozenBackbone(self.backbone, config)
 
     def enable_torch_compile(
         self,
@@ -1079,6 +1097,7 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         """Return runtime state used by W81 lifecycle receipts."""
 
         tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
+        pt2_backbone = getattr(self, "_pt2_backbone", None)
         tensorrt_dit = getattr(self, "_tensorrt_dit", None)
         if tensorrt_dit is None:
             tensorrt_dit = getattr(self, "_tensorrt_dit_diagnostic", None)
@@ -1088,6 +1107,9 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         if compile_enabled:
             unique_graphs = int(torch._dynamo.utils.counters["stats"]["unique_graphs"])
         return {
+            "compiled_backbone": (
+                pt2_backbone.telemetry() if pt2_backbone is not None else None
+            ),
             "tensorrt_backbone": (
                 tensorrt_backbone.telemetry() if tensorrt_backbone is not None else None
             ),
@@ -1113,6 +1135,9 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         tensorrt_backbone = getattr(self, "_tensorrt_backbone", None)
         if tensorrt_backbone is not None:
             tensorrt_backbone.close()
+        pt2_backbone = getattr(self, "_pt2_backbone", None)
+        if pt2_backbone is not None:
+            pt2_backbone.close()
         tensorrt_dit = getattr(self, "_tensorrt_dit", None)
         if tensorrt_dit is None:
             tensorrt_dit = getattr(self, "_tensorrt_dit_diagnostic", None)

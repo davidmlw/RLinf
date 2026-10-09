@@ -470,6 +470,7 @@ class MultiStepRolloutWorker(Worker):
             "stage": stage,
             "rank": self._rank,
             "revision": int(self.version),
+            "compiled_backbone": telemetry.get("compiled_backbone"),
             "compiled_dit": telemetry["compiled_dit"],
             "tensorrt_backbone": None,
             "tensorrt_dit": telemetry.get("tensorrt_dit"),
@@ -517,10 +518,33 @@ class MultiStepRolloutWorker(Worker):
         self.hf_model: BasePolicy = get_model(rollout_model_config)
         self.hf_model.capture_rollout_backbone_output = self._pinned_feature_ipc_enabled
 
+        pt2_backbone_config = OmegaConf.select(
+            self.cfg, "rollout.model.torch_compile_backbone", default=None
+        )
         tensorrt_config = OmegaConf.select(
             self.cfg, "rollout.model.tensorrt_backbone", default=None
         )
-        if tensorrt_config is not None and bool(tensorrt_config.get("enabled", False)):
+        pt2_backbone_enabled = pt2_backbone_config is not None and bool(
+            pt2_backbone_config.get("enabled", False)
+        )
+        tensorrt_backbone_enabled = tensorrt_config is not None and bool(
+            tensorrt_config.get("enabled", False)
+        )
+        if pt2_backbone_enabled and tensorrt_backbone_enabled:
+            raise ValueError(
+                "configure either rollout.model.torch_compile_backbone or "
+                "rollout.model.tensorrt_backbone, not both"
+            )
+        if pt2_backbone_enabled:
+            if self.enable_offload:
+                raise ValueError("PT2 backbone requires rollout.enable_offload=false")
+            enable_pt2_backbone = getattr(
+                self.hf_model, "enable_torch_compile_backbone", None
+            )
+            if not callable(enable_pt2_backbone):
+                raise TypeError("rollout model does not support a PT2 backbone")
+            enable_pt2_backbone(pt2_backbone_config)
+        if tensorrt_backbone_enabled:
             if self.enable_offload:
                 raise ValueError(
                     "TensorRT backbone with compiled online head requires "
