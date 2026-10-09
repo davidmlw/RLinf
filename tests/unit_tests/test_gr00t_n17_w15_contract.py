@@ -21,6 +21,7 @@ from toolkits.gr00t_trocar.w15.configs import render, validate
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_PATH = ROOT / "toolkits/gr00t_trocar/w15/contract.json"
+LAUNCHER_PATH = ROOT / "toolkits/gr00t_trocar/w15/run_rtx6000.sh"
 
 
 def _contract() -> dict:
@@ -103,3 +104,24 @@ def test_performance_config_disables_identity_and_revision_probes() -> None:
     )
     assert gated["rollout"]["model"]["tensorrt_dit"]["probe_each_revision"] is True
     assert clean["rollout"]["model"]["tensorrt_dit"]["probe_each_revision"] is False
+
+
+def test_launcher_mounts_w15_source_artifacts_and_run_root() -> None:
+    launcher = LAUNCHER_PATH.read_text(encoding="utf-8")
+    assert 'source_root="$workspace/runtime/W15/source"' in launcher
+    assert 'artifact_root="$workspace/runs/W14/' in launcher
+    assert '-v "$artifact_root:/w15-artifacts:ro"' in launcher
+    assert '-v "$run_root:/w15-run:rw"' in launcher
+    assert "/w13-run" not in launcher
+    assert "rlinf.w13." not in launcher
+
+
+def test_launcher_freezes_gate_and_perf_config_hashes() -> None:
+    launcher = LAUNCHER_PATH.read_text(encoding="utf-8")
+    for phase in ("gate", "perf"):
+        for arm in _contract()["arms"]:
+            marker = f"{phase}:{arm}) expected_config_sha="
+            assert marker in launcher
+    assert "expected_config_sha=TO_BE_FILLED" not in launcher
+    assert '"$phase" == gate && "$max_epochs" -ne 1' in launcher
+    assert '"$phase" == perf && "$max_epochs" -ne 5' in launcher
