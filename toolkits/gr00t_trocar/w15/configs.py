@@ -80,7 +80,9 @@ def _backbone_config(contract: dict[str, Any], backend: str) -> dict[str, Any]:
     raise ValueError(f"unsupported backbone backend: {backend}")
 
 
-def _dit_config(contract: dict[str, Any], backend: str) -> dict[str, Any]:
+def _dit_config(
+    contract: dict[str, Any], backend: str, *, identity_gate: bool
+) -> dict[str, Any]:
     runtime = contract["runtime"]
     if backend == "eager":
         return {"enable_torch_compile": False, "tensorrt_dit": {"enabled": False}}
@@ -99,7 +101,7 @@ def _dit_config(contract: dict[str, Any], backend: str) -> dict[str, Any]:
                 "compute_capability": runtime["compute_capability"],
                 "online_refit": True,
                 "lineage_receipt_mode": "gpu_transform_validation",
-                "probe_each_revision": True,
+                "probe_each_revision": identity_gate,
                 "minimum_probe_cosine": 0.999,
                 "maximum_probe_relative_l2": 0.05,
                 "minimum_free_device_bytes": 8589934592,
@@ -128,7 +130,9 @@ def render(
     rollout = result["rollout"]
     rollout_model = rollout["model"]
     rollout_model.update(_backbone_config(contract, arm_contract["backbone"]))
-    dit = _dit_config(contract, arm_contract["dit"])
+    dit = _dit_config(
+        contract, arm_contract["dit"], identity_gate=identity_gate
+    )
     rollout["enable_torch_compile"] = dit.pop("enable_torch_compile")
     rollout_model.update(dit)
     rollout["torch_compile_mode"] = "max-autotune-no-cudagraphs"

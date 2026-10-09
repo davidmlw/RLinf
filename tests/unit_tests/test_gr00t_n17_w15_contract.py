@@ -89,8 +89,17 @@ def test_refit_arm_has_no_shadow_or_compile() -> None:
     assert dit["compute_capability"] == [12, 0]
 
 
-def test_performance_config_only_disables_identity_gate() -> None:
+def test_performance_config_disables_identity_and_revision_probes() -> None:
     gated = render(_base(), _contract(), "trt-pt2", max_epochs=5, identity_gate=True)
     clean = render(_base(), _contract(), "trt-pt2", max_epochs=5, identity_gate=False)
     gated["actor"]["pre_update_same_revision_gate"]["enabled"] = False
     assert gated == clean
+
+    gated = render(
+        _base(), _contract(), "trt-refit-trt", max_epochs=5, identity_gate=True
+    )
+    clean = render(
+        _base(), _contract(), "trt-refit-trt", max_epochs=5, identity_gate=False
+    )
+    assert gated["rollout"]["model"]["tensorrt_dit"]["probe_each_revision"] is True
+    assert clean["rollout"]["model"]["tensorrt_dit"]["probe_each_revision"] is False
