@@ -105,7 +105,9 @@ def _dit_config(
                 "minimum_probe_cosine": 0.999,
                 "maximum_probe_relative_l2": 0.05,
                 "minimum_free_device_bytes": 8589934592,
-                "ppo_authority_status": "systems_only_pending_w15",
+                "ppo_authority_status": (
+                    "failed_ratio_kl_approximate_behavior_only"
+                ),
                 "shadow_eager": False,
             },
         }

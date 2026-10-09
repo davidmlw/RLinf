@@ -88,6 +88,10 @@ def test_refit_arm_has_no_shadow_or_compile() -> None:
     assert dit["lineage_receipt_mode"] == "gpu_transform_validation"
     assert dit["shadow_eager"] is False
     assert dit["compute_capability"] == [12, 0]
+    assert (
+        dit["ppo_authority_status"]
+        == "failed_ratio_kl_approximate_behavior_only"
+    )
 
 
 def test_performance_config_disables_identity_and_revision_probes() -> None:

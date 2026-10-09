@@ -40,12 +40,12 @@ case "$phase:$arm" in
   gate:pt2-pt2) expected_config_sha=97e9b876e922c64009abaab66ee1e8d7fd5445673196395c187308367656c5e7 ;;
   gate:trt-eager) expected_config_sha=189f24c522e5dac6cc220e506e2de64c9844f9ed66a6146a923038e48f666846 ;;
   gate:trt-pt2) expected_config_sha=efe42ccd637d107f7beb0acd4f62b28a0b141e9914fc15cdd7e1dfd9af0fc02b ;;
-  gate:trt-refit-trt) expected_config_sha=00de216c5096fd5d2619c234058730b52bd045a6ae4962ecada46990dc6d5375 ;;
+  gate:trt-refit-trt) expected_config_sha=a3c18ad078653aa5492d8b73c087abb0fc93daaab01cb261cd718f9977a5fc7e ;;
   perf:eager-eager) expected_config_sha=65e9366efd84e805465ece8e5ce437da77ec327c5f4e3fa7e00537a3eee9eeb6 ;;
   perf:pt2-pt2) expected_config_sha=f7855fc748ef57015d8ce7c083b4bdac03e7c2e90ceef2b4b1206c29019850b2 ;;
   perf:trt-eager) expected_config_sha=9bda87512ee6a958649aad5dfb2788c7f69f2d1888d99277f60ce12593e031bf ;;
   perf:trt-pt2) expected_config_sha=bc606a5f16b11a3728b1ad8dc1fb9f96d688c9c4cb7a6553df3b8ccb26b46400 ;;
-  perf:trt-refit-trt) expected_config_sha=830ad96600de951c27c6b79ed1d8cb263d321ec7a22d9c8204f90be39f746c25 ;;
+  perf:trt-refit-trt) expected_config_sha=ff603a585db319403207050610b6c71afeafb7bb98a86c0417bf276d4f4dd340 ;;
   *)
     printf 'unsupported W15 phase/arm: %s/%s\n' "$phase" "$arm" >&2
     exit 2
