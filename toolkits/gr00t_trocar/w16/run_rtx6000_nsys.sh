@@ -44,6 +44,10 @@ if [[ ! -f "$manifest" ]]; then
   printf 'missing W16 config manifest: %s\n' "$manifest" >&2
   exit 2
 fi
+if [[ "$run_root" != /* ]]; then
+  printf 'run root must be an absolute host path: %s\n' "$run_root" >&2
+  exit 2
+fi
 if [[ -e "$run_root" ]]; then
   printf 'run root must be new and absent: %s\n' "$run_root" >&2
   exit 2
@@ -309,7 +313,17 @@ PY
       "$run_root/receipts/container-inspect.json"
     "$docker" logs "$container" >"$run_root/receipts/container.log" 2>&1
   fi
-  remove_container
+  if [[ "$pre_remove_state" == present ]]; then
+    remove_container
+  elif [[ "$pre_remove_state" == absent ]]; then
+    remove_state=already_absent
+    printf 'not-run\n' >"$run_root/receipts/container-rm.rc"
+    : >"$run_root/receipts/container-rm.stdout"
+    : >"$run_root/receipts/container-rm.stderr"
+    printf '%s\n' "$remove_state" >"$run_root/receipts/container-rm.state"
+  else
+    remove_state=error
+  fi
   inspect_container post-remove
   post_remove_state=$inspect_state
   removal_safe=0
