@@ -1,0 +1,40 @@
+{
+  "schema": "rlinf.gr00t-n17-rtx6000-w15/v1",
+  "workload": {
+    "global_envs": 64,
+    "policy_batch_per_rank": 8,
+    "num_action_chunks": 16,
+    "text_sequence_length": 208,
+    "vision_segments": 24,
+    "vision_sequence_length": 256,
+    "retained_steps": [1, 2, 3, 4]
+  },
+  "artifacts": {
+    "root": "/w15-artifacts",
+    "backbone": {
+      "engine_dir": "/w15-artifacts/backbone-engines",
+      "receipt_path": "/w15-artifacts/backbone-engines/rlinf-engine-receipt.json",
+      "receipt_sha256": "c9b85fd2a1554e845206362d590d44e1ce8aa1c37d4cba1972ce3cea83935daf"
+    },
+    "dit": {
+      "engine_path": "/w15-artifacts/dit-engines/dit_bf16_refit.engine",
+      "receipt_path": "/w15-artifacts/dit-engines/rlinf-refittable-dit-engine-receipt.json",
+      "receipt_sha256": "ce0a06ee78ca6db264def36c2fa67cb8e4b2c04b01e9bef67e0b37816c0f0f27",
+      "parameter_map_path": "/w15-artifacts/refittable-dit-parameter-map.json",
+      "parameter_map_sha256": "61702a734332e144e0152a59ee35f3f8253a666377d70730d1db11c85e2e38dc",
+      "source_digest_revision_0": "dcadd3c8a2bf405e53dc23aded49c536d0315f4d68f86417feb59a321bd2aaca"
+    }
+  },
+  "runtime": {
+    "tensorrt_version": "10.15.1.29",
+    "tensorrt_distribution": "tensorrt-cu12",
+    "compute_capability": [12, 0]
+  },
+  "arms": {
+    "eager-eager": {"backbone": "eager", "dit": "eager"},
+    "pt2-pt2": {"backbone": "pt2", "dit": "pt2"},
+    "trt-eager": {"backbone": "tensorrt", "dit": "eager"},
+    "trt-pt2": {"backbone": "tensorrt", "dit": "pt2"},
+    "trt-refit-trt": {"backbone": "tensorrt", "dit": "refittable_tensorrt"}
+  }
+}
