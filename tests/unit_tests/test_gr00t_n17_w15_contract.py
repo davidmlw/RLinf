@@ -108,6 +108,15 @@ def test_performance_config_disables_identity_and_revision_probes() -> None:
     )
     assert gated["rollout"]["model"]["tensorrt_dit"]["probe_each_revision"] is True
     assert clean["rollout"]["model"]["tensorrt_dit"]["probe_each_revision"] is False
+    assert (
+        "performance_only_without_revision_probe"
+        not in gated["rollout"]["model"]["tensorrt_dit"]
+    )
+    assert (
+        clean["rollout"]["model"]["tensorrt_dit"]
+        ["performance_only_without_revision_probe"]
+        is True
+    )
 
 
 def test_launcher_mounts_w15_source_artifacts_and_run_root() -> None:

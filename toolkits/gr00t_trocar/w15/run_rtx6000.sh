@@ -45,7 +45,7 @@ case "$phase:$arm" in
   perf:pt2-pt2) expected_config_sha=f7855fc748ef57015d8ce7c083b4bdac03e7c2e90ceef2b4b1206c29019850b2 ;;
   perf:trt-eager) expected_config_sha=9bda87512ee6a958649aad5dfb2788c7f69f2d1888d99277f60ce12593e031bf ;;
   perf:trt-pt2) expected_config_sha=bc606a5f16b11a3728b1ad8dc1fb9f96d688c9c4cb7a6553df3b8ccb26b46400 ;;
-  perf:trt-refit-trt) expected_config_sha=ff603a585db319403207050610b6c71afeafb7bb98a86c0417bf276d4f4dd340 ;;
+  perf:trt-refit-trt) expected_config_sha=15f8cd5dd7524ee950d86a716e5888bb6c25997f5a37149839cbc766cf558f41 ;;
   *)
     printf 'unsupported W15 phase/arm: %s/%s\n' "$phase" "$arm" >&2
     exit 2

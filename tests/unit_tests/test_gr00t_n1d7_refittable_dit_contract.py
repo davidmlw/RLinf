@@ -813,7 +813,7 @@ def test_online_refit_live_probe_failure_fail_stops() -> None:
 @pytest.mark.parametrize(
     ("override", "message"),
     [
-        ({"probe_each_revision": False}, "probe every revision"),
+        ({"probe_each_revision": False}, "without revision probes"),
         ({"minimum_free_device_bytes": (8 << 30) - 1}, "at least 8 GiB"),
         ({"ppo_authority_status": "passed"}, "failed PPO authority"),
         ({"lineage_receipt_mode": "disabled"}, "lineage_receipt_mode"),
@@ -834,6 +834,27 @@ def test_online_refit_rejects_weakened_safety_config(override, message) -> None:
 
     with pytest.raises(ValueError, match=message):
         RefittableTensorRTDiT(None, config)
+
+
+def test_online_refit_allows_explicit_performance_only_without_probe() -> None:
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.tensorrt_dit import (
+        RefittableTensorRTDiT,
+    )
+
+    executor = RefittableTensorRTDiT.__new__(RefittableTensorRTDiT)
+    config = {
+        "online_refit": True,
+        "probe_each_revision": False,
+        "performance_only_without_revision_probe": True,
+        "minimum_free_device_bytes": 8 << 30,
+        "ppo_authority_status": "failed_ratio_kl_approximate_behavior_only",
+    }
+
+    # The explicit performance-only declaration passes the policy checks;
+    # artifact loading is outside this focused constructor-policy test.
+    with pytest.raises((KeyError, TypeError, ValueError)) as error:
+        RefittableTensorRTDiT(None, config)
+    assert "without revision probes" not in str(error.value)
 
 
 def test_online_refit_gpu_validation_mode_skips_host_sha_receipt() -> None:

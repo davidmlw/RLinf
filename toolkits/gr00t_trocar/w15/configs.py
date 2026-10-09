@@ -102,6 +102,11 @@ def _dit_config(
                 "online_refit": True,
                 "lineage_receipt_mode": "gpu_transform_validation",
                 "probe_each_revision": identity_gate,
+                **(
+                    {"performance_only_without_revision_probe": True}
+                    if not identity_gate
+                    else {}
+                ),
                 "minimum_probe_cosine": 0.999,
                 "maximum_probe_relative_l2": 0.05,
                 "minimum_free_device_bytes": 8589934592,

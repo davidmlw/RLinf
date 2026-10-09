@@ -337,6 +337,9 @@ class RefittableTensorRTDiT:
             raise ValueError("W83 diagnostic supports only the initial revision zero")
         self.online_refit = bool(config.get("online_refit", False))
         self.probe_each_revision = bool(config.get("probe_each_revision", True))
+        self.performance_only_without_revision_probe = bool(
+            config.get("performance_only_without_revision_probe", False)
+        )
         self.minimum_probe_cosine = float(
             config.get("minimum_probe_cosine", _MIN_PROBE_COSINE)
         )
@@ -360,8 +363,14 @@ class RefittableTensorRTDiT:
             )
         self.ppo_authority_status = config.get("ppo_authority_status")
         if self.online_refit:
-            if not self.probe_each_revision:
-                raise ValueError("online TensorRT DiT requires a probe every revision")
+            if (
+                not self.probe_each_revision
+                and not self.performance_only_without_revision_probe
+            ):
+                raise ValueError(
+                    "online TensorRT DiT without revision probes must explicitly "
+                    "declare performance_only_without_revision_probe"
+                )
             if self.minimum_headroom < _MIN_FREE_DEVICE_BYTES:
                 raise ValueError(
                     "online TensorRT DiT requires at least 8 GiB free-device headroom"
@@ -995,6 +1004,10 @@ class RefittableTensorRTDiT:
             "active_slot": self.active_slot,
             "phase": self._phase,
             "online_refit": self.online_refit,
+            "probe_each_revision": self.probe_each_revision,
+            "performance_only_without_revision_probe": (
+                self.performance_only_without_revision_probe
+            ),
             "ppo_authority_status": self.ppo_authority_status,
             "memory": self._memory,
             "refit_records": self.refit_records,
