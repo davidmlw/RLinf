@@ -45,6 +45,7 @@ def test_agent_freezes_ordered_build_and_measurement_stages(tmp_path: Path) -> N
         output=tmp_path,
         seed=47,
         workspace_mib=8192,
+        vit_precision="bf16",
         rlinf_revision="abc123",
     )
     stages = agent.build_stage_commands(args)
@@ -62,6 +63,7 @@ def test_agent_freezes_ordered_build_and_measurement_stages(tmp_path: Path) -> N
     assert "--workspace 8192" in flattened
     assert "--workspace-mib 8192" in flattened
     assert "--expected-source-revision 51d4c89f" in flattened
+    assert "--vit-precision bf16" in flattened
 
 
 def test_launcher_uses_one_l20_and_w96_runtime() -> None:

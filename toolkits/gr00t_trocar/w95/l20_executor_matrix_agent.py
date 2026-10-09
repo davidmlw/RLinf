@@ -103,6 +103,8 @@ def build_stage_commands(args: argparse.Namespace) -> list[tuple[str, list[str]]
                 str(fixture),
                 "--seed",
                 str(args.seed),
+                "--vit-precision",
+                args.vit_precision,
             ],
         ),
         (
@@ -349,6 +351,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "gr00t_source": str(args.gr00t_source),
         "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
         "seed": args.seed,
+        "vit_precision": args.vit_precision,
         "warmup": args.warmup,
         "measured": args.measured,
         "stages": stages,
@@ -390,6 +393,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=47)
     parser.add_argument("--workspace-mib", type=int, default=8192)
+    parser.add_argument("--vit-precision", choices=("bf16", "fp32"), default="fp32")
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--measured", type=int, default=30)
     args = parser.parse_args()
