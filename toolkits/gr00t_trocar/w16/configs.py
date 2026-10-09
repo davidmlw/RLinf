@@ -39,7 +39,6 @@ PROFILE = {
         "sample": "none",
         "cpuctxsw": "none",
         "osrt-threshold": 1000,
-        "cuda-memory-usage": True,
         "force-overwrite": True,
     },
     "flags": [],

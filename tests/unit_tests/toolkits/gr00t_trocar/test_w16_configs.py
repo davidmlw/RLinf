@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+from pathlib import Path
 
 from toolkits.gr00t_trocar.w16.configs import PROFILE, render, validate
 
@@ -95,3 +96,18 @@ def test_validate_rejects_expensive_refit_probe():
     errors = validate(endpoints)
 
     assert any("optimized endpoint mismatch" in error for error in errors)
+
+
+def test_profile_uses_bounded_timeline_collection():
+    assert PROFILE["options"]["trace"] == "cuda,nvtx,osrt,vulkan"
+    assert "cuda-memory-usage" not in PROFILE["options"]
+
+
+def test_launcher_keeps_nsys_temporary_streams_out_of_shared_memory():
+    launcher = (
+        Path(__file__).parents[4]
+        / "toolkits/gr00t_trocar/w16/run_rtx6000_nsys.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "NSYS_TMPDIR=/w16-run/scratch/nsys-tmp" in launcher
+    assert "NSYS_TMPDIR=/dev/shm" not in launcher

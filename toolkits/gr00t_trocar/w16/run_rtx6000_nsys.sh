@@ -95,6 +95,7 @@ mkdir -p "$run_root/receipts" "$run_root/output" "$run_root/gpu" \
   "$run_root/scratch/home" "$run_root/scratch/tmp" \
   "$run_root/scratch/cache" "$run_root/scratch/hf" \
   "$run_root/scratch/ray" "$run_root/scratch/torchinductor" \
+  "$run_root/scratch/nsys-tmp" \
   "$run_root/scratch/kit-cache" "$run_root/scratch/kit-data" \
   "$run_root/scratch/rlinf-entry-logs"
 
@@ -452,7 +453,7 @@ set +e
   -e HOME=/w16-run/scratch/home \
   -e USER=liweim -e LOGNAME=liweim \
   -e TMPDIR=/w16-run/scratch/tmp \
-  -e NSYS_TMPDIR=/dev/shm/w16-nsys \
+  -e NSYS_TMPDIR=/w16-run/scratch/nsys-tmp \
   -e XDG_CACHE_HOME=/w16-run/scratch/cache \
   -e TORCHINDUCTOR_CACHE_DIR=/w16-run/scratch/torchinductor \
   -e RAY_TMPDIR=/w16-run/scratch/ray \
