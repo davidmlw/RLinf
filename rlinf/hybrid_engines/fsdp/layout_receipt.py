@@ -57,6 +57,9 @@ def describe_fsdp_layout(model: nn.Module, handles: list, world_size: int) -> di
         param_numels = list(getattr(flat_param, "_numels", ()))
         params = list(getattr(flat_param, "_params", ()))
         parameters = []
+        trainable_numel = 0
+        frozen_numel = 0
+        unknown_numel = 0
         for param_index, (info, param_numel) in enumerate(
             zip(param_infos, param_numels)
         ):
@@ -73,6 +76,12 @@ def describe_fsdp_layout(model: nn.Module, handles: list, world_size: int) -> di
             requires_grad = None
             if param_index < len(params):
                 requires_grad = bool(params[param_index].requires_grad)
+            if requires_grad is True:
+                trainable_numel += int(param_numel)
+            elif requires_grad is False:
+                frozen_numel += int(param_numel)
+            else:
+                unknown_numel += int(param_numel)
             parameters.append(
                 {
                     "fqn": fqn,
@@ -93,6 +102,9 @@ def describe_fsdp_layout(model: nn.Module, handles: list, world_size: int) -> di
                 "full_numel": full_numel,
                 "full_parameter_bytes": full_numel * element_size,
                 "original_parameter_count": len(param_infos),
+                "trainable_parameter_bytes": trainable_numel * element_size,
+                "frozen_parameter_bytes": frozen_numel * element_size,
+                "unknown_parameter_bytes": unknown_numel * element_size,
                 "largest_original_parameters": parameters[:16],
             }
         )

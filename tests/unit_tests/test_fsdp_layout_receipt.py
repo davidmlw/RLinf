@@ -51,6 +51,9 @@ def test_describe_fsdp_layout_reports_full_and_local_sizes():
     assert entry["dtype"] == "bfloat16"
     assert entry["local_numel"] == 4
     assert entry["full_parameter_bytes"] == 32
+    assert entry["trainable_parameter_bytes"] == 32
+    assert entry["frozen_parameter_bytes"] == 0
+    assert entry["unknown_parameter_bytes"] == 0
     assert entry["largest_original_parameters"] == [
         {"fqn": "0.weight", "numel": 16, "requires_grad": True}
     ]
