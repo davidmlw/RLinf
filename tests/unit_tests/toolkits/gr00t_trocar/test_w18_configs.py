@@ -112,6 +112,43 @@ def test_rank0_shard_grad_op_diagnostic_is_deterministic():
     assert candidate["cluster"]["profiling"]["ranks"] == [0]
 
 
+def test_all_role_rank0_shard_grad_op_diagnostic_is_deterministic():
+    base = _base()
+    worker_groups = ["ActorGroup", "RolloutGroup", "EnvGroup"]
+    steps = [1, 2]
+    candidate = render_variant(
+        base,
+        micro_batch_size=64,
+        diagnostic=True,
+        sharding_strategy="shard_grad_op",
+        diagnostic_ranks=[0],
+        diagnostic_worker_groups=worker_groups,
+        diagnostic_steps=steps,
+    )
+
+    assert validate_variant(
+        base,
+        candidate,
+        spec={
+            "micro_batch_size": 64,
+            "diagnostic": True,
+            "sharding_strategy": "shard_grad_op",
+            "ranks": [0],
+            "worker_groups": worker_groups,
+            "steps": steps,
+        },
+    ) == []
+    assert candidate["cluster"]["profiling"] == {
+        **PROFILE,
+        "worker_groups": worker_groups,
+        "ranks": [0],
+        "steps": steps,
+    }
+    assert candidate["runner"]["logger"]["experiment_name"] == (
+        "w18_all_role_rank0_diagnostic_shard_grad_op_mb64"
+    )
+
+
 def test_validation_rejects_workload_drift():
     base = _base()
     candidate = render_variant(base, micro_batch_size=16, diagnostic=False)

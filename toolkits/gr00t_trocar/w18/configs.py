@@ -94,20 +94,30 @@ def render_variant(
     diagnostic: bool,
     sharding_strategy: str = "full_shard",
     diagnostic_ranks: list[int] | None = None,
+    diagnostic_worker_groups: list[str] | None = None,
+    diagnostic_steps: list[int] | None = None,
 ) -> dict[str, Any]:
     config = copy.deepcopy(base)
     if diagnostic:
         profile = copy.deepcopy(PROFILE)
         if diagnostic_ranks is not None:
             profile["ranks"] = list(diagnostic_ranks)
+        if diagnostic_worker_groups is not None:
+            profile["worker_groups"] = list(diagnostic_worker_groups)
+        if diagnostic_steps is not None:
+            profile["steps"] = list(diagnostic_steps)
         config["cluster"]["profiling"] = profile
         rank_label = (
             "all_ranks" if profile["ranks"] == list(range(8)) else "rank0"
         )
-        name = (
-            f"w18_{rank_label}_diagnostic_{sharding_strategy}_"
-            f"mb{micro_batch_size}"
+        group_label = (
+            "all_role_"
+            if profile["worker_groups"]
+            == ["ActorGroup", "RolloutGroup", "EnvGroup"]
+            else ""
         )
+        name = f"w18_{group_label}{rank_label}_diagnostic_"
+        name += f"{sharding_strategy}_mb{micro_batch_size}"
     else:
         config["cluster"].pop("profiling", None)
         name = f"w18_performance_mb{micro_batch_size}"
@@ -134,12 +144,16 @@ def validate_variant(
     diagnostic = bool(spec["diagnostic"])
     sharding_strategy = str(spec.get("sharding_strategy", "full_shard"))
     diagnostic_ranks = spec.get("ranks")
+    diagnostic_worker_groups = spec.get("worker_groups")
+    diagnostic_steps = spec.get("steps")
     expected = render_variant(
         base,
         micro_batch_size=micro_batch_size,
         diagnostic=diagnostic,
         sharding_strategy=sharding_strategy,
         diagnostic_ranks=diagnostic_ranks,
+        diagnostic_worker_groups=diagnostic_worker_groups,
+        diagnostic_steps=diagnostic_steps,
     )
     if candidate != expected:
         errors.append("candidate does not match deterministic rendering")
@@ -154,10 +168,31 @@ def validate_variant(
             micro_batch_size,
             sharding_strategy,
             tuple(diagnostic_ranks or range(8)),
+            tuple(diagnostic_worker_groups or PROFILE["worker_groups"]),
+            tuple(diagnostic_steps or PROFILE["steps"]),
         )
         allowed_diagnostics = {
-            (8, "full_shard", tuple(range(8))),
-            (64, "shard_grad_op", (0,)),
+            (
+                8,
+                "full_shard",
+                tuple(range(8)),
+                tuple(PROFILE["worker_groups"]),
+                tuple(PROFILE["steps"]),
+            ),
+            (
+                64,
+                "shard_grad_op",
+                (0,),
+                tuple(PROFILE["worker_groups"]),
+                tuple(PROFILE["steps"]),
+            ),
+            (
+                64,
+                "shard_grad_op",
+                (0,),
+                ("ActorGroup", "RolloutGroup", "EnvGroup"),
+                (1, 2),
+            ),
         }
         if diagnostic_contract not in allowed_diagnostics:
             errors.append(
@@ -246,6 +281,31 @@ def render(args: argparse.Namespace) -> int:
         "diagnostic": True,
         "sharding_strategy": "shard_grad_op",
         "ranks": [0],
+    }
+
+    name = "all-role-rank0-diagnostic-shard-grad-op-mb64"
+    worker_groups = ["ActorGroup", "RolloutGroup", "EnvGroup"]
+    steps = [1, 2]
+    config = render_variant(
+        base,
+        micro_batch_size=64,
+        diagnostic=True,
+        sharding_strategy="shard_grad_op",
+        diagnostic_ranks=[0],
+        diagnostic_worker_groups=worker_groups,
+        diagnostic_steps=steps,
+    )
+    path = args.output_dir / f"{name}.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    variants[name] = {
+        "path": str(path),
+        "sha256": _sha256(path),
+        "micro_batch_size": 64,
+        "diagnostic": True,
+        "sharding_strategy": "shard_grad_op",
+        "ranks": [0],
+        "worker_groups": worker_groups,
+        "steps": steps,
     }
     manifest = {
         "schema": "rlinf.w18.rtx6000-fsdp-configs/v1",
