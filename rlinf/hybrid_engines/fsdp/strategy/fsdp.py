@@ -27,6 +27,9 @@ from torch.optim import Optimizer
 
 from rlinf.config import torch_dtype_from_precision
 from rlinf.hybrid_engines.fsdp import FSDP, CPUOffload
+from rlinf.hybrid_engines.fsdp.layout_receipt import (
+    write_fsdp_layout_receipt_from_env,
+)
 from rlinf.hybrid_engines.fsdp.strategy.base import FSDPStrategyBase
 from rlinf.hybrid_engines.fsdp.utils import (
     FSDPVersion,
@@ -185,6 +188,11 @@ class FSDPStrategy(FSDPStrategyBase):
             use_orig_params=self.cfg.fsdp_config.use_orig_params,
             cpu_offload=cpu_offload,
         )
+        receipt_path = write_fsdp_layout_receipt_from_env(
+            fsdp_model, self._iter_fsdp_handles(fsdp_model), self.world_size
+        )
+        if receipt_path is not None and self.logger is not None:
+            self.logger.info("[FSDP] Wrote layout receipt to %s", receipt_path)
         return fsdp_model
 
     @classmethod
