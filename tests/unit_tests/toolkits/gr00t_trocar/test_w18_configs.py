@@ -30,7 +30,11 @@ def _base() -> dict:
             "train": {"video_cfg": {"video_base_dir": "/old/train"}},
             "eval": {"video_cfg": {"video_base_dir": "/old/eval"}},
         },
-        "actor": {"micro_batch_size": 8, "global_batch_size": 2048},
+        "actor": {
+            "micro_batch_size": 8,
+            "global_batch_size": 2048,
+            "fsdp_config": {"sharding_strategy": "full_shard"},
+        },
     }
 
 
@@ -60,6 +64,29 @@ def test_diagnostic_selects_all_actor_ranks_and_one_step():
     assert PROFILE["worker_groups"] == ["ActorGroup"]
     assert PROFILE["ranks"] == list(range(8))
     assert PROFILE["steps"] == [1]
+
+
+def test_shard_grad_op_variant_only_changes_allowed_fields():
+    base = _base()
+    candidate = render_variant(
+        base,
+        micro_batch_size=64,
+        diagnostic=False,
+        sharding_strategy="shard_grad_op",
+    )
+
+    assert validate_variant(
+        base,
+        candidate,
+        spec={
+            "micro_batch_size": 64,
+            "diagnostic": False,
+            "sharding_strategy": "shard_grad_op",
+        },
+    ) == []
+    assert candidate["actor"]["fsdp_config"]["sharding_strategy"] == (
+        "shard_grad_op"
+    )
 
 
 def test_validation_rejects_workload_drift():

@@ -46,6 +46,7 @@ PROFILE = {
 
 ALLOWED_DIFF_PREFIXES = (
     "actor.micro_batch_size",
+    "actor.fsdp_config.sharding_strategy",
     "cluster.profiling",
     "env.eval.video_cfg.video_base_dir",
     "env.train.video_cfg.video_base_dir",
@@ -87,7 +88,11 @@ def _diff_paths(left: Any, right: Any, prefix: str = "") -> list[str]:
 
 
 def render_variant(
-    base: dict[str, Any], *, micro_batch_size: int, diagnostic: bool
+    base: dict[str, Any],
+    *,
+    micro_batch_size: int,
+    diagnostic: bool,
+    sharding_strategy: str = "full_shard",
 ) -> dict[str, Any]:
     config = copy.deepcopy(base)
     if diagnostic:
@@ -96,7 +101,10 @@ def render_variant(
     else:
         config["cluster"].pop("profiling", None)
         name = f"w18_performance_mb{micro_batch_size}"
+        if sharding_strategy != "full_shard":
+            name = f"w18_{sharding_strategy}_mb{micro_batch_size}"
     config["actor"]["micro_batch_size"] = micro_batch_size
+    config["actor"]["fsdp_config"]["sharding_strategy"] = sharding_strategy
     config["runner"]["logger"]["experiment_name"] = name
     config["runner"]["logger"]["log_path"] = "/w18-run/output"
     config["env"]["train"]["video_cfg"]["video_base_dir"] = (
@@ -114,8 +122,12 @@ def validate_variant(
     errors = []
     micro_batch_size = int(spec["micro_batch_size"])
     diagnostic = bool(spec["diagnostic"])
+    sharding_strategy = str(spec.get("sharding_strategy", "full_shard"))
     expected = render_variant(
-        base, micro_batch_size=micro_batch_size, diagnostic=diagnostic
+        base,
+        micro_batch_size=micro_batch_size,
+        diagnostic=diagnostic,
+        sharding_strategy=sharding_strategy,
     )
     if candidate != expected:
         errors.append("candidate does not match deterministic rendering")
@@ -127,6 +139,10 @@ def validate_variant(
         errors.append("micro_batch_size must divide the per-rank batch of 256")
     if diagnostic and micro_batch_size != 8:
         errors.append("the all-rank diagnostic must use baseline microbatch 8")
+    if diagnostic and sharding_strategy != "full_shard":
+        errors.append("the all-rank diagnostic must use full_shard")
+    if sharding_strategy not in {"full_shard", "shard_grad_op"}:
+        errors.append(f"unsupported sharding_strategy: {sharding_strategy}")
 
     unexpected = [
         path
@@ -157,6 +173,25 @@ def render(args: argparse.Namespace) -> int:
             "sha256": _sha256(path),
             "micro_batch_size": micro_batch_size,
             "diagnostic": False,
+            "sharding_strategy": "full_shard",
+        }
+
+    for micro_batch_size in args.shard_grad_op_micro_batch_sizes:
+        name = f"shard-grad-op-mb{micro_batch_size}"
+        config = render_variant(
+            base,
+            micro_batch_size=micro_batch_size,
+            diagnostic=False,
+            sharding_strategy="shard_grad_op",
+        )
+        path = args.output_dir / f"{name}.yaml"
+        path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+        variants[name] = {
+            "path": str(path),
+            "sha256": _sha256(path),
+            "micro_batch_size": micro_batch_size,
+            "diagnostic": False,
+            "sharding_strategy": "shard_grad_op",
         }
 
     name = "rank-diagnostic-mb8"
@@ -168,6 +203,7 @@ def render(args: argparse.Namespace) -> int:
         "sha256": _sha256(path),
         "micro_batch_size": 8,
         "diagnostic": True,
+        "sharding_strategy": "full_shard",
     }
     manifest = {
         "schema": "rlinf.w18.rtx6000-fsdp-configs/v1",
@@ -222,6 +258,12 @@ def main() -> int:
     render_parser.add_argument("--source-revision", required=True)
     render_parser.add_argument(
         "--micro-batch-sizes", type=int, nargs="+", default=[8, 16, 32, 64]
+    )
+    render_parser.add_argument(
+        "--shard-grad-op-micro-batch-sizes",
+        type=int,
+        nargs="+",
+        default=[8, 16, 32, 64],
     )
     render_parser.set_defaults(func=render)
 
