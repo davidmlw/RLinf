@@ -89,6 +89,29 @@ def test_shard_grad_op_variant_only_changes_allowed_fields():
     )
 
 
+def test_rank0_shard_grad_op_diagnostic_is_deterministic():
+    base = _base()
+    candidate = render_variant(
+        base,
+        micro_batch_size=64,
+        diagnostic=True,
+        sharding_strategy="shard_grad_op",
+        diagnostic_ranks=[0],
+    )
+
+    assert validate_variant(
+        base,
+        candidate,
+        spec={
+            "micro_batch_size": 64,
+            "diagnostic": True,
+            "sharding_strategy": "shard_grad_op",
+            "ranks": [0],
+        },
+    ) == []
+    assert candidate["cluster"]["profiling"]["ranks"] == [0]
+
+
 def test_validation_rejects_workload_drift():
     base = _base()
     candidate = render_variant(base, micro_batch_size=16, diagnostic=False)

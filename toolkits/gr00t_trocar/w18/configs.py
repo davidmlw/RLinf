@@ -93,11 +93,21 @@ def render_variant(
     micro_batch_size: int,
     diagnostic: bool,
     sharding_strategy: str = "full_shard",
+    diagnostic_ranks: list[int] | None = None,
 ) -> dict[str, Any]:
     config = copy.deepcopy(base)
     if diagnostic:
-        config["cluster"]["profiling"] = copy.deepcopy(PROFILE)
-        name = "w18_rank_diagnostic_mb8"
+        profile = copy.deepcopy(PROFILE)
+        if diagnostic_ranks is not None:
+            profile["ranks"] = list(diagnostic_ranks)
+        config["cluster"]["profiling"] = profile
+        rank_label = (
+            "all_ranks" if profile["ranks"] == list(range(8)) else "rank0"
+        )
+        name = (
+            f"w18_{rank_label}_diagnostic_{sharding_strategy}_"
+            f"mb{micro_batch_size}"
+        )
     else:
         config["cluster"].pop("profiling", None)
         name = f"w18_performance_mb{micro_batch_size}"
@@ -123,11 +133,13 @@ def validate_variant(
     micro_batch_size = int(spec["micro_batch_size"])
     diagnostic = bool(spec["diagnostic"])
     sharding_strategy = str(spec.get("sharding_strategy", "full_shard"))
+    diagnostic_ranks = spec.get("ranks")
     expected = render_variant(
         base,
         micro_batch_size=micro_batch_size,
         diagnostic=diagnostic,
         sharding_strategy=sharding_strategy,
+        diagnostic_ranks=diagnostic_ranks,
     )
     if candidate != expected:
         errors.append("candidate does not match deterministic rendering")
@@ -137,10 +149,20 @@ def validate_variant(
         errors.append("update_epoch must remain 4")
     if 2048 % (8 * micro_batch_size) != 0:
         errors.append("micro_batch_size must divide the per-rank batch of 256")
-    if diagnostic and micro_batch_size != 8:
-        errors.append("the all-rank diagnostic must use baseline microbatch 8")
-    if diagnostic and sharding_strategy != "full_shard":
-        errors.append("the all-rank diagnostic must use full_shard")
+    if diagnostic:
+        diagnostic_contract = (
+            micro_batch_size,
+            sharding_strategy,
+            tuple(diagnostic_ranks or range(8)),
+        )
+        allowed_diagnostics = {
+            (8, "full_shard", tuple(range(8))),
+            (64, "shard_grad_op", (0,)),
+        }
+        if diagnostic_contract not in allowed_diagnostics:
+            errors.append(
+                f"unsupported diagnostic contract: {diagnostic_contract!r}"
+            )
     if sharding_strategy not in {"full_shard", "shard_grad_op"}:
         errors.append(f"unsupported sharding_strategy: {sharding_strategy}")
 
@@ -204,6 +226,26 @@ def render(args: argparse.Namespace) -> int:
         "micro_batch_size": 8,
         "diagnostic": True,
         "sharding_strategy": "full_shard",
+        "ranks": list(range(8)),
+    }
+
+    name = "rank0-diagnostic-shard-grad-op-mb64"
+    config = render_variant(
+        base,
+        micro_batch_size=64,
+        diagnostic=True,
+        sharding_strategy="shard_grad_op",
+        diagnostic_ranks=[0],
+    )
+    path = args.output_dir / f"{name}.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    variants[name] = {
+        "path": str(path),
+        "sha256": _sha256(path),
+        "micro_batch_size": 64,
+        "diagnostic": True,
+        "sharding_strategy": "shard_grad_op",
+        "ranks": [0],
     }
     manifest = {
         "schema": "rlinf.w18.rtx6000-fsdp-configs/v1",
