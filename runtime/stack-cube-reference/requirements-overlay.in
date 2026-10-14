@@ -1,0 +1,12 @@
+# Third-party native/model dependencies are inherited read-only from the
+# qualified Torch2.7/FA2.7/NCCL2.28 package prefix, not re-resolved here.
+ray[default]==2.52.1
+torchdata==0.11.0
+sortedcontainers==2.4.0
+icmplib==3.0.4
+wandb==0.19.11
+swanlab==0.6.12
+debugpy==1.8.14
+nvitop==1.5.1
+torchmetrics==1.7.4
+lightning-utilities==0.14.3

@@ -61,7 +61,7 @@ def main() -> None:
             str(env / "bin/python"),
             "--no-deps",
             "-r",
-            str(Path(__file__).with_name("requirements-overlay.txt")),
+            str(Path(__file__).with_name("requirements-overlay.in")),
         ],
         check=True,
     )

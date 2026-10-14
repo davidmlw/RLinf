@@ -15,6 +15,7 @@
 import logging
 import os
 import queue
+import shutil
 import threading
 import time
 from collections import defaultdict
@@ -314,6 +315,10 @@ class EmbodiedRunner:
             1.0,
             run_time_exceeded=False,
         )
+        if (evaluation_steps := self.cfg.runner.get("evaluation_steps")) is not None:
+            run_val = self.global_step in evaluation_steps
+        if (checkpoint_steps := self.cfg.runner.get("checkpoint_steps")) is not None:
+            save_model = self.global_step in checkpoint_steps
 
         eval_metrics = {}
         if run_val:
@@ -321,7 +326,8 @@ class EmbodiedRunner:
                 self.update_rollout_weights()
                 eval_metrics = self.evaluate()
                 eval_metrics = {f"eval/{k}": v for k, v in eval_metrics.items()}
-                self.metric_logger.log(data=eval_metrics, step=step)
+                metric_step = self.global_step if evaluation_steps is not None else step
+                self.metric_logger.log(data=eval_metrics, step=metric_step)
 
         if save_model:
             self._save_checkpoint()
@@ -449,6 +455,8 @@ class EmbodiedRunner:
         )
 
     def _finish_run(self) -> None:
+        if self.cfg.runner.get("drain_environments", False):
+            self.env.close_environments().wait()
         self.metric_logger.finish()
 
         # Stop logging thread
@@ -481,10 +489,18 @@ class EmbodiedRunner:
 
         start_step = self.global_step
         start_time = time.time()
+        if self.global_step == 0 and 0 in self.cfg.runner.get("evaluation_steps", []):
+            self.actor.set_global_step(0).wait()
+            self.rollout.set_global_step(0).wait()
+            self.update_rollout_weights()
+            metrics = {f"eval/{k}": v for k, v in self.evaluate().items()}
+            self.metric_logger.log(data=metrics, step=0)
         for _step in range(start_step, self.max_steps):
             # set global step
-            self.actor.set_global_step(self.global_step)
-            self.rollout.set_global_step(self.global_step)
+            # Match the proven W09 ordering repair: revision assignment must
+            # finish before weight synchronization, not race it asynchronously.
+            self.actor.set_global_step(self.global_step).wait()
+            self.rollout.set_global_step(self.global_step).wait()
 
             profiled_step = (
                 self.global_step
@@ -650,6 +666,21 @@ class EmbodiedRunner:
         actor_save_path = os.path.join(base_output_dir, "actor")
         os.makedirs(actor_save_path, exist_ok=True)
         self.actor.save_checkpoint(actor_save_path, self.global_step).wait()
+        keep = self.cfg.runner.get("checkpoint_keep_last", None)
+        if keep is not None:
+            if int(keep) < 1:
+                raise ValueError("checkpoint_keep_last must retain a recoverable state")
+            parent = os.path.dirname(base_output_dir)
+            candidates = sorted(
+                (
+                    name
+                    for name in os.listdir(parent)
+                    if name.startswith("global_step_") and name[12:].isdigit()
+                ),
+                key=lambda name: int(name[12:]),
+            )
+            for name in candidates[: -int(keep)]:
+                shutil.rmtree(os.path.join(parent, name))
 
     def set_max_steps(self):
         self.num_steps_per_epoch = 1

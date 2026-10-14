@@ -56,6 +56,15 @@ from rlinf.workers.env.history_manager import HistoryManager
 
 
 class EnvWorker(Worker):
+    def close_environments(self) -> dict[str, int]:
+        """Drain owned simulator subprocesses before the Ray workers exit."""
+        closed = set()
+        for env in self.env_list + self.eval_env_list:
+            if id(env) not in closed:
+                env.close()
+                closed.add(id(env))
+        return {"closed": len(closed)}
+
     def __init__(self, cfg: DictConfig):
         Worker.__init__(self)
 
