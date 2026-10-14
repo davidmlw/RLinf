@@ -115,6 +115,10 @@ class ExternalIsaacLabEnv:
             if self.process.poll() is None:
                 self._call("close")
                 self.process.wait(timeout=45)
+            if self.process.returncode != 0:
+                raise RuntimeError(
+                    f"IsaacLab sidecar exited with code {self.process.returncode}"
+                )
         finally:
             self.connection.close()
             self._reap()
