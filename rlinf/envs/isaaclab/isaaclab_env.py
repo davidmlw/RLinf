@@ -65,8 +65,16 @@ class IsaaclabBaseEnv(gym.Env):
         raise NotImplementedError
 
     def _init_isaaclab_env(self):
-        env_fn = self._make_env_function()
-        self.env = SubProcIsaacLabEnv(env_fn)
+        external = self.cfg.get("external_simulator", None)
+        if external is not None:
+            from rlinf.envs.isaaclab.external_process import ExternalIsaacLabEnv
+
+            self.env = ExternalIsaacLabEnv(
+                dict(external), num_envs=self.num_envs, seed=self.seed
+            )
+        else:
+            env_fn = self._make_env_function()
+            self.env = SubProcIsaacLabEnv(env_fn)
         self.env.reset(seed=self.seed)
 
     def _init_metrics(self):
