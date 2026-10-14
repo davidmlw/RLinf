@@ -89,6 +89,7 @@ env:
       isaaclab_source: ${oc.env:RLINF_ISAACLAB_SOURCE}
       startup_lock: ${oc.env:WORKSPACE_ATTEMPT_ROOT}/control/sim-startup.lock
       timeout_seconds: 900
+      startup_timeout_seconds: 2400
   eval:
     rollout_epoch: 3
     total_num_envs: 64

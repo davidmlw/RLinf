@@ -65,15 +65,17 @@ class ExternalIsaacLabEnv:
         )
         try:
             self.connection = self.listener.accept()
-            self._receive()
+            self._receive(
+                timeout=float(settings.get("startup_timeout_seconds", self.timeout))
+            )
         except BaseException:
             self._reap()
             raise
         finally:
             self.listener.close()
 
-    def _receive(self) -> Any:
-        if not self.connection.poll(self.timeout):
+    def _receive(self, *, timeout: float | None = None) -> Any:
+        if not self.connection.poll(self.timeout if timeout is None else timeout):
             raise TimeoutError(
                 f"IsaacLab sidecar timed out; child PID {self.process.pid}"
             )
